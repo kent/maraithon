@@ -1,0 +1,37 @@
+# mise.toml - Tool version manager configuration for Maraithon
+# https://mise.jdx.dev/
+
+[tools]
+# Elixir and Erlang versions - matching Dockerfile for consistency
+erlang = "26.2.2"
+elixir = "1.16.2-otp-26"
+
+[env]
+# Development environment defaults
+MIX_ENV = "dev"
+
+[tasks.setup]
+description = "Setup the project (deps + database)"
+run = """
+mix deps.get
+mix ecto.setup
+"""
+
+[tasks.server]
+description = "Start Phoenix server"
+run = "mix phx.server"
+
+[tasks.test]
+description = "Run tests"
+run = "mix test"
+
+[tasks.format]
+description = "Format code"
+run = "mix format"
+
+[tasks.lint]
+description = "Run static analysis"
+run = """
+mix format --check-formatted
+mix compile --warnings-as-errors
+"""
