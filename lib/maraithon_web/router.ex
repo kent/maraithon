@@ -1,14 +1,29 @@
 defmodule MaraithonWeb.Router do
   use MaraithonWeb, :router
 
+  pipeline :browser do
+    plug :accepts, ["html"]
+    plug :fetch_session
+    plug :fetch_live_flash
+    plug :put_root_layout, html: {MaraithonWeb.Layouts, :root}
+    plug :protect_from_forgery
+    plug :put_secure_browser_headers
+  end
+
   pipeline :api do
     plug :accepts, ["json"]
   end
 
-  # Health check - no auth required
-  scope "/", MaraithonWeb do
-    get "/health", HealthController, :index
+  # Health check endpoint
+  scope "/health", MaraithonWeb do
     get "/", HealthController, :index
+  end
+
+  # Web UI - Dashboard
+  scope "/", MaraithonWeb do
+    pipe_through :browser
+
+    live "/", DashboardLive, :index
   end
 
   # API v1

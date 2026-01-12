@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full bg-gray-100">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="csrf-token" content={get_csrf_token()} />
+    <title>Maraithon - Agent Runtime</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script defer phx-track-static src="https://unpkg.com/phoenix@1.7.10/priv/static/phoenix.min.js"></script>
+    <script defer phx-track-static src="https://unpkg.com/phoenix_live_view@0.20.1/priv/static/phoenix_live_view.min.js"></script>
+    <script>
+      window.addEventListener("phx:page-loading-start", info => console.log("loading", info))
+      window.addEventListener("phx:page-loading-stop", info => console.log("loaded", info))
+    </script>
+  </head>
+  <body class="h-full">
+    <%= @inner_content %>
+  </body>
+</html>
