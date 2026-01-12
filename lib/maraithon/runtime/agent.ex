@@ -96,8 +96,8 @@ defmodule Maraithon.Runtime.Agent do
       sequence_num: Events.latest_sequence_num(agent.id)
     }
 
-    # Emit started event
-    emit_event(data, "agent_started", %{
+    # Emit started event (capture updated data with new sequence_num)
+    data = emit_event(data, "agent_started", %{
       behavior: agent.behavior,
       config: agent.config
     })
@@ -141,7 +141,7 @@ defmodule Maraithon.Runtime.Agent do
           {:keep_state, data}
 
         "wakeup" ->
-          emit_event(data, "wakeup_received", %{job_id: job_id})
+          data = emit_event(data, "wakeup_received", %{job_id: job_id})
 
           if has_budget?(data) do
             {:next_state, :working, data, [{:next_event, :internal, :execute_behavior}]}
@@ -154,7 +154,7 @@ defmodule Maraithon.Runtime.Agent do
   end
 
   def idle(:info, {:message, message, metadata, message_id}, data) do
-    emit_event(data, "message_received", %{
+    data = emit_event(data, "message_received", %{
       message: message,
       metadata: metadata,
       message_id: message_id
@@ -193,7 +193,7 @@ defmodule Maraithon.Runtime.Agent do
 
       {:emit, {event_type, payload}, new_behavior_state} ->
         data = %{data | behavior_state: new_behavior_state}
-        emit_event(data, to_string(event_type), payload)
+        data = emit_event(data, to_string(event_type), payload)
         schedule_next_wakeup(data)
         {:next_state, :idle, data}
 
@@ -240,7 +240,7 @@ defmodule Maraithon.Runtime.Agent do
 
         case result do
           {:ok, result_data} ->
-            emit_event(data, "effect_completed", %{
+            data = emit_event(data, "effect_completed", %{
               effect_id: effect_id,
               effect_type: effect_info.type,
               result: result_data
@@ -255,7 +255,7 @@ defmodule Maraithon.Runtime.Agent do
                  ) do
               {:emit, {event_type, payload}, new_behavior_state} ->
                 data = %{data | behavior_state: new_behavior_state}
-                emit_event(data, to_string(event_type), payload)
+                data = emit_event(data, to_string(event_type), payload)
                 schedule_next_wakeup(data)
                 {:next_state, :idle, data}
 
@@ -270,7 +270,7 @@ defmodule Maraithon.Runtime.Agent do
             end
 
           {:error, reason} ->
-            emit_event(data, "effect_failed", %{
+            data = emit_event(data, "effect_failed", %{
               effect_id: effect_id,
               error: inspect(reason)
             })
@@ -305,14 +305,14 @@ defmodule Maraithon.Runtime.Agent do
 
   defp emit_heartbeat(data) do
     now = DateTime.utc_now()
-    emit_event(data, "heartbeat_emitted", %{timestamp: DateTime.to_iso8601(now)})
+    data = emit_event(data, "heartbeat_emitted", %{timestamp: DateTime.to_iso8601(now)})
     %{data | last_heartbeat_at: now}
   end
 
   defp emit_checkpoint(data) do
     # TODO: Write actual snapshot to snapshots table
     now = DateTime.utc_now()
-    emit_event(data, "checkpoint_created", %{timestamp: DateTime.to_iso8601(now)})
+    data = emit_event(data, "checkpoint_created", %{timestamp: DateTime.to_iso8601(now)})
     %{data | last_checkpoint_at: now}
   end
 
@@ -360,7 +360,7 @@ defmodule Maraithon.Runtime.Agent do
       idempotency_key: idempotency_key
     })
 
-    emit_event(data, "effect_requested", %{
+    data = emit_event(data, "effect_requested", %{
       effect_id: effect_id,
       effect_type: effect_type,
       idempotency_key: idempotency_key
