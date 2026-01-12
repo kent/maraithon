@@ -3,6 +3,7 @@ defmodule MaraithonWeb.AgentController do
 
   alias Maraithon.Runtime
   alias Maraithon.Agents
+  alias Maraithon.Spend
 
   require Logger
 
@@ -108,6 +109,35 @@ defmodule MaraithonWeb.AgentController do
         |> put_status(:not_found)
         |> json(%{error: "not_found"})
     end
+  end
+
+  def spend(conn, %{"id" => id}) do
+    case Agents.get_agent(id) do
+      nil ->
+        conn
+        |> put_status(:not_found)
+        |> json(%{error: "not_found"})
+
+      _agent ->
+        spend = Spend.get_agent_spend(id)
+        json(conn, %{
+          agent_id: id,
+          total_cost_usd: spend.total_cost,
+          input_tokens: spend.input_tokens,
+          output_tokens: spend.output_tokens,
+          llm_calls: spend.llm_calls
+        })
+    end
+  end
+
+  def total_spend(conn, _params) do
+    spend = Spend.get_total_spend()
+    json(conn, %{
+      total_cost_usd: spend.total_cost,
+      input_tokens: spend.input_tokens,
+      output_tokens: spend.output_tokens,
+      llm_calls: spend.llm_calls
+    })
   end
 
   # Private helpers

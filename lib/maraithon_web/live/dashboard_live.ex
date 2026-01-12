@@ -3,6 +3,7 @@ defmodule MaraithonWeb.DashboardLive do
 
   alias Maraithon.Agents
   alias Maraithon.Runtime
+  alias Maraithon.Spend
 
   @refresh_interval 5_000
 
@@ -13,11 +14,14 @@ defmodule MaraithonWeb.DashboardLive do
     end
 
     agents = Agents.list_agents()
+    total_spend = Spend.get_total_spend()
 
     {:ok, assign(socket,
       agents: agents,
       selected_agent: nil,
       events: [],
+      total_spend: total_spend,
+      agent_spend: nil,
       page_title: "Dashboard"
     )}
   end
@@ -27,9 +31,11 @@ defmodule MaraithonWeb.DashboardLive do
     case Runtime.get_agent_status(id) do
       {:ok, agent_status} ->
         {:ok, events} = Runtime.get_events(id, limit: 50)
+        agent_spend = Spend.get_agent_spend(id)
         {:noreply, assign(socket,
           selected_agent: agent_status,
           events: events,
+          agent_spend: agent_spend,
           page_title: "Agent #{String.slice(id, 0, 8)}"
         )}
 
@@ -39,24 +45,26 @@ defmodule MaraithonWeb.DashboardLive do
   end
 
   def handle_params(_params, _uri, socket) do
-    {:noreply, assign(socket, selected_agent: nil, events: [])}
+    {:noreply, assign(socket, selected_agent: nil, events: [], agent_spend: nil)}
   end
 
   @impl true
   def handle_info(:refresh, socket) do
     agents = Agents.list_agents()
+    total_spend = Spend.get_total_spend()
 
-    socket = assign(socket, agents: agents)
+    socket = assign(socket, agents: agents, total_spend: total_spend)
 
     socket =
       if socket.assigns.selected_agent do
         case Runtime.get_agent_status(socket.assigns.selected_agent.id) do
           {:ok, agent_status} ->
             {:ok, events} = Runtime.get_events(socket.assigns.selected_agent.id, limit: 50)
-            assign(socket, selected_agent: agent_status, events: events)
+            agent_spend = Spend.get_agent_spend(socket.assigns.selected_agent.id)
+            assign(socket, selected_agent: agent_status, events: events, agent_spend: agent_spend)
 
           {:error, :not_found} ->
-            assign(socket, selected_agent: nil, events: [])
+            assign(socket, selected_agent: nil, events: [], agent_spend: nil)
         end
       else
         socket
@@ -70,7 +78,7 @@ defmodule MaraithonWeb.DashboardLive do
     ~H"""
     <div class="space-y-6">
       <!-- Stats overview -->
-      <div class="grid grid-cols-1 gap-5 sm:grid-cols-3">
+      <div class="grid grid-cols-1 gap-5 sm:grid-cols-4">
         <div class="overflow-hidden rounded-lg bg-white px-4 py-5 shadow sm:p-6">
           <dt class="truncate text-sm font-medium text-gray-500">Total Agents</dt>
           <dd class="mt-1 text-3xl font-semibold tracking-tight text-gray-900"><%= length(@agents) %></dd>
@@ -82,9 +90,15 @@ defmodule MaraithonWeb.DashboardLive do
           </dd>
         </div>
         <div class="overflow-hidden rounded-lg bg-white px-4 py-5 shadow sm:p-6">
-          <dt class="truncate text-sm font-medium text-gray-500">Stopped</dt>
-          <dd class="mt-1 text-3xl font-semibold tracking-tight text-gray-600">
-            <%= Enum.count(@agents, & &1.status == "stopped") %>
+          <dt class="truncate text-sm font-medium text-gray-500">LLM Calls</dt>
+          <dd class="mt-1 text-3xl font-semibold tracking-tight text-indigo-600">
+            <%= @total_spend.llm_calls %>
+          </dd>
+        </div>
+        <div class="overflow-hidden rounded-lg bg-white px-4 py-5 shadow sm:p-6">
+          <dt class="truncate text-sm font-medium text-gray-500">Total Spend</dt>
+          <dd class="mt-1 text-3xl font-semibold tracking-tight text-amber-600">
+            $<%= Float.round(@total_spend.total_cost, 4) %>
           </dd>
         </div>
       </div>
@@ -185,6 +199,30 @@ defmodule MaraithonWeb.DashboardLive do
                   </div>
                 </div>
               </div>
+
+              <%= if @agent_spend do %>
+              <div class="mt-6">
+                <h4 class="text-sm font-medium text-gray-500 mb-2">Agent Spend</h4>
+                <div class="grid grid-cols-2 gap-4">
+                  <div class="text-sm">
+                    <span class="text-gray-500">LLM Calls:</span>
+                    <span class="font-medium"><%= @agent_spend.llm_calls %></span>
+                  </div>
+                  <div class="text-sm">
+                    <span class="text-gray-500">Total Cost:</span>
+                    <span class="font-medium text-amber-600">$<%= Float.round(@agent_spend.total_cost, 4) %></span>
+                  </div>
+                  <div class="text-sm">
+                    <span class="text-gray-500">Input Tokens:</span>
+                    <span class="font-medium"><%= @agent_spend.input_tokens %></span>
+                  </div>
+                  <div class="text-sm">
+                    <span class="text-gray-500">Output Tokens:</span>
+                    <span class="font-medium"><%= @agent_spend.output_tokens %></span>
+                  </div>
+                </div>
+              </div>
+              <% end %>
 
               <!-- Events -->
               <div class="mt-6">

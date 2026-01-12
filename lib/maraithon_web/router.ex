@@ -37,6 +37,10 @@ defmodule MaraithonWeb.Router do
     post "/agents/:id/ask", AgentController, :ask
     post "/agents/:id/stop", AgentController, :stop
     get "/agents/:id/events", AgentController, :events
+    get "/agents/:id/spend", AgentController, :spend
+
+    # Spend tracking
+    get "/spend", AgentController, :total_spend
 
     # System health with details
     get "/health", HealthController, :detailed

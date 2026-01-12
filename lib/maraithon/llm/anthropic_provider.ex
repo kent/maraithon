@@ -81,13 +81,28 @@ defmodule Maraithon.LLM.AnthropicProvider do
         _ -> ""
       end
 
+    model = response["model"] || "unknown"
+    input_tokens = get_in(response, ["usage", "input_tokens"]) || 0
+    output_tokens = get_in(response, ["usage", "output_tokens"]) || 0
+
+    # Calculate cost using the Spend module
+    usage = Maraithon.Spend.calculate_cost(model, input_tokens, output_tokens)
+
+    Logger.info("LLM call completed",
+      model: model,
+      input_tokens: input_tokens,
+      output_tokens: output_tokens,
+      cost_usd: usage.total_cost
+    )
+
     {:ok,
      %{
        content: content,
-       model: response["model"] || "unknown",
-       tokens_in: get_in(response, ["usage", "input_tokens"]) || 0,
-       tokens_out: get_in(response, ["usage", "output_tokens"]) || 0,
-       finish_reason: response["stop_reason"] || "unknown"
+       model: model,
+       tokens_in: input_tokens,
+       tokens_out: output_tokens,
+       finish_reason: response["stop_reason"] || "unknown",
+       usage: usage
      }}
   end
 
