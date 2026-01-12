@@ -41,7 +41,7 @@ defmodule Maraithon.MixProject do
     [
       {:phoenix, "~> 1.8.3"},
       {:phoenix_ecto, "~> 4.5"},
-      {:phoenix_live_view, "~> 0.20"},
+      {:phoenix_live_view, "~> 1.0"},
       {:phoenix_html, "~> 4.1"},
       {:ecto_sql, "~> 3.13"},
       {:postgrex, ">= 0.0.0"},
