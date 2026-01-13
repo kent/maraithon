@@ -62,6 +62,14 @@ config :maraithon, Maraithon.Runtime,
 config :maraithon, :github,
   webhook_secret: System.get_env("GITHUB_WEBHOOK_SECRET", "")
 
+# Google OAuth & Connectors
+config :maraithon, :google,
+  client_id: System.get_env("GOOGLE_CLIENT_ID", ""),
+  client_secret: System.get_env("GOOGLE_CLIENT_SECRET", ""),
+  redirect_uri: System.get_env("GOOGLE_REDIRECT_URI", ""),
+  calendar_webhook_url: System.get_env("GOOGLE_CALENDAR_WEBHOOK_URL", ""),
+  pubsub_topic: System.get_env("GOOGLE_PUBSUB_TOPIC", "")
+
 # =============================================================================
 # Production Configuration
 # =============================================================================

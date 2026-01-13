@@ -19,6 +19,14 @@ defmodule MaraithonWeb.Router do
     get "/", HealthController, :index
   end
 
+  # OAuth routes
+  scope "/auth", MaraithonWeb do
+    pipe_through :api
+
+    get "/google", OAuthController, :google
+    get "/google/callback", OAuthController, :google_callback
+  end
+
   # Web UI - Dashboard
   scope "/", MaraithonWeb do
     pipe_through :browser
@@ -55,7 +63,8 @@ defmodule MaraithonWeb.Router do
     pipe_through :api
 
     post "/github", WebhookController, :github
+    post "/google/calendar", WebhookController, :google_calendar
+    post "/google/gmail", WebhookController, :google_gmail
     # Future: post "/slack", WebhookController, :slack
-    # Future: post "/google/calendar", WebhookController, :google_calendar
   end
 end

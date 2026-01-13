@@ -1,7 +1,7 @@
 defmodule MaraithonWeb.WebhookController do
   use MaraithonWeb, :controller
 
-  alias Maraithon.Connectors.{Connector, GitHub}
+  alias Maraithon.Connectors.{Connector, GitHub, GoogleCalendar, Gmail}
 
   require Logger
 
@@ -26,6 +26,24 @@ defmodule MaraithonWeb.WebhookController do
         |> put_status(:unauthorized)
         |> json(%{error: "Invalid signature"})
     end
+  end
+
+  @doc """
+  Handle Google Calendar push notifications.
+
+  POST /webhooks/google/calendar
+  """
+  def google_calendar(conn, params) do
+    handle_connector(conn, params, GoogleCalendar)
+  end
+
+  @doc """
+  Handle Gmail push notifications via Cloud Pub/Sub.
+
+  POST /webhooks/google/gmail
+  """
+  def google_gmail(conn, params) do
+    handle_connector(conn, params, Gmail)
   end
 
   # Generic handler for any connector
