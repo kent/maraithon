@@ -388,7 +388,14 @@ defmodule Maraithon.Connectors.WhatsApp do
 
     case :httpc.request(method, request, [], []) do
       {:ok, {{_, status, _}, _, response_body}} when status in 200..299 ->
-        {:ok, Jason.decode!(List.to_string(response_body))}
+        case Jason.decode(List.to_string(response_body)) do
+          {:ok, decoded} ->
+            {:ok, decoded}
+
+          {:error, _} ->
+            Logger.warning("WhatsApp API returned invalid JSON", endpoint: endpoint)
+            {:error, :invalid_json_response}
+        end
 
       {:ok, {{_, status, _}, _, response_body}} ->
         Logger.warning("WhatsApp API error",

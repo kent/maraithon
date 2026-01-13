@@ -412,12 +412,17 @@ defmodule Maraithon.Connectors.Telegram do
            []
          ) do
       {:ok, {{_, 200, _}, _, response_body}} ->
-        response = Jason.decode!(List.to_string(response_body))
+        case Jason.decode(List.to_string(response_body)) do
+          {:ok, response} ->
+            if response["ok"] do
+              {:ok, response["result"]}
+            else
+              {:error, {:telegram_error, response["error_code"], response["description"]}}
+            end
 
-        if response["ok"] do
-          {:ok, response["result"]}
-        else
-          {:error, {:telegram_error, response["error_code"], response["description"]}}
+          {:error, _} ->
+            Logger.warning("Telegram API returned invalid JSON", method: method)
+            {:error, :invalid_json_response}
         end
 
       {:ok, {{_, status, _}, _, response_body}} ->

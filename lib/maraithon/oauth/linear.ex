@@ -88,8 +88,14 @@ defmodule Maraithon.OAuth.Linear do
            []
          ) do
       {:ok, {{_, 200, _}, _, response_body}} ->
-        tokens = Jason.decode!(List.to_string(response_body))
-        {:ok, parse_token_response(tokens)}
+        case Jason.decode(List.to_string(response_body)) do
+          {:ok, tokens} ->
+            {:ok, parse_token_response(tokens)}
+
+          {:error, _} ->
+            Logger.warning("Linear token exchange returned invalid JSON")
+            {:error, :invalid_json_response}
+        end
 
       {:ok, {{_, status, _}, _, response_body}} ->
         Logger.warning("Linear token exchange failed",
@@ -161,7 +167,7 @@ defmodule Maraithon.OAuth.Linear do
   """
   def graphql(access_token, query, variables \\ %{}) do
     headers = [
-      {"Authorization", access_token},
+      {"Authorization", "Bearer #{access_token}"},
       {"Content-Type", "application/json"}
     ]
 
@@ -175,12 +181,17 @@ defmodule Maraithon.OAuth.Linear do
            []
          ) do
       {:ok, {{_, 200, _}, _, response_body}} ->
-        response = Jason.decode!(List.to_string(response_body))
+        case Jason.decode(List.to_string(response_body)) do
+          {:ok, response} ->
+            if response["errors"] do
+              {:error, {:graphql_errors, response["errors"]}}
+            else
+              {:ok, response["data"]}
+            end
 
-        if response["errors"] do
-          {:error, {:graphql_errors, response["errors"]}}
-        else
-          {:ok, response["data"]}
+          {:error, _} ->
+            Logger.warning("Linear API returned invalid JSON")
+            {:error, :invalid_json_response}
         end
 
       {:ok, {{_, 401, _}, _, _}} ->

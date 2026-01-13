@@ -98,12 +98,17 @@ defmodule Maraithon.OAuth.Slack do
            []
          ) do
       {:ok, {{_, 200, _}, _, response_body}} ->
-        response = Jason.decode!(List.to_string(response_body))
+        case Jason.decode(List.to_string(response_body)) do
+          {:ok, response} ->
+            if response["ok"] do
+              {:ok, parse_token_response(response)}
+            else
+              {:error, {:slack_error, response["error"]}}
+            end
 
-        if response["ok"] do
-          {:ok, parse_token_response(response)}
-        else
-          {:error, {:slack_error, response["error"]}}
+          {:error, _} ->
+            Logger.warning("Slack token exchange returned invalid JSON")
+            {:error, :invalid_json_response}
         end
 
       {:ok, {{_, status, _}, _, response_body}} ->
@@ -134,12 +139,17 @@ defmodule Maraithon.OAuth.Slack do
            []
          ) do
       {:ok, {{_, 200, _}, _, response_body}} ->
-        response = Jason.decode!(List.to_string(response_body))
+        case Jason.decode(List.to_string(response_body)) do
+          {:ok, response} ->
+            if response["ok"] do
+              :ok
+            else
+              {:error, {:slack_error, response["error"]}}
+            end
 
-        if response["ok"] do
-          :ok
-        else
-          {:error, {:slack_error, response["error"]}}
+          {:error, _} ->
+            Logger.warning("Slack token revocation returned invalid JSON")
+            {:error, :invalid_json_response}
         end
 
       {:ok, {{_, status, _}, _, _}} ->
@@ -210,12 +220,17 @@ defmodule Maraithon.OAuth.Slack do
 
     case :httpc.request(method, request, [], []) do
       {:ok, {{_, 200, _}, _, response_body}} ->
-        response = Jason.decode!(List.to_string(response_body))
+        case Jason.decode(List.to_string(response_body)) do
+          {:ok, response} ->
+            if response["ok"] do
+              {:ok, response}
+            else
+              {:error, {:slack_error, response["error"]}}
+            end
 
-        if response["ok"] do
-          {:ok, response}
-        else
-          {:error, {:slack_error, response["error"]}}
+          {:error, _} ->
+            Logger.warning("Slack API returned invalid JSON", endpoint: endpoint)
+            {:error, :invalid_json_response}
         end
 
       {:ok, {{_, status, _}, _, response_body}} ->
