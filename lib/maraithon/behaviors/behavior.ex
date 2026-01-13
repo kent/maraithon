@@ -8,7 +8,8 @@ defmodule Maraithon.Behaviors.Behavior do
           agent_id: String.t(),
           timestamp: DateTime.t(),
           budget: map(),
-          recent_events: [map()]
+          recent_events: [map()],
+          last_message: String.t() | nil
         }
 
   @type effect ::

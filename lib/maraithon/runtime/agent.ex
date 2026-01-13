@@ -375,7 +375,8 @@ defmodule Maraithon.Runtime.Agent do
       agent_id: data.agent_id,
       timestamp: DateTime.utc_now(),
       budget: data.budget,
-      recent_events: [] # TODO: Load recent events
+      recent_events: [], # TODO: Load recent events
+      last_message: Map.get(data.config, "_last_message")
     }
   end
 

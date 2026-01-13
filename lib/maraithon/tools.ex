@@ -7,7 +7,9 @@ defmodule Maraithon.Tools do
     "time" => Maraithon.Tools.Time,
     "http_get" => Maraithon.Tools.HttpGet,
     "read_file" => Maraithon.Tools.ReadFile,
-    "list_files" => Maraithon.Tools.ListFiles
+    "list_files" => Maraithon.Tools.ListFiles,
+    "file_tree" => Maraithon.Tools.FileTree,
+    "search_files" => Maraithon.Tools.SearchFiles
   }
 
   @doc """
