@@ -1,7 +1,7 @@
 defmodule MaraithonWeb.WebhookController do
   use MaraithonWeb, :controller
 
-  alias Maraithon.Connectors.{Connector, GitHub, GoogleCalendar, Gmail}
+  alias Maraithon.Connectors.{Connector, GitHub, GoogleCalendar, Gmail, Slack, WhatsApp}
 
   require Logger
 
@@ -44,6 +44,116 @@ defmodule MaraithonWeb.WebhookController do
   """
   def google_gmail(conn, params) do
     handle_connector(conn, params, Gmail)
+  end
+
+  @doc """
+  Handle Slack Events API webhooks.
+
+  POST /webhooks/slack
+  """
+  def slack(conn, params) do
+    raw_body = conn.assigns[:raw_body] || Jason.encode!(params)
+
+    case Slack.verify_signature(conn, raw_body) do
+      :ok ->
+        case Slack.handle_webhook(conn, params) do
+          {:challenge, challenge} ->
+            # URL verification - return the challenge
+            conn
+            |> put_status(:ok)
+            |> text(challenge)
+
+          {:ok, topic, event} ->
+            Connector.publish(topic, event)
+
+            conn
+            |> put_status(:ok)
+            |> json(%{status: "published", topic: topic, event_type: event.type})
+
+          {:ignore, reason} ->
+            conn
+            |> put_status(:ok)
+            |> json(%{status: "ignored", reason: reason})
+
+          {:error, reason} ->
+            Logger.warning("Slack webhook failed", reason: inspect(reason))
+
+            conn
+            |> put_status(:bad_request)
+            |> json(%{error: inspect(reason)})
+        end
+
+      {:error, reason} ->
+        Logger.warning("Slack signature verification failed", reason: reason)
+
+        conn
+        |> put_status(:unauthorized)
+        |> json(%{error: "Invalid signature"})
+    end
+  end
+
+  @doc """
+  Handle WhatsApp webhooks from Meta.
+
+  GET /webhooks/whatsapp - Webhook verification
+  POST /webhooks/whatsapp - Message events
+  """
+  def whatsapp(conn, params) do
+    # Check if this is a GET verification request
+    if conn.method == "GET" do
+      handle_whatsapp_verify(conn)
+    else
+      handle_whatsapp_event(conn, params)
+    end
+  end
+
+  defp handle_whatsapp_verify(conn) do
+    case WhatsApp.handle_webhook(conn, %{}) do
+      {:verify, challenge} ->
+        conn
+        |> put_status(:ok)
+        |> text(challenge)
+
+      {:error, _reason} ->
+        conn
+        |> put_status(:forbidden)
+        |> text("Verification failed")
+    end
+  end
+
+  defp handle_whatsapp_event(conn, params) do
+    raw_body = conn.assigns[:raw_body] || Jason.encode!(params)
+
+    case WhatsApp.verify_signature(conn, raw_body) do
+      :ok ->
+        case WhatsApp.handle_webhook(conn, params) do
+          {:ok, topic, event} ->
+            Connector.publish(topic, event)
+
+            conn
+            |> put_status(:ok)
+            |> json(%{status: "published", topic: topic, event_type: event.type})
+
+          {:ignore, reason} ->
+            conn
+            |> put_status(:ok)
+            |> json(%{status: "ignored", reason: reason})
+
+          {:error, reason} ->
+            Logger.warning("WhatsApp webhook failed", reason: inspect(reason))
+
+            conn
+            |> put_status(:bad_request)
+            |> json(%{error: inspect(reason)})
+        end
+
+      {:error, reason} ->
+        Logger.warning("WhatsApp signature verification failed", reason: reason)
+
+        conn
+        |> put_status(:unauthorized)
+        |> json(%{error: "Invalid signature"})
+    end
   end
 
   # Generic handler for any connector

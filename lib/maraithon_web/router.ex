@@ -25,6 +25,8 @@ defmodule MaraithonWeb.Router do
 
     get "/google", OAuthController, :google
     get "/google/callback", OAuthController, :google_callback
+    get "/slack", OAuthController, :slack
+    get "/slack/callback", OAuthController, :slack_callback
   end
 
   # Web UI - Dashboard
@@ -65,6 +67,8 @@ defmodule MaraithonWeb.Router do
     post "/github", WebhookController, :github
     post "/google/calendar", WebhookController, :google_calendar
     post "/google/gmail", WebhookController, :google_gmail
-    # Future: post "/slack", WebhookController, :slack
+    post "/slack", WebhookController, :slack
+    get "/whatsapp", WebhookController, :whatsapp
+    post "/whatsapp", WebhookController, :whatsapp
   end
 end

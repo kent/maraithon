@@ -8,7 +8,7 @@ defmodule MaraithonWeb.OAuthController do
   use MaraithonWeb, :controller
 
   alias Maraithon.OAuth
-  alias Maraithon.OAuth.Google
+  alias Maraithon.OAuth.{Google, Slack}
   alias Maraithon.Connectors.{GoogleCalendar, Gmail}
 
   require Logger
@@ -86,6 +86,122 @@ defmodule MaraithonWeb.OAuthController do
     conn
     |> put_status(:bad_request)
     |> json(%{error: "Missing code or state parameter"})
+  end
+
+  # ===========================================================================
+  # Slack OAuth
+  # ===========================================================================
+
+  @doc """
+  Initiates Slack OAuth flow.
+
+  GET /auth/slack?user_id=xxx
+
+  Redirects user to Slack's authorization page.
+  """
+  def slack(conn, params) do
+    user_id = params["user_id"]
+
+    if is_nil(user_id) or user_id == "" do
+      conn
+      |> put_status(:bad_request)
+      |> json(%{error: "user_id is required"})
+    else
+      state = encode_slack_state(user_id)
+      auth_url = Slack.authorize_url(Slack.default_scopes(), state)
+      redirect(conn, external: auth_url)
+    end
+  end
+
+  @doc """
+  Handles Slack OAuth callback.
+
+  GET /auth/slack/callback?code=xxx&state=xxx
+  """
+  def slack_callback(conn, %{"code" => code, "state" => state}) do
+    case decode_slack_state(state) do
+      {:ok, user_id} ->
+        handle_slack_tokens(conn, code, user_id)
+
+      {:error, _reason} ->
+        conn
+        |> put_status(:bad_request)
+        |> json(%{error: "Invalid state parameter"})
+    end
+  end
+
+  def slack_callback(conn, %{"error" => error}) do
+    Logger.warning("Slack OAuth error", error: error)
+
+    conn
+    |> put_status(:bad_request)
+    |> json(%{error: "OAuth authorization failed", details: error})
+  end
+
+  def slack_callback(conn, _params) do
+    conn
+    |> put_status(:bad_request)
+    |> json(%{error: "Missing code or state parameter"})
+  end
+
+  defp handle_slack_tokens(conn, code, user_id) do
+    case Slack.exchange_code(code) do
+      {:ok, tokens} ->
+        # Store the tokens - use team_id as part of the provider key
+        token_data = %{
+          access_token: tokens.access_token,
+          scopes: String.split(tokens.scope || "", ","),
+          metadata: %{
+            team_id: tokens.team_id,
+            team_name: tokens.team_name,
+            bot_user_id: tokens.bot_user_id,
+            app_id: tokens.app_id
+          }
+        }
+
+        # Store with provider "slack:{team_id}" for multi-workspace support
+        provider = "slack:#{tokens.team_id}"
+
+        case OAuth.store_tokens(user_id, provider, token_data) do
+          {:ok, _token} ->
+            conn
+            |> put_status(:ok)
+            |> json(%{
+              status: "connected",
+              user_id: user_id,
+              team_id: tokens.team_id,
+              team_name: tokens.team_name,
+              topic: "slack:#{tokens.team_id}"
+            })
+
+          {:error, changeset} ->
+            Logger.warning("Failed to store Slack tokens", error: inspect(changeset))
+
+            conn
+            |> put_status(:internal_server_error)
+            |> json(%{error: "Failed to store tokens"})
+        end
+
+      {:error, reason} ->
+        Logger.warning("Slack token exchange failed", reason: inspect(reason))
+
+        conn
+        |> put_status(:bad_request)
+        |> json(%{error: "Failed to exchange authorization code"})
+    end
+  end
+
+  defp encode_slack_state(user_id) do
+    Base.url_encode64(Jason.encode!(%{user_id: user_id, provider: "slack"}))
+  end
+
+  defp decode_slack_state(state) do
+    with {:ok, json} <- Base.url_decode64(state),
+         {:ok, data} <- Jason.decode(json) do
+      {:ok, data["user_id"]}
+    else
+      _ -> {:error, :invalid_state}
+    end
   end
 
   # ===========================================================================

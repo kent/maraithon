@@ -45,8 +45,21 @@ defmodule Maraithon.OAuth.Token do
     |> cast(attrs, @required_fields ++ @optional_fields)
     |> validate_required(@required_fields)
     |> validate_length(:user_id, min: 1, max: 255)
-    |> validate_inclusion(:provider, ["google"])
+    |> validate_provider()
     |> unique_constraint([:user_id, :provider])
+  end
+
+  # Validates the provider field
+  # Allowed formats: "google", "slack:{team_id}", "whatsapp"
+  defp validate_provider(changeset) do
+    validate_change(changeset, :provider, fn :provider, provider ->
+      cond do
+        provider == "google" -> []
+        provider == "whatsapp" -> []
+        String.starts_with?(provider, "slack:") -> []
+        true -> [provider: "invalid provider"]
+      end
+    end)
   end
 
   @doc """

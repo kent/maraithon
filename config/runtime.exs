@@ -70,6 +70,20 @@ config :maraithon, :google,
   calendar_webhook_url: System.get_env("GOOGLE_CALENDAR_WEBHOOK_URL", ""),
   pubsub_topic: System.get_env("GOOGLE_PUBSUB_TOPIC", "")
 
+# Slack Connector
+config :maraithon, :slack,
+  client_id: System.get_env("SLACK_CLIENT_ID", ""),
+  client_secret: System.get_env("SLACK_CLIENT_SECRET", ""),
+  redirect_uri: System.get_env("SLACK_REDIRECT_URI", ""),
+  signing_secret: System.get_env("SLACK_SIGNING_SECRET", "")
+
+# WhatsApp Connector (Meta Business API)
+config :maraithon, :whatsapp,
+  verify_token: System.get_env("WHATSAPP_VERIFY_TOKEN", ""),
+  app_secret: System.get_env("WHATSAPP_APP_SECRET", ""),
+  access_token: System.get_env("WHATSAPP_ACCESS_TOKEN", ""),
+  phone_number_id: System.get_env("WHATSAPP_PHONE_NUMBER_ID", "")
+
 # =============================================================================
 # Production Configuration
 # =============================================================================

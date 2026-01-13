@@ -173,6 +173,53 @@ curl -X POST http://localhost:4000/api/v1/agents \
 
 **Supported events**: `email_sync`, `email_received`, `email_changed`
 
+### Slack (Available)
+
+```bash
+# Configure Slack app
+export SLACK_CLIENT_ID="your_client_id"
+export SLACK_CLIENT_SECRET="your_client_secret"
+export SLACK_REDIRECT_URI="https://your-domain.com/auth/slack/callback"
+export SLACK_SIGNING_SECRET="your_signing_secret"
+
+# Install app to workspace via OAuth
+# Visit: /auth/slack?user_id=user_123
+
+# Create agent subscribed to workspace
+curl -X POST http://localhost:4000/api/v1/agents \
+  -d '{
+    "behavior": "prompt_agent",
+    "config": {
+      "prompt": "Monitor team discussions and summarize important updates.",
+      "subscribe": ["slack:T01234567:C01234567"]
+    }
+  }'
+```
+
+**Supported events**: `message`, `message_changed`, `message_deleted`, `reaction_added`, `reaction_removed`, `app_mention`, `member_joined`, `member_left`
+
+### WhatsApp (Available)
+
+```bash
+# Configure WhatsApp (Meta Business API)
+export WHATSAPP_VERIFY_TOKEN="your_verify_token"
+export WHATSAPP_APP_SECRET="your_app_secret"
+export WHATSAPP_ACCESS_TOKEN="your_access_token"
+export WHATSAPP_PHONE_NUMBER_ID="your_phone_number_id"
+
+# Create agent subscribed to WhatsApp messages
+curl -X POST http://localhost:4000/api/v1/agents \
+  -d '{
+    "behavior": "prompt_agent",
+    "config": {
+      "prompt": "You are a helpful assistant. Respond to user messages.",
+      "subscribe": ["whatsapp:1234567890"]
+    }
+  }'
+```
+
+**Supported events**: `message_received`, `image_received`, `audio_received`, `document_received`, `location_received`, `message_status`
+
 ### Connector Status
 
 | Connector | Status | Topic Format |
@@ -180,25 +227,26 @@ curl -X POST http://localhost:4000/api/v1/agents \
 | GitHub | Available | `github:{owner}/{repo}` |
 | Google Calendar | Available | `calendar:{user_id}` |
 | Gmail | Available | `email:{user_id}` |
-| Slack | Planned | `slack:{workspace}:{channel}` |
+| Slack | Available | `slack:{team_id}:{channel_id}` |
+| WhatsApp | Available | `whatsapp:{phone_number_id}` |
 | Linear | Planned | `linear:{team}` |
 | Discord | Planned | `discord:{server}:{channel}` |
 
 ### Building Custom Connectors
 
 ```elixir
-defmodule MyApp.Connectors.Slack do
+defmodule MyApp.Connectors.Custom do
   @behaviour Maraithon.Connectors.Connector
 
   @impl true
   def verify_signature(conn, raw_body) do
-    # Verify Slack signature
+    # Verify webhook signature
   end
 
   @impl true
   def handle_webhook(conn, params) do
     # Parse webhook, return normalized event
-    {:ok, "slack:workspace:channel", %{type: "message", ...}}
+    {:ok, "custom:topic", %{type: "event_type", ...}}
   end
 end
 ```
@@ -230,13 +278,18 @@ end
 | `POST /webhooks/github` | GitHub webhook receiver |
 | `POST /webhooks/google/calendar` | Google Calendar push notifications |
 | `POST /webhooks/google/gmail` | Gmail push notifications (via Pub/Sub) |
+| `POST /webhooks/slack` | Slack Events API |
+| `GET /webhooks/whatsapp` | WhatsApp webhook verification |
+| `POST /webhooks/whatsapp` | WhatsApp message events |
 
 ### OAuth
 
 | Endpoint | Description |
 |----------|-------------|
 | `GET /auth/google` | Initiate Google OAuth flow |
-| `GET /auth/google/callback` | OAuth callback handler |
+| `GET /auth/google/callback` | Google OAuth callback |
+| `GET /auth/slack` | Initiate Slack OAuth flow |
+| `GET /auth/slack/callback` | Slack OAuth callback |
 
 ## Configuration
 
@@ -255,6 +308,18 @@ export GOOGLE_CLIENT_SECRET="your_client_secret"
 export GOOGLE_REDIRECT_URI="https://your-domain.com/auth/google/callback"
 export GOOGLE_CALENDAR_WEBHOOK_URL="https://your-domain.com/webhooks/google/calendar"
 export GOOGLE_PUBSUB_TOPIC="projects/your-project/topics/gmail-push"
+
+# Slack (required for Slack connector)
+export SLACK_CLIENT_ID="your_client_id"
+export SLACK_CLIENT_SECRET="your_client_secret"
+export SLACK_REDIRECT_URI="https://your-domain.com/auth/slack/callback"
+export SLACK_SIGNING_SECRET="your_signing_secret"
+
+# WhatsApp (required for WhatsApp connector)
+export WHATSAPP_VERIFY_TOKEN="your_verify_token"
+export WHATSAPP_APP_SECRET="your_app_secret"
+export WHATSAPP_ACCESS_TOKEN="your_access_token"
+export WHATSAPP_PHONE_NUMBER_ID="your_phone_number_id"
 ```
 
 ## Use Cases
