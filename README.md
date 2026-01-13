@@ -1,6 +1,30 @@
-# Maraithon
+```
+                                    ╭──────────────────────────────────────────────────────────────╮
+                                    │                                                              │
+ ███╗   ███╗ █████╗ ██████╗  █████╗ │ ██╗████████╗██╗  ██╗ ██████╗ ███╗   ██╗                      │
+ ████╗ ████║██╔══██╗██╔══██╗██╔══██╗│ ██║╚══██╔══╝██║  ██║██╔═══██╗████╗  ██║                      │
+ ██╔████╔██║███████║██████╔╝███████║│ ██║   ██║   ███████║██║   ██║██╔██╗ ██║                      │
+ ██║╚██╔╝██║██╔══██║██╔══██╗██╔══██║│ ██║   ██║   ██╔══██║██║   ██║██║╚██╗██║                      │
+ ██║ ╚═╝ ██║██║  ██║██║  ██║██║  ██║│ ██║   ██║   ██║  ██║╚██████╔╝██║ ╚████║                      │
+ ╚═╝     ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝│ ╚═╝   ╚═╝   ╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═══╝                      │
+                                    │                                                              │
+                                    │    Long-lived, autonomous AI agents powered by OTP          │
+                                    ╰──────────────────────────────────────────────────────────────╯
 
-A framework for building long-lived, autonomous AI agents powered by OTP.
+     ┌─────────┐      Events       ┌─────────────────┐      LLM       ┌─────────────┐
+     │ GitHub  │ ─────────────────►│                 │ ◄────────────► │  Claude /   │
+     │ Slack   │                   │    MARAITHON    │                │  Anthropic  │
+     │ Linear  │ ◄─────────────────│     AGENT       │ ◄────────────► │             │
+     │ Gmail   │      Actions      │                 │     Tools      │             │
+     └─────────┘                   └─────────────────┘                └─────────────┘
+                                          │
+                                          │ State
+                                          ▼
+                                   ┌─────────────┐
+                                   │  PostgreSQL │
+                                   │   + Events  │
+                                   └─────────────┘
+```
 
 ## The Vision
 
@@ -34,19 +58,48 @@ Your agent is **always watching**, **always remembering**, and **always ready**.
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                            Maraithon                                 │
-├─────────────────────────────────────────────────────────────────────┤
-│  Connectors              │  Agent Runtime        │  Tools           │
-│  ──────────              │  ─────────────        │  ─────           │
-│  GitHub        ──┐       │  GenStateMachine      │  read_file       │
-│  Google Calendar ├──►    │  Event Sourcing       │  search_files    │
-│  Gmail           │       │  Effect Outbox        │  http_get        │
-│  Slack           │       │  PubSub               │  file_tree       │
-│  WhatsApp        │       │  Supervision          │  custom...       │
-│  Linear          │       │  LLM Integration      │                  │
-│  Telegram    ────┘       │  State Persistence    │                  │
-└─────────────────────────────────────────────────────────────────────┘
+╔══════════════════════════════════════════════════════════════════════════════════════╗
+║                                    MARAITHON                                          ║
+╠══════════════════════════════════════════════════════════════════════════════════════╣
+║                                                                                       ║
+║   ┌──────────────────┐          ┌──────────────────────────────┐    ┌─────────────┐  ║
+║   │   CONNECTORS     │          │        AGENT RUNTIME         │    │    TOOLS    │  ║
+║   │                  │          │                              │    │             │  ║
+║   │  ┌────────────┐  │  events  │   ╭────────────────────╮     │    │ read_file   │  ║
+║   │  │  GitHub    │──┼─────────►│   │  GenStateMachine   │     │    │ search_files│  ║
+║   │  └────────────┘  │          │   │  ┌──────┐ ┌──────┐ │     │    │ http_get    │  ║
+║   │  ┌────────────┐  │          │   │  │ idle │►│ work │ │     │    │ file_tree   │  ║
+║   │  │  Slack     │──┼─────────►│   │  └──────┘ └──┬───┘ │     │    │ bash        │  ║
+║   │  └────────────┘  │          │   │       ▲      │     │     │    │ edit_file   │  ║
+║   │  ┌────────────┐  │          │   │       └──────┘     │     │    │ write_file  │  ║
+║   │  │  Linear    │──┼─────────►│   ╰────────────────────╯     │◄───┤             │  ║
+║   │  └────────────┘  │          │                              │    │ custom...   │  ║
+║   │  ┌────────────┐  │          │   ┌────────────────────┐     │    │             │  ║
+║   │  │  Gmail     │──┼─────────►│   │   Event Sourcing   │     │    └─────────────┘  ║
+║   │  └────────────┘  │          │   │   ┌─┬─┬─┬─┬─┬─┬─┐  │     │                     ║
+║   │  ┌────────────┐  │          │   │   │E│E│E│E│E│E│E│  │     │    ┌─────────────┐  ║
+║   │  │  WhatsApp  │──┼─────────►│   │   └─┴─┴─┴─┴─┴─┴─┘  │     │    │     LLM     │  ║
+║   │  └────────────┘  │          │   └────────────────────┘     │    │             │  ║
+║   │  ┌────────────┐  │          │                              │    │  ┌───────┐  │  ║
+║   │  │  Telegram  │──┼─────────►│   ┌────────────────────┐     │◄──►│  │Claude │  │  ║
+║   │  └────────────┘  │          │   │   OTP Supervisor   │     │    │  └───────┘  │  ║
+║   │  ┌────────────┐  │          │   │   ┌─────┐ ┌─────┐  │     │    │             │  ║
+║   │  │  Calendar  │──┼─────────►│   │   │Agent│ │Agent│  │     │    └─────────────┘  ║
+║   │  └────────────┘  │          │   │   └─────┘ └─────┘  │     │                     ║
+║   │                  │          │   └────────────────────┘     │                     ║
+║   └──────────────────┘          └──────────────────────────────┘                     ║
+║                                              │                                        ║
+║                                              ▼                                        ║
+║                                    ┌──────────────────┐                              ║
+║                                    │    PostgreSQL    │                              ║
+║                                    │  ┌────────────┐  │                              ║
+║                                    │  │   agents   │  │                              ║
+║                                    │  │   events   │  │                              ║
+║                                    │  │   tokens   │  │                              ║
+║                                    │  │   jobs     │  │                              ║
+║                                    │  └────────────┘  │                              ║
+║                                    └──────────────────┘                              ║
+╚══════════════════════════════════════════════════════════════════════════════════════╝
 ```
 
 **Connectors** receive webhooks from external services and publish normalized events to PubSub. Built-in connectors for GitHub, Google Calendar, Gmail, Slack, WhatsApp, Linear, and Telegram.
@@ -403,6 +456,15 @@ export TELEGRAM_WEBHOOK_SECRET="random_secret_path"
 
 ## Use Cases
 
+```
+╔═══════════════════════════════════════════════════════════════════════════════════════╗
+║                                                                                        ║
+║   "Agents don't just respond to requests.                                              ║
+║    They live in your world and act on your behalf."                                    ║
+║                                                                                        ║
+╚═══════════════════════════════════════════════════════════════════════════════════════╝
+```
+
 ### GitHub Issue Planner
 ```json
 {
@@ -453,6 +515,35 @@ Agent collects commits, merged PRs, and completed issues. Posts a formatted summ
 
 Traditional AI agents are stateless scripts that wake up, do a thing, and die. Maraithon agents are **OTP processes**:
 
+```
+  Traditional Agent                          Maraithon Agent
+  ═════════════════                          ════════════════
+
+  ┌─────────────────┐                        ┌─────────────────────────────────┐
+  │   Cron Trigger  │                        │         OTP Supervisor          │
+  └────────┬────────┘                        │  ┌─────────────────────────────┐│
+           │                                 │  │        Agent Process        ││
+           ▼                                 │  │                             ││
+  ┌─────────────────┐                        │  │  ┌─────┐    ┌──────────┐   ││
+  │  Script Starts  │                        │  │  │State│◄──►│ Messages │   ││
+  └────────┬────────┘                        │  │  └─────┘    └──────────┘   ││
+           │                                 │  │                             ││
+           ▼                                 │  │  ╭─────────────────────╮    ││
+  ┌─────────────────┐     No                 │  │  │    Always Alive     │    ││
+  │  Check Changes  │───► Memory             │  │  │   Instant Response  │    ││
+  └────────┬────────┘                        │  │  │   Auto-Recover      │    ││
+           │                                 │  │  ╰─────────────────────╯    ││
+           ▼                                 │  │                             ││
+  ┌─────────────────┐                        │  └─────────────────────────────┘│
+  │    Do Work      │                        │                ▲                │
+  └────────┬────────┘                        │                │ Restart        │
+           │                                 │         ┌──────┴──────┐         │
+           ▼                                 │         │   Crash?    │         │
+  ┌─────────────────┐                        │         │  No Problem │         │
+  │   Script Dies   │ ◄── State Lost         │         └─────────────┘         │
+  └─────────────────┘                        └─────────────────────────────────┘
+```
+
 - **Always alive** - No cold starts, instant response
 - **Supervised** - Crash? Restart automatically with recovered state
 - **Event-driven** - React to webhooks, messages, timers instantly
@@ -478,3 +569,16 @@ mix test
 ## License
 
 MIT
+
+---
+
+```
+                         ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+                         █                                               █
+                         █   Built with Elixir, Phoenix, and OTP         █
+                         █   Powered by Claude / Anthropic               █
+                         █                                               █
+                         █       🏃 Agents that never stop running       █
+                         █                                               █
+                         ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+```
