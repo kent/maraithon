@@ -4,6 +4,11 @@ defmodule Maraithon.OAuth.Token do
 
   Stores OAuth tokens for external service providers (Google, etc.)
   Each user can have one token per provider.
+
+  ## Security
+
+  Access tokens and refresh tokens are encrypted at rest using AES-256-GCM.
+  The encryption key is derived from the `CLOAK_KEY` environment variable.
   """
 
   use Ecto.Schema
@@ -25,8 +30,9 @@ defmodule Maraithon.OAuth.Token do
   schema "oauth_tokens" do
     field :user_id, :string
     field :provider, :string
-    field :access_token, :binary
-    field :refresh_token, :binary
+    # Tokens encrypted at rest
+    field :access_token, Maraithon.Encrypted.Binary
+    field :refresh_token, Maraithon.Encrypted.Binary
     field :expires_at, :utc_datetime
     field :scopes, {:array, :string}, default: []
     field :metadata, :map, default: %{}

@@ -52,6 +52,9 @@ config :maraithon, MaraithonWeb.Endpoint,
 # Enable dev routes for dashboard and mailbox
 config :maraithon, dev_routes: true
 
+# Allow insecure vault in dev (uses deterministic key, NOT for production)
+config :maraithon, allow_insecure_vault: true
+
 # Do not include metadata nor timestamps in development logs
 config :logger, :default_formatter, format: "[$level] $message\n"
 

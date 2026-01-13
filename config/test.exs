@@ -23,6 +23,9 @@ config :maraithon, MaraithonWeb.Endpoint,
 # Print only warnings and errors during test
 config :logger, level: :warning
 
+# Allow insecure vault in test (uses deterministic key, NOT for production)
+config :maraithon, allow_insecure_vault: true
+
 # Initialize plugs at runtime for faster test compilation
 config :phoenix, :plug_init_mode, :runtime
 

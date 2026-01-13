@@ -9,6 +9,8 @@ defmodule Maraithon.Application do
   def start(_type, _args) do
     children = [
       MaraithonWeb.Telemetry,
+      # Encryption vault (must start before Repo for encrypted fields)
+      Maraithon.Vault,
       Maraithon.Repo,
       {DNSCluster, query: Application.get_env(:maraithon, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: Maraithon.PubSub},

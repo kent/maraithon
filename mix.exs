@@ -56,7 +56,10 @@ defmodule Maraithon.MixProject do
       {:finch, "~> 0.19"},              # HTTP client for LLM calls
       {:req, "~> 0.5"},                 # High-level HTTP client
       {:typed_struct, "~> 0.3"},        # Struct definitions
-      {:nimble_options, "~> 1.1"}       # Config validation
+      {:nimble_options, "~> 1.1"},      # Config validation
+      # Security
+      {:cloak, "~> 1.1"},               # Encryption at rest
+      {:cloak_ecto, "~> 1.3"}           # Ecto integration for Cloak
     ]
   end
 
