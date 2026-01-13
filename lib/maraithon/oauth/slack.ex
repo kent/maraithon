@@ -169,8 +169,12 @@ defmodule Maraithon.OAuth.Slack do
     signing_secret = get_signing_secret()
 
     if signing_secret == "" do
-      # No secret configured - allow in dev
-      :ok
+      # No secret configured - only allow if explicitly enabled
+      if allow_unsigned?() do
+        :ok
+      else
+        {:error, :signing_secret_not_configured}
+      end
     else
       # Check timestamp is recent (within 5 minutes)
       now = System.system_time(:second)
@@ -264,6 +268,11 @@ defmodule Maraithon.OAuth.Slack do
   defp get_signing_secret do
     Application.get_env(:maraithon, :slack, [])
     |> Keyword.get(:signing_secret, "")
+  end
+
+  defp allow_unsigned? do
+    Application.get_env(:maraithon, :slack, [])
+    |> Keyword.get(:allow_unsigned, false)
   end
 
   defp parse_token_response(response) do

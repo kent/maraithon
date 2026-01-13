@@ -50,17 +50,26 @@ defmodule Maraithon.Connectors.GitHub do
 
     case Plug.Conn.get_req_header(conn, "x-hub-signature-256") do
       ["sha256=" <> signature] ->
-        expected = :crypto.mac(:hmac, :sha256, secret, raw_body) |> Base.encode16(case: :lower)
-
-        if Plug.Crypto.secure_compare(expected, String.downcase(signature)) do
-          :ok
+        if secret == "" do
+          # No secret configured but signature provided - can't verify
+          if allow_unsigned?() do
+            :ok
+          else
+            {:error, :webhook_secret_not_configured}
+          end
         else
-          {:error, :invalid_signature}
+          expected = :crypto.mac(:hmac, :sha256, secret, raw_body) |> Base.encode16(case: :lower)
+
+          if Plug.Crypto.secure_compare(expected, String.downcase(signature)) do
+            :ok
+          else
+            {:error, :invalid_signature}
+          end
         end
 
       [] ->
-        # No signature header - allow in dev, reject in prod
-        if get_webhook_secret() == "" do
+        # No signature header - only allow if explicitly configured
+        if allow_unsigned?() do
           :ok
         else
           {:error, :missing_signature}
@@ -274,6 +283,11 @@ defmodule Maraithon.Connectors.GitHub do
   defp get_webhook_secret do
     Application.get_env(:maraithon, :github, [])
     |> Keyword.get(:webhook_secret, "")
+  end
+
+  defp allow_unsigned? do
+    Application.get_env(:maraithon, :github, [])
+    |> Keyword.get(:allow_unsigned, false)
   end
 
   defp parse_branch("refs/heads/" <> branch), do: branch

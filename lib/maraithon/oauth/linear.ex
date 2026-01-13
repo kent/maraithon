@@ -147,8 +147,12 @@ defmodule Maraithon.OAuth.Linear do
     webhook_secret = get_webhook_secret()
 
     if webhook_secret == "" do
-      # No secret configured - allow in dev
-      :ok
+      # No secret configured - only allow if explicitly enabled
+      if allow_unsigned?() do
+        :ok
+      else
+        {:error, :webhook_secret_not_configured}
+      end
     else
       expected =
         :crypto.mac(:hmac, :sha256, webhook_secret, raw_body)
@@ -227,6 +231,11 @@ defmodule Maraithon.OAuth.Linear do
   defp get_webhook_secret do
     Application.get_env(:maraithon, :linear, [])
     |> Keyword.get(:webhook_secret, "")
+  end
+
+  defp allow_unsigned? do
+    Application.get_env(:maraithon, :linear, [])
+    |> Keyword.get(:allow_unsigned, false)
   end
 
   defp parse_token_response(response) do

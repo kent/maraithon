@@ -58,9 +58,14 @@ config :maraithon, Maraithon.Runtime,
 # Connector Configuration
 # =============================================================================
 
+# Security: Allow unsigned webhooks (DANGEROUS - only for local development)
+# Set to "true" to allow webhooks without signature verification
+allow_unsigned = System.get_env("ALLOW_UNSIGNED_WEBHOOKS", "false") == "true"
+
 # GitHub Connector
 config :maraithon, :github,
-  webhook_secret: System.get_env("GITHUB_WEBHOOK_SECRET", "")
+  webhook_secret: System.get_env("GITHUB_WEBHOOK_SECRET", ""),
+  allow_unsigned: allow_unsigned
 
 # Google OAuth & Connectors
 config :maraithon, :google,
@@ -75,26 +80,30 @@ config :maraithon, :slack,
   client_id: System.get_env("SLACK_CLIENT_ID", ""),
   client_secret: System.get_env("SLACK_CLIENT_SECRET", ""),
   redirect_uri: System.get_env("SLACK_REDIRECT_URI", ""),
-  signing_secret: System.get_env("SLACK_SIGNING_SECRET", "")
+  signing_secret: System.get_env("SLACK_SIGNING_SECRET", ""),
+  allow_unsigned: allow_unsigned
 
 # WhatsApp Connector (Meta Business API)
 config :maraithon, :whatsapp,
   verify_token: System.get_env("WHATSAPP_VERIFY_TOKEN", ""),
   app_secret: System.get_env("WHATSAPP_APP_SECRET", ""),
   access_token: System.get_env("WHATSAPP_ACCESS_TOKEN", ""),
-  phone_number_id: System.get_env("WHATSAPP_PHONE_NUMBER_ID", "")
+  phone_number_id: System.get_env("WHATSAPP_PHONE_NUMBER_ID", ""),
+  allow_unsigned: allow_unsigned
 
 # Linear Connector
 config :maraithon, :linear,
   client_id: System.get_env("LINEAR_CLIENT_ID", ""),
   client_secret: System.get_env("LINEAR_CLIENT_SECRET", ""),
   redirect_uri: System.get_env("LINEAR_REDIRECT_URI", ""),
-  webhook_secret: System.get_env("LINEAR_WEBHOOK_SECRET", "")
+  webhook_secret: System.get_env("LINEAR_WEBHOOK_SECRET", ""),
+  allow_unsigned: allow_unsigned
 
 # Telegram Connector
 config :maraithon, :telegram,
   bot_token: System.get_env("TELEGRAM_BOT_TOKEN", ""),
-  webhook_secret_path: System.get_env("TELEGRAM_WEBHOOK_SECRET", "")
+  webhook_secret_path: System.get_env("TELEGRAM_WEBHOOK_SECRET", ""),
+  allow_unsigned: allow_unsigned
 
 # =============================================================================
 # Production Configuration

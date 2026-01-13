@@ -55,8 +55,12 @@ defmodule Maraithon.Connectors.WhatsApp do
     app_secret = get_app_secret()
 
     if app_secret == "" do
-      # No secret configured - allow in dev
-      :ok
+      # No secret configured - only allow if explicitly enabled
+      if allow_unsigned?() do
+        :ok
+      else
+        {:error, :app_secret_not_configured}
+      end
     else
       case Plug.Conn.get_req_header(conn, "x-hub-signature-256") do
         ["sha256=" <> signature] ->
@@ -432,6 +436,11 @@ defmodule Maraithon.Connectors.WhatsApp do
   defp get_app_secret do
     Application.get_env(:maraithon, :whatsapp, [])
     |> Keyword.get(:app_secret, "")
+  end
+
+  defp allow_unsigned? do
+    Application.get_env(:maraithon, :whatsapp, [])
+    |> Keyword.get(:allow_unsigned, false)
   end
 
   defp get_access_token do

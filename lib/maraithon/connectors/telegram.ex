@@ -64,8 +64,12 @@ defmodule Maraithon.Connectors.Telegram do
     secret_path = get_webhook_secret_path()
 
     if secret_path == "" do
-      # No secret configured - allow all (dev mode)
-      :ok
+      # No secret configured - only allow if explicitly enabled
+      if allow_unsigned?() do
+        :ok
+      else
+        {:error, :webhook_secret_path_not_configured}
+      end
     else
       # Check if the request path contains the secret
       # This should be handled by the router, but double-check here
@@ -614,6 +618,11 @@ defmodule Maraithon.Connectors.Telegram do
   defp get_webhook_secret_path do
     Application.get_env(:maraithon, :telegram, [])
     |> Keyword.get(:webhook_secret_path, "")
+  end
+
+  defp allow_unsigned? do
+    Application.get_env(:maraithon, :telegram, [])
+    |> Keyword.get(:allow_unsigned, false)
   end
 
   defp maybe_put(map, _key, nil), do: map
