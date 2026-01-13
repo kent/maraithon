@@ -11,7 +11,7 @@ defmodule Maraithon.Runtime.Supervisor do
 
   @impl true
   def init(_init_arg) do
-    children = [
+    base_children = [
       # Registry for looking up agent processes by ID
       {Registry, keys: :unique, name: Maraithon.Runtime.AgentRegistry},
 
@@ -19,18 +19,21 @@ defmodule Maraithon.Runtime.Supervisor do
       {DynamicSupervisor, strategy: :one_for_one, name: Maraithon.Runtime.AgentSupervisor},
 
       # Dynamic supervisor for effect worker tasks
-      {DynamicSupervisor, strategy: :one_for_one, name: Maraithon.Runtime.EffectSupervisor},
-
-      # Effect runner (polls and executes effects)
-      Maraithon.Runtime.EffectRunner,
-
-      # Scheduler (polls and delivers wakeups)
-      Maraithon.Runtime.Scheduler,
-
-      # Health reporter
-      Maraithon.Runtime.HealthReporter
+      {DynamicSupervisor, strategy: :one_for_one, name: Maraithon.Runtime.EffectSupervisor}
     ]
 
-    Supervisor.init(children, strategy: :one_for_one)
+    # Background workers that poll the database - disabled in test mode
+    background_workers =
+      if Application.get_env(:maraithon, :start_background_workers, true) do
+        [
+          Maraithon.Runtime.EffectRunner,
+          Maraithon.Runtime.Scheduler,
+          Maraithon.Runtime.HealthReporter
+        ]
+      else
+        []
+      end
+
+    Supervisor.init(base_children ++ background_workers, strategy: :one_for_one)
   end
 end

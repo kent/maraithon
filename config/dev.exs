@@ -2,8 +2,8 @@ import Config
 
 # Configure your database
 config :maraithon, Maraithon.Repo,
-  username: "postgres",
-  password: "postgres",
+  username: System.get_env("PGUSER") || System.get_env("USER") || "postgres",
+  password: System.get_env("PGPASSWORD") || "",
   hostname: "localhost",
   database: "maraithon_dev",
   stacktrace: true,
