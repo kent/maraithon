@@ -1,6 +1,124 @@
+# ==============================================================================
+# OAuth Controller Integration Tests
+# ==============================================================================
+#
+# WHAT THIS TESTS (Product Perspective):
+# --------------------------------------
+# OAuth is how users connect their external accounts (Google, Slack, Linear)
+# to Maraithon. This enables agents to:
+#
+# - **Access User Data**: Read calendars, emails, Slack messages on behalf of users
+# - **Take Actions**: Post messages, create issues, update calendars
+# - **Maintain Access**: Automatically refresh tokens when they expire
+#
+# From a user's perspective, OAuth is the "Connect your Google Account" button
+# that securely grants Maraithon access without sharing passwords.
+#
+# Example User Journey:
+# 1. User wants an agent to manage their calendar
+# 2. User clicks "Connect Google" in the Maraithon UI
+# 3. Browser redirects to Google's OAuth consent screen
+# 4. User approves access to their calendar
+# 5. Google redirects back to Maraithon with an authorization code
+# 6. Maraithon exchanges the code for access/refresh tokens
+# 7. Tokens are stored securely for future API calls
+# 8. Agent can now read/write the user's calendar
+#
+# WHY THESE TESTS MATTER:
+# -----------------------
+# If OAuth flows break, users experience:
+# - Inability to connect their accounts
+# - "Invalid state" errors after approving access
+# - Token exchange failures that lose the user's approval
+# - Agents that suddenly can't access user data
+# - Security issues if state validation is bypassed
+#
+# ==============================================================================
+#
+# TECHNICAL DETAILS:
+# ------------------
+# This test module validates the OAuthController, which implements the OAuth 2.0
+# Authorization Code flow for multiple providers.
+#
+# OAuth 2.0 Authorization Code Flow:
+# -----------------------------------
+#
+#   ┌─────────────────────────────────────────────────────────────────────────┐
+#   │                      OAuth Authorization Code Flow                       │
+#   │                                                                          │
+#   │   User        Maraithon           OAuth Provider        Token Store     │
+#   │    │              │                    │                    │            │
+#   │    │  1. Connect  │                    │                    │            │
+#   │    │─────────────►│                    │                    │            │
+#   │    │              │                    │                    │            │
+#   │    │  2. Redirect │  3. Auth URL       │                    │            │
+#   │    │◄─────────────│───────────────────►│                    │            │
+#   │    │              │                    │                    │            │
+#   │    │         4. User approves          │                    │            │
+#   │    │              │◄───────────────────│                    │            │
+#   │    │              │   5. Code + State  │                    │            │
+#   │    │              │                    │                    │            │
+#   │    │              │  6. Exchange code  │                    │            │
+#   │    │              │───────────────────►│                    │            │
+#   │    │              │  7. Access token   │                    │            │
+#   │    │              │◄───────────────────│                    │            │
+#   │    │              │                    │                    │            │
+#   │    │              │         8. Store tokens                 │            │
+#   │    │              │─────────────────────────────────────────►            │
+#   │    │  9. Success  │                    │                    │            │
+#   │    │◄─────────────│                    │                    │            │
+#   └─────────────────────────────────────────────────────────────────────────┘
+#
+# Supported OAuth Providers:
+# --------------------------
+# - **Google**: Calendar and Gmail access (calendar, gmail scopes)
+# - **Slack**: Workspace access (bot tokens)
+# - **Linear**: Issue tracking access (read, write scopes)
+#
+# Security Measures:
+# ------------------
+# - **State Parameter**: CSRF protection - random value in auth URL, validated on callback
+# - **HTTPS Only**: OAuth requires secure connections (handled by deployment)
+# - **Encrypted Storage**: Tokens stored encrypted at rest
+# - **Scope Validation**: Users explicitly approve requested permissions
+#
+# Test Categories:
+# ----------------
+# - Input Validation: Required parameters (user_id, scopes, code, state)
+# - OAuth Initiation: Redirect URL construction with proper scopes
+# - Callback Handling: Code exchange, state validation, error handling
+# - Token Storage: Successful token storage after exchange
+# - Error Handling: OAuth errors from provider, exchange failures
+#
+# Dependencies:
+# -------------
+# - MaraithonWeb.OAuthController (the controller being tested)
+# - Maraithon.OAuth.Google/Slack/Linear (provider-specific helpers)
+# - Maraithon.OAuth (token storage context)
+# - Bypass (for mocking external OAuth APIs)
+#
+# Setup Requirements:
+# -------------------
+# This test uses `async: false` because:
+# 1. Application config is modified during tests (OAuth credentials)
+# 2. Bypass servers need isolated ports
+# 3. Config changes must be restored after each test
+#
+# ==============================================================================
+
 defmodule MaraithonWeb.OAuthControllerTest do
   use MaraithonWeb.ConnCase, async: false
 
+  # ----------------------------------------------------------------------------
+  # Test Setup
+  # ----------------------------------------------------------------------------
+  #
+  # Configures OAuth credentials for all providers. In production, these come
+  # from environment variables. For testing, we use test values.
+  #
+  # The on_exit callback ensures config is reset after each test to prevent
+  # pollution between tests.
+  # ----------------------------------------------------------------------------
   setup do
     # Configure OAuth settings for testing
     Application.put_env(:maraithon, :google,
@@ -30,23 +148,43 @@ defmodule MaraithonWeb.OAuthControllerTest do
     :ok
   end
 
-  # ===========================================================================
-  # Google OAuth Tests
-  # ===========================================================================
+  # ============================================================================
+  # GOOGLE OAUTH TESTS - INITIATION
+  # ============================================================================
+  #
+  # These tests verify the OAuth flow initiation for Google.
+  # GET /auth/google starts the flow by redirecting to Google's OAuth consent.
+  #
+  # Required parameters:
+  # - user_id: Identifies which user is connecting (stored in state)
+  # - scopes: Which Google services to request access for (calendar, gmail)
+  # ============================================================================
 
   describe "GET /auth/google" do
+    @doc """
+    Verifies that user_id is required for OAuth initiation.
+    Without user_id, we don't know who to associate the tokens with.
+    """
     test "returns error when user_id is missing", %{conn: conn} do
       conn = get(conn, "/auth/google", %{scopes: "calendar"})
 
       assert json_response(conn, 400) == %{"error" => "user_id is required"}
     end
 
+    @doc """
+    Verifies that empty user_id is rejected.
+    An empty string is not a valid user identifier.
+    """
     test "returns error when user_id is empty", %{conn: conn} do
       conn = get(conn, "/auth/google", %{user_id: "", scopes: "calendar"})
 
       assert json_response(conn, 400) == %{"error" => "user_id is required"}
     end
 
+    @doc """
+    Verifies that scopes parameter is required.
+    Without scopes, we don't know what permissions to request.
+    """
     test "returns error when scopes is missing", %{conn: conn} do
       conn = get(conn, "/auth/google", %{user_id: "user_123"})
 
@@ -54,6 +192,10 @@ defmodule MaraithonWeb.OAuthControllerTest do
       assert response["error"] =~ "scopes is required"
     end
 
+    @doc """
+    Verifies that empty scopes is rejected.
+    At least one scope must be specified.
+    """
     test "returns error when scopes is empty", %{conn: conn} do
       conn = get(conn, "/auth/google", %{user_id: "user_123", scopes: ""})
 
@@ -61,6 +203,12 @@ defmodule MaraithonWeb.OAuthControllerTest do
       assert response["error"] =~ "scopes is required"
     end
 
+    @doc """
+    Verifies successful redirect to Google OAuth consent.
+    The redirect URL should include:
+    - client_id: Our application ID
+    - state: Encoded user_id for callback validation
+    """
     test "redirects to Google with valid params", %{conn: conn} do
       conn = get(conn, "/auth/google", %{user_id: "user_123", scopes: "calendar"})
 
@@ -69,6 +217,10 @@ defmodule MaraithonWeb.OAuthControllerTest do
       assert redirected_to(conn) =~ "state="
     end
 
+    @doc """
+    Verifies that multiple scopes are handled correctly.
+    Users can request access to both calendar and gmail at once.
+    """
     test "redirects with multiple scopes", %{conn: conn} do
       conn = get(conn, "/auth/google", %{user_id: "user_123", scopes: "calendar,gmail"})
 
@@ -77,25 +229,56 @@ defmodule MaraithonWeb.OAuthControllerTest do
     end
   end
 
+  # ============================================================================
+  # GOOGLE OAUTH TESTS - CALLBACK
+  # ============================================================================
+  #
+  # These tests verify the OAuth callback handling for Google.
+  # GET /auth/google/callback receives the authorization code from Google
+  # and exchanges it for access/refresh tokens.
+  #
+  # Required parameters:
+  # - code: Authorization code from Google
+  # - state: Encoded user_id (must match what we sent)
+  # ============================================================================
+
   describe "GET /auth/google/callback" do
+    @doc """
+    Verifies that invalid state parameter is rejected.
+    State validation prevents CSRF attacks where an attacker tricks a user
+    into connecting their own OAuth tokens to the attacker's account.
+    """
     test "returns error for invalid state", %{conn: conn} do
       conn = get(conn, "/auth/google/callback", %{code: "auth_code", state: "invalid"})
 
       assert json_response(conn, 400) == %{"error" => "Invalid state parameter"}
     end
 
+    @doc """
+    Verifies that missing code parameter is rejected.
+    The code is required to exchange for tokens.
+    """
     test "returns error when code is missing", %{conn: conn} do
       conn = get(conn, "/auth/google/callback", %{state: "some_state"})
 
       assert json_response(conn, 400) == %{"error" => "Missing code or state parameter"}
     end
 
+    @doc """
+    Verifies that missing state parameter is rejected.
+    State is required for security validation.
+    """
     test "returns error when state is missing", %{conn: conn} do
       conn = get(conn, "/auth/google/callback", %{code: "auth_code"})
 
       assert json_response(conn, 400) == %{"error" => "Missing code or state parameter"}
     end
 
+    @doc """
+    Verifies that OAuth errors from Google are handled gracefully.
+    When a user denies access or there's an error, Google redirects back
+    with error parameters instead of a code.
+    """
     test "handles OAuth error from Google", %{conn: conn} do
       conn = get(conn, "/auth/google/callback", %{
         error: "access_denied",
@@ -107,6 +290,11 @@ defmodule MaraithonWeb.OAuthControllerTest do
       assert response["details"]["error"] == "access_denied"
     end
 
+    @doc """
+    Verifies that token exchange failure is handled.
+    Even with valid state, the code exchange can fail if the code is
+    invalid, expired, or already used.
+    """
     test "returns error for token exchange failure with valid state", %{conn: conn} do
       # Create a valid state
       state = Base.url_encode64(Jason.encode!(%{user_id: "user_123", services: ["calendar"]}))
@@ -118,23 +306,36 @@ defmodule MaraithonWeb.OAuthControllerTest do
     end
   end
 
-  # ===========================================================================
-  # Slack OAuth Tests
-  # ===========================================================================
+  # ============================================================================
+  # SLACK OAUTH TESTS - INITIATION
+  # ============================================================================
+  #
+  # Slack OAuth follows the same pattern as Google but with different scopes.
+  # Slack tokens grant access to workspace messages, users, and channels.
+  # ============================================================================
 
   describe "GET /auth/slack" do
+    @doc """
+    Verifies that user_id is required for Slack OAuth initiation.
+    """
     test "returns error when user_id is missing", %{conn: conn} do
       conn = get(conn, "/auth/slack")
 
       assert json_response(conn, 400) == %{"error" => "user_id is required"}
     end
 
+    @doc """
+    Verifies that empty user_id is rejected for Slack OAuth.
+    """
     test "returns error when user_id is empty", %{conn: conn} do
       conn = get(conn, "/auth/slack", %{user_id: ""})
 
       assert json_response(conn, 400) == %{"error" => "user_id is required"}
     end
 
+    @doc """
+    Verifies successful redirect to Slack OAuth consent.
+    """
     test "redirects to Slack with valid params", %{conn: conn} do
       conn = get(conn, "/auth/slack", %{user_id: "user_123"})
 
@@ -144,19 +345,32 @@ defmodule MaraithonWeb.OAuthControllerTest do
     end
   end
 
+  # ============================================================================
+  # SLACK OAUTH TESTS - CALLBACK
+  # ============================================================================
+
   describe "GET /auth/slack/callback" do
+    @doc """
+    Verifies that invalid state parameter is rejected for Slack.
+    """
     test "returns error for invalid state", %{conn: conn} do
       conn = get(conn, "/auth/slack/callback", %{code: "auth_code", state: "invalid"})
 
       assert json_response(conn, 400) == %{"error" => "Invalid state parameter"}
     end
 
+    @doc """
+    Verifies that missing code parameter is rejected for Slack.
+    """
     test "returns error when code is missing", %{conn: conn} do
       conn = get(conn, "/auth/slack/callback", %{state: "some_state"})
 
       assert json_response(conn, 400) == %{"error" => "Missing code or state parameter"}
     end
 
+    @doc """
+    Verifies that OAuth errors from Slack are handled gracefully.
+    """
     test "handles OAuth error from Slack", %{conn: conn} do
       conn = get(conn, "/auth/slack/callback", %{error: "access_denied"})
 
@@ -165,6 +379,9 @@ defmodule MaraithonWeb.OAuthControllerTest do
       assert response["details"] == "access_denied"
     end
 
+    @doc """
+    Verifies that token exchange failure is handled for Slack.
+    """
     test "returns error for token exchange failure with valid state", %{conn: conn} do
       # Create a valid state
       state = Base.url_encode64(Jason.encode!(%{user_id: "user_123", provider: "slack"}))
@@ -176,23 +393,36 @@ defmodule MaraithonWeb.OAuthControllerTest do
     end
   end
 
-  # ===========================================================================
-  # Linear OAuth Tests
-  # ===========================================================================
+  # ============================================================================
+  # LINEAR OAUTH TESTS - INITIATION
+  # ============================================================================
+  #
+  # Linear OAuth grants access to issue tracking data.
+  # Tokens allow reading and writing issues, projects, and teams.
+  # ============================================================================
 
   describe "GET /auth/linear" do
+    @doc """
+    Verifies that user_id is required for Linear OAuth initiation.
+    """
     test "returns error when user_id is missing", %{conn: conn} do
       conn = get(conn, "/auth/linear")
 
       assert json_response(conn, 400) == %{"error" => "user_id is required"}
     end
 
+    @doc """
+    Verifies that empty user_id is rejected for Linear OAuth.
+    """
     test "returns error when user_id is empty", %{conn: conn} do
       conn = get(conn, "/auth/linear", %{user_id: ""})
 
       assert json_response(conn, 400) == %{"error" => "user_id is required"}
     end
 
+    @doc """
+    Verifies successful redirect to Linear OAuth consent.
+    """
     test "redirects to Linear with valid params", %{conn: conn} do
       conn = get(conn, "/auth/linear", %{user_id: "user_123"})
 
@@ -202,19 +432,32 @@ defmodule MaraithonWeb.OAuthControllerTest do
     end
   end
 
+  # ============================================================================
+  # LINEAR OAUTH TESTS - CALLBACK
+  # ============================================================================
+
   describe "GET /auth/linear/callback" do
+    @doc """
+    Verifies that invalid state parameter is rejected for Linear.
+    """
     test "returns error for invalid state", %{conn: conn} do
       conn = get(conn, "/auth/linear/callback", %{code: "auth_code", state: "invalid"})
 
       assert json_response(conn, 400) == %{"error" => "Invalid state parameter"}
     end
 
+    @doc """
+    Verifies that missing code parameter is rejected for Linear.
+    """
     test "returns error when code is missing", %{conn: conn} do
       conn = get(conn, "/auth/linear/callback", %{state: "some_state"})
 
       assert json_response(conn, 400) == %{"error" => "Missing code or state parameter"}
     end
 
+    @doc """
+    Verifies that OAuth errors from Linear are handled gracefully.
+    """
     test "handles OAuth error from Linear", %{conn: conn} do
       conn = get(conn, "/auth/linear/callback", %{error: "access_denied"})
 
@@ -223,6 +466,9 @@ defmodule MaraithonWeb.OAuthControllerTest do
       assert response["details"] == "access_denied"
     end
 
+    @doc """
+    Verifies that token exchange failure is handled for Linear.
+    """
     test "returns error for token exchange failure with valid state", %{conn: conn} do
       # Create a valid state
       state = Base.url_encode64(Jason.encode!(%{user_id: "user_123", provider: "linear"}))
@@ -234,11 +480,18 @@ defmodule MaraithonWeb.OAuthControllerTest do
     end
   end
 
-  # ===========================================================================
-  # Additional OAuth Flow Tests
-  # ===========================================================================
+  # ============================================================================
+  # GOOGLE SCOPE HANDLING TESTS
+  # ============================================================================
+  #
+  # These tests verify that different Google scopes are handled correctly.
+  # Users can request access to calendar, gmail, or both.
+  # ============================================================================
 
   describe "GET /auth/google with different scopes" do
+    @doc """
+    Verifies that gmail scope is handled correctly.
+    """
     test "handles gmail scope", %{conn: conn} do
       conn = get(conn, "/auth/google", %{user_id: "user_123", scopes: "gmail"})
 
@@ -247,6 +500,9 @@ defmodule MaraithonWeb.OAuthControllerTest do
       assert redirect_url =~ "scope="
     end
 
+    @doc """
+    Verifies that multiple scopes (calendar + gmail) are handled.
+    """
     test "handles both calendar and gmail scopes", %{conn: conn} do
       conn = get(conn, "/auth/google", %{user_id: "user_123", scopes: "calendar,gmail"})
 
@@ -254,6 +510,10 @@ defmodule MaraithonWeb.OAuthControllerTest do
       assert redirect_url =~ "https://accounts.google.com"
     end
 
+    @doc """
+    Verifies that whitespace in scopes is handled gracefully.
+    Users might accidentally include spaces in the scopes parameter.
+    """
     test "handles scopes with extra whitespace", %{conn: conn} do
       conn = get(conn, "/auth/google", %{user_id: "user_123", scopes: " calendar , gmail "})
 
@@ -262,11 +522,23 @@ defmodule MaraithonWeb.OAuthControllerTest do
     end
   end
 
-  # ===========================================================================
-  # Successful Token Exchange Tests with Bypass
-  # ===========================================================================
+  # ============================================================================
+  # SUCCESSFUL TOKEN EXCHANGE TESTS WITH BYPASS
+  # ============================================================================
+  #
+  # These tests use Bypass to mock external OAuth APIs and verify the full
+  # token exchange flow works correctly, including token storage.
+  # ============================================================================
 
   describe "GET /auth/google/callback with successful token exchange" do
+    @doc """
+    Verifies the complete Google OAuth flow with mocked token exchange.
+    This tests:
+    1. Valid state is decoded correctly
+    2. Token exchange HTTP request is made
+    3. Tokens are stored in database
+    4. Success response is returned to user
+    """
     test "stores tokens and returns success", %{conn: conn} do
       bypass = Bypass.open()
 
@@ -313,6 +585,10 @@ defmodule MaraithonWeb.OAuthControllerTest do
   end
 
   describe "GET /auth/slack/callback with successful token exchange" do
+    @doc """
+    Verifies the complete Slack OAuth flow with mocked token exchange.
+    Slack returns additional metadata like team_id and team_name.
+    """
     test "stores tokens and returns success", %{conn: conn} do
       bypass = Bypass.open()
 
@@ -353,6 +629,10 @@ defmodule MaraithonWeb.OAuthControllerTest do
   end
 
   describe "GET /auth/linear/callback with successful token exchange" do
+    @doc """
+    Verifies the complete Linear OAuth flow with mocked token exchange.
+    After token exchange, we also fetch the user's teams via GraphQL.
+    """
     test "stores tokens and returns success", %{conn: conn} do
       bypass = Bypass.open()
 
@@ -403,6 +683,11 @@ defmodule MaraithonWeb.OAuthControllerTest do
       assert response["teams"] == ["ENG"]
     end
 
+    @doc """
+    Verifies that token storage failures are handled gracefully.
+    If we get tokens but can't store them (e.g., database error),
+    we should return an appropriate error.
+    """
     test "handles token storage failure", %{conn: conn} do
       bypass = Bypass.open()
 

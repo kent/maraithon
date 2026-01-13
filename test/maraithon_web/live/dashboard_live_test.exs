@@ -1,3 +1,116 @@
+# ==============================================================================
+# Dashboard LiveView Integration Tests
+# ==============================================================================
+#
+# WHAT THIS TESTS (Product Perspective):
+# --------------------------------------
+# The Dashboard is the main user interface for monitoring and managing agents.
+# It provides real-time visibility into:
+#
+# - **Agent Status**: Which agents are running, stopped, or degraded
+# - **Resource Usage**: LLM calls, tool calls, and spend per agent
+# - **Event History**: Recent events and actions taken by each agent
+# - **System Health**: Total agents, running count, and overall spend
+#
+# From a user's perspective, the Dashboard is "mission control" - where they
+# go to see what their agents are doing, diagnose issues, and understand costs.
+#
+# Example User Journey:
+# 1. User opens Maraithon dashboard at /
+# 2. Sees overview stats: 5 total agents, 3 running, $12.50 spent
+# 3. Notices an agent showing "degraded" status
+# 4. Clicks the agent to see details and recent events
+# 5. Sees the agent has been encountering rate limits
+# 6. Takes action to adjust the agent's configuration
+#
+# WHY THESE TESTS MATTER:
+# -----------------------
+# If the Dashboard breaks, users experience:
+# - Blindness to what their agents are doing
+# - Inability to diagnose agent issues
+# - Surprise bills from unmonitored spend
+# - No way to identify which agents need attention
+# - Loss of trust in the entire system
+#
+# ==============================================================================
+#
+# TECHNICAL DETAILS:
+# ------------------
+# This test module validates DashboardLive, a Phoenix LiveView that provides
+# real-time agent monitoring with WebSocket updates.
+#
+# LiveView Architecture:
+# ----------------------
+#
+#   ┌─────────────────────────────────────────────────────────────────────────┐
+#   │                       Dashboard LiveView                                 │
+#   │                                                                          │
+#   │   Browser                  Server                  Database              │
+#   │    │                        │                        │                   │
+#   │    │  1. GET /              │                        │                   │
+#   │    │──────────────────────►│                        │                   │
+#   │    │                        │                        │                   │
+#   │    │  2. Initial HTML       │  3. Query agents       │                   │
+#   │    │◄──────────────────────│───────────────────────►│                   │
+#   │    │                        │  4. Agent list         │                   │
+#   │    │                        │◄───────────────────────│                   │
+#   │    │                        │                        │                   │
+#   │    │  5. WebSocket connect  │                        │                   │
+#   │    │◄─────────────────────►│                        │                   │
+#   │    │                        │                        │                   │
+#   │    │  6. handle_info(:refresh)                       │                   │
+#   │    │                        │───────────────────────►│                   │
+#   │    │  7. Push diff          │                        │                   │
+#   │    │◄──────────────────────│                        │                   │
+#   │    │                        │                        │                   │
+#   │    │  8. Click agent        │                        │                   │
+#   │    │──────────────────────►│                        │                   │
+#   │    │  9. handle_params      │                        │                   │
+#   │    │                        │  10. Query agent + events                  │
+#   │    │                        │───────────────────────►│                   │
+#   │    │  11. Agent details     │                        │                   │
+#   │    │◄──────────────────────│                        │                   │
+#   └─────────────────────────────────────────────────────────────────────────┘
+#
+# Key Components:
+# ---------------
+# - Stats Cards: Total agents, running count, LLM calls, total spend
+# - Agent List: Clickable list of all agents with status badges
+# - Agent Details: Expanded view when an agent is selected
+# - Event Log: Recent events for the selected agent
+# - Spend Info: Cost breakdown for the selected agent
+#
+# LiveView Events:
+# ----------------
+# - mount/3: Initial page load, fetch all agents
+# - handle_params/3: URL changes (agent selection via ?id=xxx)
+# - handle_info(:refresh): Periodic data refresh (every 5 seconds)
+#
+# Test Categories:
+# ----------------
+# - Initial Render: Dashboard loads with correct structure
+# - Agent Selection: Clicking agents updates URL and details
+# - Data Refresh: Periodic refresh updates data
+# - Status Badges: Different statuses show correct styling
+# - Error States: Handling of deleted agents, missing data
+#
+# Dependencies:
+# -------------
+# - MaraithonWeb.DashboardLive (the LiveView being tested)
+# - Maraithon.Agents (for agent queries)
+# - Maraithon.Events (for event queries)
+# - Maraithon.Spend (for spend queries)
+# - Phoenix.LiveViewTest (for LiveView testing utilities)
+#
+# Setup Requirements:
+# -------------------
+# This test uses `async: true` because:
+# 1. Each test uses isolated database transactions
+# 2. No global state is modified
+# 3. LiveView tests are naturally isolated
+#
+# ==============================================================================
+
 defmodule MaraithonWeb.DashboardLiveTest do
   use MaraithonWeb.ConnCase, async: true
 
@@ -5,7 +118,18 @@ defmodule MaraithonWeb.DashboardLiveTest do
 
   alias Maraithon.Agents
 
+  # ============================================================================
+  # INITIAL MOUNT TESTS
+  # ============================================================================
+  #
+  # These tests verify the Dashboard renders correctly on initial page load.
+  # ============================================================================
+
   describe "mount/3" do
+    @doc """
+    Verifies the Dashboard renders with all expected elements when no agents exist.
+    This is the "empty state" - what new users see before creating agents.
+    """
     test "renders dashboard with no agents", %{conn: conn} do
       {:ok, view, html} = live(conn, "/")
 
@@ -18,6 +142,10 @@ defmodule MaraithonWeb.DashboardLiveTest do
       assert has_element?(view, "dt", "Total Agents")
     end
 
+    @doc """
+    Verifies the Dashboard shows agents when they exist.
+    Each agent should appear in the list with its behavior name.
+    """
     test "renders agents list", %{conn: conn} do
       {:ok, _agent} =
         Agents.create_agent(%{
@@ -35,7 +163,19 @@ defmodule MaraithonWeb.DashboardLiveTest do
     end
   end
 
+  # ============================================================================
+  # AGENT SELECTION TESTS
+  # ============================================================================
+  #
+  # These tests verify that clicking an agent shows its details.
+  # Agent selection works via URL parameters (?id=xxx).
+  # ============================================================================
+
   describe "handle_params/3 with agent id" do
+    @doc """
+    Verifies that agent details are shown when id param is provided.
+    The details panel should show agent ID, behavior, and configuration.
+    """
     test "shows agent details when id param provided", %{conn: conn} do
       {:ok, agent} =
         Agents.create_agent(%{
@@ -53,6 +193,10 @@ defmodule MaraithonWeb.DashboardLiveTest do
       assert has_element?(view, "h3", "Agent Details")
     end
 
+    @doc """
+    Verifies redirect when a non-existent agent ID is provided.
+    Users shouldn't see an error page - they're redirected to dashboard root.
+    """
     test "redirects to root for non-existent agent id", %{conn: conn} do
       result = live(conn, "/?id=#{Ecto.UUID.generate()}")
 
@@ -60,6 +204,10 @@ defmodule MaraithonWeb.DashboardLiveTest do
       assert {:error, {:live_redirect, %{to: "/"}}} = result
     end
 
+    @doc """
+    Verifies that events are shown for the selected agent.
+    Events are the log of what the agent has done.
+    """
     test "shows events for selected agent", %{conn: conn} do
       {:ok, agent} =
         Agents.create_agent(%{
@@ -74,6 +222,10 @@ defmodule MaraithonWeb.DashboardLiveTest do
       assert html =~ "Recent Events"
     end
 
+    @doc """
+    Verifies that spend information is shown for the selected agent.
+    This shows LLM calls, token counts, and costs.
+    """
     test "shows agent spend", %{conn: conn} do
       {:ok, agent} =
         Agents.create_agent(%{
@@ -91,7 +243,19 @@ defmodule MaraithonWeb.DashboardLiveTest do
     end
   end
 
+  # ============================================================================
+  # PERIODIC REFRESH TESTS
+  # ============================================================================
+  #
+  # These tests verify the periodic data refresh mechanism.
+  # The Dashboard sends itself :refresh messages every 5 seconds.
+  # ============================================================================
+
   describe "handle_info :refresh" do
+    @doc """
+    Verifies that new agents appear after a refresh.
+    This simulates an agent being created while the user is viewing the dashboard.
+    """
     test "refreshes data periodically", %{conn: conn} do
       {:ok, view, _html} = live(conn, "/")
 
@@ -113,6 +277,10 @@ defmodule MaraithonWeb.DashboardLiveTest do
       assert html =~ "prompt_agent"
     end
 
+    @doc """
+    Verifies that refresh updates selected agent data.
+    If viewing an agent's details, refresh should update those too.
+    """
     test "refreshes selected agent data", %{conn: conn} do
       {:ok, agent} =
         Agents.create_agent(%{
@@ -134,6 +302,10 @@ defmodule MaraithonWeb.DashboardLiveTest do
       assert html =~ "prompt_agent"
     end
 
+    @doc """
+    Verifies that if the selected agent is deleted, the selection is cleared.
+    Users shouldn't see stale data for deleted agents.
+    """
     test "clears selected agent if agent not found during refresh", %{conn: conn} do
       {:ok, agent} =
         Agents.create_agent(%{
@@ -158,7 +330,19 @@ defmodule MaraithonWeb.DashboardLiveTest do
     end
   end
 
+  # ============================================================================
+  # STATUS BADGE TESTS
+  # ============================================================================
+  #
+  # These tests verify that status badges display correctly.
+  # Different statuses have different colors for quick visual identification.
+  # ============================================================================
+
   describe "status_badge component" do
+    @doc """
+    Verifies that running agents show a green status badge.
+    Green = healthy and operating normally.
+    """
     test "shows green badge for running agents", %{conn: conn} do
       {:ok, _agent} =
         Agents.create_agent(%{
@@ -174,7 +358,18 @@ defmodule MaraithonWeb.DashboardLiveTest do
     end
   end
 
+  # ============================================================================
+  # TIME FORMATTING TESTS
+  # ============================================================================
+  #
+  # These tests verify that timestamps are formatted consistently.
+  # ============================================================================
+
   describe "formatting helpers" do
+    @doc """
+    Verifies that event timestamps are formatted as HH:MM:SS.
+    Consistent formatting helps users scan the event log quickly.
+    """
     test "formats times correctly in event list", %{conn: conn} do
       {:ok, agent} =
         Agents.create_agent(%{
@@ -191,7 +386,18 @@ defmodule MaraithonWeb.DashboardLiveTest do
     end
   end
 
+  # ============================================================================
+  # CLICK NAVIGATION TESTS
+  # ============================================================================
+  #
+  # These tests verify that clicking agents updates the URL and view.
+  # ============================================================================
+
   describe "clicking on agents" do
+    @doc """
+    Verifies that clicking an agent shows its details.
+    The click should update the URL and render the agent details panel.
+    """
     test "clicking an agent updates the URL and shows details", %{conn: conn} do
       {:ok, agent} =
         Agents.create_agent(%{
@@ -214,7 +420,18 @@ defmodule MaraithonWeb.DashboardLiveTest do
     end
   end
 
+  # ============================================================================
+  # MULTI-STATUS TESTS
+  # ============================================================================
+  #
+  # These tests verify different agent statuses display correctly.
+  # ============================================================================
+
   describe "agents with different statuses" do
+    @doc """
+    Verifies that stopped agents show appropriate styling.
+    Stopped agents should be visually distinct from running ones.
+    """
     test "shows stopped badge", %{conn: conn} do
       {:ok, _agent} =
         Agents.create_agent(%{
@@ -230,6 +447,10 @@ defmodule MaraithonWeb.DashboardLiveTest do
       assert html =~ "text-gray-500" or html =~ "stopped"
     end
 
+    @doc """
+    Verifies that degraded agents show warning styling.
+    Degraded = running but experiencing issues (rate limits, errors, etc.)
+    """
     test "shows degraded badge", %{conn: conn} do
       {:ok, _agent} =
         Agents.create_agent(%{
@@ -246,7 +467,18 @@ defmodule MaraithonWeb.DashboardLiveTest do
     end
   end
 
+  # ============================================================================
+  # EVENT DISPLAY TESTS
+  # ============================================================================
+  #
+  # These tests verify that agent events are displayed correctly.
+  # ============================================================================
+
   describe "agent with events" do
+    @doc """
+    Verifies that events are displayed in the agent details panel.
+    Each event should show its type and timestamp.
+    """
     test "shows events list", %{conn: conn} do
       {:ok, agent} =
         Agents.create_agent(%{
@@ -267,7 +499,18 @@ defmodule MaraithonWeb.DashboardLiveTest do
     end
   end
 
+  # ============================================================================
+  # EDGE CASE TESTS
+  # ============================================================================
+  #
+  # These tests verify handling of edge cases and unusual data.
+  # ============================================================================
+
   describe "format helpers" do
+    @doc """
+    Verifies that nil started_at is displayed gracefully.
+    Agents might have nil started_at if they were never started.
+    """
     test "displays nil started_at correctly", %{conn: conn} do
       {:ok, agent} =
         Agents.create_agent(%{
@@ -288,7 +531,18 @@ defmodule MaraithonWeb.DashboardLiveTest do
     end
   end
 
+  # ============================================================================
+  # STATS CARD TESTS
+  # ============================================================================
+  #
+  # These tests verify the stats cards at the top of the dashboard.
+  # ============================================================================
+
   describe "stats cards" do
+    @doc """
+    Verifies that running agent count is calculated correctly.
+    The "Running" stat should only count agents with status = "running".
+    """
     test "shows correct count of running agents", %{conn: conn} do
       {:ok, _running1} =
         Agents.create_agent(%{
