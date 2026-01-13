@@ -18,8 +18,8 @@ defmodule Maraithon.Runtime.Supervisor do
       # Dynamic supervisor for agent processes
       {DynamicSupervisor, strategy: :one_for_one, name: Maraithon.Runtime.AgentSupervisor},
 
-      # Dynamic supervisor for effect worker tasks
-      {DynamicSupervisor, strategy: :one_for_one, name: Maraithon.Runtime.EffectSupervisor}
+      # Task supervisor for effect worker tasks
+      {Task.Supervisor, name: Maraithon.Runtime.EffectSupervisor}
     ]
 
     # Background workers that poll the database - disabled in test mode

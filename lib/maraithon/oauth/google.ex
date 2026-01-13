@@ -19,9 +19,9 @@ defmodule Maraithon.OAuth.Google do
 
   alias Maraithon.HTTP
 
-  @google_auth_url "https://accounts.google.com/o/oauth2/v2/auth"
-  @google_token_url "https://oauth2.googleapis.com/token"
-  @google_revoke_url "https://oauth2.googleapis.com/revoke"
+  @default_auth_url "https://accounts.google.com/o/oauth2/v2/auth"
+  @default_token_url "https://oauth2.googleapis.com/token"
+  @default_revoke_url "https://oauth2.googleapis.com/revoke"
 
   @scope_calendar "https://www.googleapis.com/auth/calendar.readonly"
   @scope_gmail "https://www.googleapis.com/auth/gmail.readonly"
@@ -57,7 +57,7 @@ defmodule Maraithon.OAuth.Google do
         prompt: "consent"
       })
 
-    "#{@google_auth_url}?#{params}"
+    "#{auth_url()}?#{params}"
   end
 
   @doc """
@@ -74,7 +74,7 @@ defmodule Maraithon.OAuth.Google do
       grant_type: "authorization_code"
     }
 
-    case HTTP.post_form(@google_token_url, params) do
+    case HTTP.post_form(token_url(), params) do
       {:ok, response} when is_map(response) ->
         {:ok, parse_token_response(response)}
 
@@ -96,7 +96,7 @@ defmodule Maraithon.OAuth.Google do
       grant_type: "refresh_token"
     }
 
-    case HTTP.post_form(@google_token_url, params) do
+    case HTTP.post_form(token_url(), params) do
       {:ok, response} when is_map(response) ->
         {:ok, parse_token_response(response)}
 
@@ -109,7 +109,7 @@ defmodule Maraithon.OAuth.Google do
   Revokes an access or refresh token.
   """
   def revoke_token(token) do
-    url = "#{@google_revoke_url}?token=#{URI.encode(token)}"
+    url = "#{revoke_url()}?token=#{URI.encode(token)}"
 
     case HTTP.post_form(url, %{}) do
       {:ok, _} -> :ok
@@ -153,6 +153,21 @@ defmodule Maraithon.OAuth.Google do
       client_secret: Keyword.get(config, :client_secret, ""),
       redirect_uri: Keyword.get(config, :redirect_uri, "")
     }
+  end
+
+  defp auth_url do
+    config = Application.get_env(:maraithon, :google, [])
+    Keyword.get(config, :auth_url, @default_auth_url)
+  end
+
+  defp token_url do
+    config = Application.get_env(:maraithon, :google, [])
+    Keyword.get(config, :token_url, @default_token_url)
+  end
+
+  defp revoke_url do
+    config = Application.get_env(:maraithon, :google, [])
+    Keyword.get(config, :revoke_url, @default_revoke_url)
   end
 
   defp parse_token_response(response) do

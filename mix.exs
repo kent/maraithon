@@ -72,7 +72,10 @@ defmodule Maraithon.MixProject do
       # Ecto integration for Cloak
       {:cloak_ecto, "~> 1.3"},
       # Testing
-      {:excoveralls, "~> 0.18", only: :test}
+      {:excoveralls, "~> 0.18", only: :test},
+      {:mox, "~> 1.1", only: :test},
+      {:bypass, "~> 2.1", only: :test},
+      {:lazy_html, ">= 0.1.0", only: :test}
     ]
   end
 

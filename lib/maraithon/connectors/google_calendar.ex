@@ -37,7 +37,7 @@ defmodule Maraithon.Connectors.GoogleCalendar do
 
   require Logger
 
-  @calendar_api_base "https://www.googleapis.com/calendar/v3"
+  @default_api_base "https://www.googleapis.com/calendar/v3"
 
   # ===========================================================================
   # Watch Management
@@ -72,7 +72,7 @@ defmodule Maraithon.Connectors.GoogleCalendar do
   def stop_watch(user_id, channel_id, resource_id) do
     case OAuth.get_valid_access_token(user_id, "google") do
       {:ok, token} ->
-        url = "#{@calendar_api_base}/channels/stop"
+        url = "#{api_base_url()}/channels/stop"
 
         body = %{
           id: channel_id,
@@ -205,7 +205,7 @@ defmodule Maraithon.Connectors.GoogleCalendar do
             orderBy: "startTime"
           })
 
-        url = "#{@calendar_api_base}/calendars/primary/events?#{params}"
+        url = "#{api_base_url()}/calendars/primary/events?#{params}"
 
         case Google.api_request(:get, url, token) do
           {:ok, response} ->
@@ -239,7 +239,7 @@ defmodule Maraithon.Connectors.GoogleCalendar do
     else
       channel_id = generate_channel_id()
 
-      url = "#{@calendar_api_base}/calendars/primary/events/watch"
+      url = "#{api_base_url()}/calendars/primary/events/watch"
 
       body = %{
         id: channel_id,
@@ -286,7 +286,7 @@ defmodule Maraithon.Connectors.GoogleCalendar do
         })
       end
 
-    url = "#{@calendar_api_base}/calendars/primary/events?#{params}"
+    url = "#{api_base_url()}/calendars/primary/events?#{params}"
 
     case Google.api_request(:get, url, access_token) do
       {:ok, response} ->
@@ -294,7 +294,7 @@ defmodule Maraithon.Connectors.GoogleCalendar do
 
         {:ok, events}
 
-      {:error, {:api_error, 410, _}} ->
+      {:error, {:http_status, 410, _}} ->
         # Sync token expired - do full sync
         fetch_events(access_token, Keyword.delete(opts, :sync_token))
 
@@ -379,5 +379,10 @@ defmodule Maraithon.Connectors.GoogleCalendar do
 
   defp generate_channel_id do
     "maraithon-cal-#{:crypto.strong_rand_bytes(8) |> Base.url_encode64(padding: false)}"
+  end
+
+  defp api_base_url do
+    Application.get_env(:maraithon, :google_calendar, [])
+    |> Keyword.get(:api_base_url, @default_api_base)
   end
 end

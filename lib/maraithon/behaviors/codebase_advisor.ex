@@ -71,7 +71,7 @@ defmodule Maraithon.Behaviors.CodebaseAdvisor do
               "temperature" => 0.3
             }
 
-            state = %{state | current_file: file_path, current_content: content}
+            state = state |> Map.put(:current_file, file_path) |> Map.put(:current_content, content)
             {:effect, {:llm_call, params}, state}
 
           {:error, reason} ->

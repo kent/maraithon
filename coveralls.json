@@ -6,6 +6,8 @@
   "skip_files": [
     "lib/maraithon_web.ex",
     "lib/maraithon.ex",
+    "lib/maraithon/release.ex",
+    "lib/maraithon_web/plugs/cache_raw_body.ex",
     "test/support"
   ]
 }

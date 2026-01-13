@@ -40,7 +40,7 @@ defmodule Maraithon.Connectors.Gmail do
 
   require Logger
 
-  @gmail_api_base "https://gmail.googleapis.com/gmail/v1"
+  @default_api_base "https://gmail.googleapis.com/gmail/v1"
 
   # ===========================================================================
   # Watch Management
@@ -74,12 +74,12 @@ defmodule Maraithon.Connectors.Gmail do
   def stop_watch(user_id) do
     case OAuth.get_valid_access_token(user_id, "google") do
       {:ok, token} ->
-        url = "#{@gmail_api_base}/users/me/stop"
+        url = "#{api_base_url()}/users/me/stop"
 
         case Google.api_request(:post, url, token, %{}) do
           {:ok, _} -> :ok
           # Gmail returns 404 if not watching - that's fine
-          {:error, {:api_error, 404, _}} -> :ok
+          {:error, {:http_status, 404, _}} -> :ok
           {:error, reason} -> {:error, reason}
         end
 
@@ -182,7 +182,7 @@ defmodule Maraithon.Connectors.Gmail do
             labelIds: "INBOX"
           })
 
-        url = "#{@gmail_api_base}/users/me/messages?#{params}"
+        url = "#{api_base_url()}/users/me/messages?#{params}"
 
         case Google.api_request(:get, url, token) do
           {:ok, %{"messages" => messages}} ->
@@ -221,7 +221,7 @@ defmodule Maraithon.Connectors.Gmail do
 
     case token do
       {:ok, access_token} ->
-        url = "#{@gmail_api_base}/users/me/messages/#{message_id}?format=metadata"
+        url = "#{api_base_url()}/users/me/messages/#{message_id}?format=metadata"
 
         case Google.api_request(:get, url, access_token) do
           {:ok, response} ->
@@ -252,7 +252,7 @@ defmodule Maraithon.Connectors.Gmail do
     if is_nil(pubsub_topic) or pubsub_topic == "" do
       {:error, :pubsub_topic_not_configured}
     else
-      url = "#{@gmail_api_base}/users/me/watch"
+      url = "#{api_base_url()}/users/me/watch"
 
       body = %{
         topicName: pubsub_topic,
@@ -280,7 +280,7 @@ defmodule Maraithon.Connectors.Gmail do
         historyTypes: "messageAdded"
       })
 
-    url = "#{@gmail_api_base}/users/me/history?#{params}"
+    url = "#{api_base_url()}/users/me/history?#{params}"
 
     case Google.api_request(:get, url, access_token) do
       {:ok, %{"history" => history}} ->
@@ -298,7 +298,7 @@ defmodule Maraithon.Connectors.Gmail do
           |> Enum.map(fn id ->
             case Google.api_request(
                    :get,
-                   "#{@gmail_api_base}/users/me/messages/#{id}?format=metadata",
+                   "#{api_base_url()}/users/me/messages/#{id}?format=metadata",
                    access_token
                  ) do
               {:ok, msg} -> parse_message(msg)
@@ -313,7 +313,7 @@ defmodule Maraithon.Connectors.Gmail do
         # No history changes
         {:ok, []}
 
-      {:error, {:api_error, 404, _}} ->
+      {:error, {:http_status, 404, _}} ->
         # History ID too old - need full sync
         {:error, :history_expired}
 
@@ -389,5 +389,10 @@ defmodule Maraithon.Connectors.Gmail do
   defp get_pubsub_topic do
     Application.get_env(:maraithon, :google, [])
     |> Keyword.get(:pubsub_topic, "")
+  end
+
+  defp api_base_url do
+    Application.get_env(:maraithon, :gmail, [])
+    |> Keyword.get(:api_base_url, @default_api_base)
   end
 end

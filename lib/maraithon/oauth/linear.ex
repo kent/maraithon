@@ -16,10 +16,10 @@ defmodule Maraithon.OAuth.Linear do
   alias Maraithon.HTTP
   alias Maraithon.Crypto
 
-  @linear_auth_url "https://linear.app/oauth/authorize"
-  @linear_token_url "https://api.linear.app/oauth/token"
-  @linear_revoke_url "https://api.linear.app/oauth/revoke"
-  @linear_api_url "https://api.linear.app/graphql"
+  @default_auth_url "https://linear.app/oauth/authorize"
+  @default_token_url "https://api.linear.app/oauth/token"
+  @default_revoke_url "https://api.linear.app/oauth/revoke"
+  @default_api_url "https://api.linear.app/graphql"
 
   @default_scopes ["read", "write", "issues:create", "comments:create"]
 
@@ -44,7 +44,7 @@ defmodule Maraithon.OAuth.Linear do
         prompt: "consent"
       })
 
-    "#{@linear_auth_url}?#{params}"
+    "#{auth_url()}?#{params}"
   end
 
   @doc """
@@ -61,7 +61,7 @@ defmodule Maraithon.OAuth.Linear do
       grant_type: "authorization_code"
     }
 
-    case HTTP.post_json(@linear_token_url, body) do
+    case HTTP.post_json(token_url(), body) do
       {:ok, response} when is_map(response) ->
         {:ok, parse_token_response(response)}
 
@@ -76,7 +76,7 @@ defmodule Maraithon.OAuth.Linear do
   def revoke_token(access_token) do
     headers = [{"Authorization", "Bearer #{access_token}"}]
 
-    case HTTP.post_json(@linear_revoke_url, %{}, headers) do
+    case HTTP.post_json(revoke_url(), %{}, headers) do
       {:ok, _} -> :ok
       {:error, reason} -> {:error, {:revocation_failed, reason}}
     end
@@ -108,7 +108,7 @@ defmodule Maraithon.OAuth.Linear do
     headers = [{"Authorization", "Bearer #{access_token}"}]
     body = %{query: query, variables: variables}
 
-    case HTTP.post_json(@linear_api_url, body, headers) do
+    case HTTP.post_json(api_url(), body, headers) do
       {:ok, %{"errors" => errors}} ->
         {:error, {:graphql_errors, errors}}
 
@@ -139,6 +139,26 @@ defmodule Maraithon.OAuth.Linear do
       client_secret: Keyword.get(config, :client_secret, ""),
       redirect_uri: Keyword.get(config, :redirect_uri, "")
     }
+  end
+
+  defp auth_url do
+    config = Application.get_env(:maraithon, :linear, [])
+    Keyword.get(config, :auth_url, @default_auth_url)
+  end
+
+  defp token_url do
+    config = Application.get_env(:maraithon, :linear, [])
+    Keyword.get(config, :token_url, @default_token_url)
+  end
+
+  defp revoke_url do
+    config = Application.get_env(:maraithon, :linear, [])
+    Keyword.get(config, :revoke_url, @default_revoke_url)
+  end
+
+  defp api_url do
+    config = Application.get_env(:maraithon, :linear, [])
+    Keyword.get(config, :api_url, @default_api_url)
   end
 
   defp get_webhook_secret do

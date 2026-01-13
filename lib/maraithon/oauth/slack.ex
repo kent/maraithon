@@ -16,10 +16,10 @@ defmodule Maraithon.OAuth.Slack do
   alias Maraithon.HTTP
   alias Maraithon.Crypto
 
-  @slack_auth_url "https://slack.com/oauth/v2/authorize"
-  @slack_token_url "https://slack.com/api/oauth.v2.access"
-  @slack_revoke_url "https://slack.com/api/auth.revoke"
-  @slack_api_base "https://slack.com/api"
+  @default_auth_url "https://slack.com/oauth/v2/authorize"
+  @default_token_url "https://slack.com/api/oauth.v2.access"
+  @default_revoke_url "https://slack.com/api/auth.revoke"
+  @default_api_base "https://slack.com/api"
 
   @default_scopes [
     "channels:history",
@@ -48,7 +48,7 @@ defmodule Maraithon.OAuth.Slack do
         state: state
       })
 
-    "#{@slack_auth_url}?#{params}"
+    "#{auth_url()}?#{params}"
   end
 
   @doc """
@@ -64,7 +64,7 @@ defmodule Maraithon.OAuth.Slack do
       redirect_uri: config.redirect_uri
     }
 
-    case HTTP.post_form(@slack_token_url, params) do
+    case HTTP.post_form(token_url(), params) do
       {:ok, %{"ok" => true} = response} ->
         {:ok, parse_token_response(response)}
 
@@ -82,7 +82,7 @@ defmodule Maraithon.OAuth.Slack do
   def revoke_token(access_token) do
     headers = [{"Authorization", "Bearer #{access_token}"}]
 
-    case HTTP.post_form(@slack_revoke_url, %{}, headers) do
+    case HTTP.post_form(revoke_url(), %{}, headers) do
       {:ok, %{"ok" => true}} ->
         :ok
 
@@ -117,7 +117,7 @@ defmodule Maraithon.OAuth.Slack do
   Makes an authenticated request to the Slack API.
   """
   def api_request(method, endpoint, access_token, body \\ nil) do
-    url = "#{@slack_api_base}/#{endpoint}"
+    url = "#{api_base_url()}/#{endpoint}"
     headers = [{"Authorization", "Bearer #{access_token}"}]
 
     result =
@@ -150,6 +150,26 @@ defmodule Maraithon.OAuth.Slack do
       client_secret: Keyword.get(config, :client_secret, ""),
       redirect_uri: Keyword.get(config, :redirect_uri, "")
     }
+  end
+
+  defp auth_url do
+    config = Application.get_env(:maraithon, :slack, [])
+    Keyword.get(config, :auth_url, @default_auth_url)
+  end
+
+  defp token_url do
+    config = Application.get_env(:maraithon, :slack, [])
+    Keyword.get(config, :token_url, @default_token_url)
+  end
+
+  defp revoke_url do
+    config = Application.get_env(:maraithon, :slack, [])
+    Keyword.get(config, :revoke_url, @default_revoke_url)
+  end
+
+  defp api_base_url do
+    config = Application.get_env(:maraithon, :slack, [])
+    Keyword.get(config, :api_base_url, @default_api_base)
   end
 
   defp get_signing_secret do

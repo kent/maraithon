@@ -7,7 +7,7 @@ defmodule Maraithon.LLM.AnthropicProvider do
 
   require Logger
 
-  @base_url "https://api.anthropic.com/v1/messages"
+  @default_base_url "https://api.anthropic.com/v1/messages"
   @anthropic_version "2023-06-01"
 
   @impl true
@@ -47,7 +47,7 @@ defmodule Maraithon.LLM.AnthropicProvider do
       message_count: length(messages)
     )
 
-    case Req.post(@base_url,
+    case Req.post(base_url(),
            json: body,
            headers: headers,
            receive_timeout: timeout
@@ -117,5 +117,10 @@ defmodule Maraithon.LLM.AnthropicProvider do
       _ ->
         60_000
     end
+  end
+
+  defp base_url do
+    Application.get_env(:maraithon, :anthropic, [])
+    |> Keyword.get(:base_url, @default_base_url)
   end
 end

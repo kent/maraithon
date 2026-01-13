@@ -52,7 +52,7 @@ defmodule Maraithon.Connectors.Telegram do
 
   require Logger
 
-  @telegram_api_base "https://api.telegram.org/bot"
+  @default_api_base "https://api.telegram.org/bot"
 
   # ===========================================================================
   # Webhook Handling
@@ -405,7 +405,7 @@ defmodule Maraithon.Connectors.Telegram do
 
   defp api_request(method, params) do
     bot_token = get_bot_token()
-    url = "#{@telegram_api_base}#{bot_token}/#{method}"
+    url = "#{api_base_url()}#{bot_token}/#{method}"
 
     case HTTP.post_json(url, params) do
       {:ok, %{"ok" => true, "result" => result}} ->
@@ -583,6 +583,11 @@ defmodule Maraithon.Connectors.Telegram do
   defp get_bot_token do
     Application.get_env(:maraithon, :telegram, [])
     |> Keyword.get(:bot_token, "")
+  end
+
+  defp api_base_url do
+    Application.get_env(:maraithon, :telegram, [])
+    |> Keyword.get(:api_base_url, @default_api_base)
   end
 
   defp get_bot_id do
