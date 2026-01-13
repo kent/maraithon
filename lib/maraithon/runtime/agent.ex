@@ -93,25 +93,28 @@ defmodule Maraithon.Runtime.Agent do
 
     # Subscribe to PubSub topics from config
     subscriptions = agent.config["subscribe"] || []
+
     Enum.each(subscriptions, fn topic ->
       Phoenix.PubSub.subscribe(Maraithon.PubSub, topic)
       Logger.info("Subscribed to topic", topic: topic)
     end)
 
-    data = %{data |
-      behavior_module: behavior_module,
-      behavior_state: behavior_state,
-      budget: budget,
-      sequence_num: Events.latest_sequence_num(agent.id),
-      subscriptions: subscriptions,
-      current_event: nil
+    data = %{
+      data
+      | behavior_module: behavior_module,
+        behavior_state: behavior_state,
+        budget: budget,
+        sequence_num: Events.latest_sequence_num(agent.id),
+        subscriptions: subscriptions,
+        current_event: nil
     }
 
     # Emit started event (capture updated data with new sequence_num)
-    data = emit_event(data, "agent_started", %{
-      behavior: agent.behavior,
-      config: agent.config
-    })
+    data =
+      emit_event(data, "agent_started", %{
+        behavior: agent.behavior,
+        config: agent.config
+      })
 
     # Schedule initial heartbeat and checkpoint
     schedule_heartbeat(data)
@@ -165,11 +168,12 @@ defmodule Maraithon.Runtime.Agent do
   end
 
   def idle(:info, {:message, message, metadata, message_id}, data) do
-    data = emit_event(data, "message_received", %{
-      message: message,
-      metadata: metadata,
-      message_id: message_id
-    })
+    data =
+      emit_event(data, "message_received", %{
+        message: message,
+        metadata: metadata,
+        message_id: message_id
+      })
 
     if has_budget?(data) do
       data = %{data | config: Map.put(data.config, "_last_message", message)}
@@ -185,10 +189,11 @@ defmodule Maraithon.Runtime.Agent do
     if topic in (data.subscriptions || []) do
       Logger.info("Received PubSub event", topic: topic)
 
-      data = emit_event(data, "pubsub_event_received", %{
-        topic: topic,
-        payload: payload
-      })
+      data =
+        emit_event(data, "pubsub_event_received", %{
+          topic: topic,
+          payload: payload
+        })
 
       if has_budget?(data) do
         data = %{data | current_event: %{topic: topic, payload: payload}}
@@ -273,14 +278,16 @@ defmodule Maraithon.Runtime.Agent do
 
         case result do
           {:ok, result_data} ->
-            data = emit_event(data, "effect_completed", %{
-              effect_id: effect_id,
-              effect_type: effect_info.type,
-              result: result_data
-            })
+            data =
+              emit_event(data, "effect_completed", %{
+                effect_id: effect_id,
+                effect_type: effect_info.type,
+                result: result_data
+              })
 
             # Pass result to behavior
             context = build_context(data)
+
             case data.behavior_module.handle_effect_result(
                    {effect_info.type, result_data},
                    data.behavior_state,
@@ -303,10 +310,11 @@ defmodule Maraithon.Runtime.Agent do
             end
 
           {:error, reason} ->
-            data = emit_event(data, "effect_failed", %{
-              effect_id: effect_id,
-              error: inspect(reason)
-            })
+            data =
+              emit_event(data, "effect_failed", %{
+                effect_id: effect_id,
+                error: inspect(reason)
+              })
 
             schedule_next_wakeup(data)
             {:next_state, :idle, data}
@@ -393,11 +401,12 @@ defmodule Maraithon.Runtime.Agent do
       idempotency_key: idempotency_key
     })
 
-    data = emit_event(data, "effect_requested", %{
-      effect_id: effect_id,
-      effect_type: effect_type,
-      idempotency_key: idempotency_key
-    })
+    data =
+      emit_event(data, "effect_requested", %{
+        effect_id: effect_id,
+        effect_type: effect_type,
+        idempotency_key: idempotency_key
+      })
 
     data = %{data | pending_effects: Map.put(data.pending_effects, effect_id, effect_info)}
     {:next_state, :waiting_effect, data}
@@ -408,13 +417,15 @@ defmodule Maraithon.Runtime.Agent do
       agent_id: data.agent_id,
       timestamp: DateTime.utc_now(),
       budget: data.budget,
-      recent_events: [], # TODO: Load recent events
+      # TODO: Load recent events
+      recent_events: [],
       last_message: Map.get(data.config, "_last_message"),
       event: data.current_event
     }
   end
 
   defp init_budget(nil), do: %{llm_calls: 500, tool_calls: 1000}
+
   defp init_budget(budget) do
     %{
       llm_calls: budget["llm_calls"] || 500,
@@ -438,6 +449,7 @@ defmodule Maraithon.Runtime.Agent do
 
   defp add_bounded(set, item, max_size) do
     set = MapSet.put(set, item)
+
     if MapSet.size(set) > max_size do
       # Remove oldest (arbitrary since MapSet is unordered, but good enough)
       set |> MapSet.to_list() |> Enum.drop(1) |> MapSet.new()

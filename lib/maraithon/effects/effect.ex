@@ -27,7 +27,17 @@ defmodule Maraithon.Effects.Effect do
   end
 
   @required_fields [:id, :agent_id, :idempotency_key, :effect_type]
-  @optional_fields [:params, :status, :claimed_by, :claimed_at, :attempts, :max_attempts, :retry_after, :result, :error]
+  @optional_fields [
+    :params,
+    :status,
+    :claimed_by,
+    :claimed_at,
+    :attempts,
+    :max_attempts,
+    :retry_after,
+    :result,
+    :error
+  ]
 
   def changeset(effect, attrs) do
     effect

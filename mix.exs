@@ -10,7 +10,17 @@ defmodule Maraithon.MixProject do
       start_permanent: Mix.env() == :prod,
       aliases: aliases(),
       deps: deps(),
-      listeners: [Phoenix.CodeReloader]
+      listeners: [Phoenix.CodeReloader],
+      # Test coverage
+      test_coverage: [tool: ExCoveralls],
+      preferred_cli_env: [
+        coveralls: :test,
+        "coveralls.detail": :test,
+        "coveralls.post": :test,
+        "coveralls.html": :test,
+        "coveralls.json": :test,
+        precommit: :test
+      ]
     ]
   end
 
@@ -21,12 +31,6 @@ defmodule Maraithon.MixProject do
     [
       mod: {Maraithon.Application, []},
       extra_applications: [:logger, :runtime_tools]
-    ]
-  end
-
-  def cli do
-    [
-      preferred_envs: [precommit: :test]
     ]
   end
 
@@ -52,14 +56,23 @@ defmodule Maraithon.MixProject do
       {:dns_cluster, "~> 0.2.0"},
       {:bandit, "~> 1.5"},
       # Maraithon-specific deps
-      {:gen_state_machine, "~> 3.0"},  # gen_statem wrapper
-      {:finch, "~> 0.19"},              # HTTP client for LLM calls
-      {:req, "~> 0.5"},                 # High-level HTTP client
-      {:typed_struct, "~> 0.3"},        # Struct definitions
-      {:nimble_options, "~> 1.1"},      # Config validation
+      # gen_statem wrapper
+      {:gen_state_machine, "~> 3.0"},
+      # HTTP client for LLM calls
+      {:finch, "~> 0.19"},
+      # High-level HTTP client
+      {:req, "~> 0.5"},
+      # Struct definitions
+      {:typed_struct, "~> 0.3"},
+      # Config validation
+      {:nimble_options, "~> 1.1"},
       # Security
-      {:cloak, "~> 1.1"},               # Encryption at rest
-      {:cloak_ecto, "~> 1.3"}           # Ecto integration for Cloak
+      # Encryption at rest
+      {:cloak, "~> 1.1"},
+      # Ecto integration for Cloak
+      {:cloak_ecto, "~> 1.3"},
+      # Testing
+      {:excoveralls, "~> 0.18", only: :test}
     ]
   end
 

@@ -120,6 +120,7 @@ defmodule MaraithonWeb.AgentController do
 
       _agent ->
         spend = Spend.get_agent_spend(id)
+
         json(conn, %{
           agent_id: id,
           total_cost_usd: spend.total_cost,
@@ -132,6 +133,7 @@ defmodule MaraithonWeb.AgentController do
 
   def total_spend(conn, _params) do
     spend = Spend.get_total_spend()
+
     json(conn, %{
       total_cost_usd: spend.total_cost,
       input_tokens: spend.input_tokens,

@@ -14,7 +14,16 @@ defmodule Maraithon.Behaviors.RepoPlanner do
   @behaviour Maraithon.Behaviors.Behavior
 
   @default_patterns ["**/*.ex", "**/*.exs", "**/*.js", "**/*.ts", "**/*.py", "**/*.go", "**/*.rs"]
-  @default_ignore ["deps/**", "_build/**", "node_modules/**", ".git/**", "*.min.js", "vendor/**", "dist/**", "build/**"]
+  @default_ignore [
+    "deps/**",
+    "_build/**",
+    "node_modules/**",
+    ".git/**",
+    "*.min.js",
+    "vendor/**",
+    "dist/**",
+    "build/**"
+  ]
   @wakeup_interval_ms 30_000
   @max_entry_points 12
 
@@ -117,8 +126,10 @@ defmodule Maraithon.Behaviors.RepoPlanner do
   @impl true
   def next_wakeup(state) do
     case state.phase do
-      :indexing -> {:relative, 1_000}  # Fast during indexing
-      :planning -> {:relative, 1_000}  # Fast during planning
+      # Fast during indexing
+      :indexing -> {:relative, 1_000}
+      # Fast during planning
+      :planning -> {:relative, 1_000}
       :ready -> {:relative, state.wakeup_interval_ms}
     end
   end
@@ -141,11 +152,13 @@ defmodule Maraithon.Behaviors.RepoPlanner do
           {:ok, content} ->
             Logger.info("Summarizing entry point", file: file)
             prompt = build_summary_prompt(file, content)
+
             params = %{
               "messages" => [%{"role" => "user", "content" => prompt}],
               "max_tokens" => 400,
               "temperature" => 0.2
             }
+
             state = %{state | current_file: file, files_to_summarize: rest}
             {:effect, {:llm_call, params}, state}
 
@@ -225,11 +238,13 @@ defmodule Maraithon.Behaviors.RepoPlanner do
       :analyzing ->
         # Build prompt with file tree + summaries, ask LLM what files to examine
         prompt = build_analysis_prompt(task.task, state.index)
+
         params = %{
           "messages" => [%{"role" => "user", "content" => prompt}],
           "max_tokens" => 1500,
           "temperature" => 0.3
         }
+
         {:effect, {:llm_call, params}, state}
 
       :gathering ->
@@ -250,11 +265,13 @@ defmodule Maraithon.Behaviors.RepoPlanner do
       :generating ->
         # Generate the final plan
         prompt = build_plan_prompt(task, state.index)
+
         params = %{
           "messages" => [%{"role" => "user", "content" => prompt}],
           "max_tokens" => 4000,
           "temperature" => 0.4
         }
+
         {:effect, {:llm_call, params}, state}
     end
   end
@@ -274,11 +291,7 @@ defmodule Maraithon.Behaviors.RepoPlanner do
           |> Enum.filter(&File.exists?/1)
           |> Enum.take(10)
 
-        task = %{task |
-          phase: :gathering,
-          analysis: analysis,
-          files_to_read: files_to_read
-        }
+        task = %{task | phase: :gathering, analysis: analysis, files_to_read: files_to_read}
         state = %{state | current_task: task}
 
         Logger.info("Analysis complete", files_to_examine: length(files_to_read))
@@ -302,15 +315,20 @@ defmodule Maraithon.Behaviors.RepoPlanner do
 
         files_referenced = Map.keys(task.gathered_files)
 
-        Logger.info("Plan generated", task_id: task_id, files_referenced: length(files_referenced))
-
-        {:emit, {:plan_generated, %{
+        Logger.info("Plan generated",
           task_id: task_id,
-          task: task.task,
-          plan: plan_content,
-          files_referenced: files_referenced,
-          plan_file_path: plan_file_path
-        }}, state}
+          files_referenced: length(files_referenced)
+        )
+
+        {:emit,
+         {:plan_generated,
+          %{
+            task_id: task_id,
+            task: task.task,
+            plan: plan_content,
+            files_referenced: files_referenced,
+            plan_file_path: plan_file_path
+          }}, state}
 
       _ ->
         {:idle, state}
@@ -509,6 +527,7 @@ defmodule Maraithon.Behaviors.RepoPlanner do
   end
 
   defp put_in_nested(map, [single]), do: Map.put(map, single, :file)
+
   defp put_in_nested(map, [head | tail]) do
     current = Map.get(map, head, %{})
     Map.put(map, head, put_in_nested(current, tail))
@@ -519,6 +538,7 @@ defmodule Maraithon.Behaviors.RepoPlanner do
     |> Enum.sort_by(fn {k, v} -> {if(is_atom(v), do: 1, else: 0), k} end)
     |> Enum.map(fn {key, value} ->
       indent = String.duplicate("  ", depth)
+
       case value do
         :file -> "#{indent}#{key}"
         nested -> "#{indent}#{key}/\n#{render_tree(nested, depth + 1)}"
@@ -539,7 +559,9 @@ defmodule Maraithon.Behaviors.RepoPlanner do
       |> String.trim()
 
     case Jason.decode(content) do
-      {:ok, json} -> json
+      {:ok, json} ->
+        json
+
       {:error, _} ->
         # Return a default structure if parsing fails
         %{
@@ -557,7 +579,10 @@ defmodule Maraithon.Behaviors.RepoPlanner do
 
     # Generate filename
     timestamp = DateTime.utc_now() |> DateTime.to_iso8601(:basic) |> String.slice(0, 15)
-    slug = task.task |> String.slice(0, 30) |> String.downcase() |> String.replace(~r/[^a-z0-9]+/, "_")
+
+    slug =
+      task.task |> String.slice(0, 30) |> String.downcase() |> String.replace(~r/[^a-z0-9]+/, "_")
+
     filename = "PLAN_#{timestamp}_#{slug}.md"
     path = Path.join(state.output_path, filename)
 
@@ -578,6 +603,7 @@ defmodule Maraithon.Behaviors.RepoPlanner do
       :ok ->
         Logger.info("Wrote plan file", path: path)
         path
+
       {:error, reason} ->
         Logger.error("Failed to write plan file", path: path, reason: reason)
         nil

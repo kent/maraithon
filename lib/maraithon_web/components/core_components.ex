@@ -41,12 +41,13 @@ defmodule MaraithonWeb.CoreComponents do
   attr :status, :string, required: true
 
   def status_badge(assigns) do
-    color_class = case assigns.status do
-      "running" -> "bg-green-100 text-green-800"
-      "stopped" -> "bg-gray-100 text-gray-800"
-      "error" -> "bg-red-100 text-red-800"
-      _ -> "bg-yellow-100 text-yellow-800"
-    end
+    color_class =
+      case assigns.status do
+        "running" -> "bg-green-100 text-green-800"
+        "stopped" -> "bg-gray-100 text-gray-800"
+        "error" -> "bg-red-100 text-red-800"
+        _ -> "bg-yellow-100 text-yellow-800"
+      end
 
     assigns = assign(assigns, :color_class, color_class)
 

@@ -188,16 +188,15 @@ defmodule Maraithon.Behaviors.PromptAgent do
           message: String.slice(message, 0, 100)
         )
 
-        state = %{state |
-          processing_event: nil,
-          actions_taken: state.actions_taken + 1
-        }
+        state = %{state | processing_event: nil, actions_taken: state.actions_taken + 1}
 
-        {:emit, {:agent_response, %{
-          agent: state.name,
-          response: message,
-          event_type: get_in(state, [:processing_event, :type])
-        }}, state}
+        {:emit,
+         {:agent_response,
+          %{
+            agent: state.name,
+            response: message,
+            event_type: get_in(state, [:processing_event, :type])
+          }}, state}
 
       :observe ->
         # Agent chose to just observe, not act
@@ -233,15 +232,14 @@ defmodule Maraithon.Behaviors.PromptAgent do
           reason: inspect(reason)
         )
 
-        state = %{state |
-          pending_tool_call: nil,
-          processing_event: nil
-        }
+        state = %{state | pending_tool_call: nil, processing_event: nil}
 
-        {:emit, {:agent_error, %{
-          agent: state.name,
-          error: "Tool #{tool_call.tool} failed: #{inspect(reason)}"
-        }}, state}
+        {:emit,
+         {:agent_error,
+          %{
+            agent: state.name,
+            error: "Tool #{tool_call.tool} failed: #{inspect(reason)}"
+          }}, state}
     end
   end
 
@@ -340,10 +338,12 @@ defmodule Maraithon.Behaviors.PromptAgent do
   end
 
   defp format_memory([]), do: "(No recent events)"
+
   defp format_memory(memory) do
     memory
     |> Enum.reverse()
-    |> Enum.take(10)  # Show last 10 in prompt
+    # Show last 10 in prompt
+    |> Enum.take(10)
     |> Enum.map(fn event ->
       time = if event[:timestamp], do: DateTime.to_iso8601(event.timestamp), else: "unknown"
       "- [#{time}] #{event.source}: #{truncate(format_content(event.content), 200)}"
@@ -402,6 +402,7 @@ defmodule Maraithon.Behaviors.PromptAgent do
       args =
         if args_line do
           args_str = String.replace_prefix(args_line, "ARGS:", "") |> String.trim()
+
           case Jason.decode(args_str) do
             {:ok, parsed} -> parsed
             {:error, _} -> %{}

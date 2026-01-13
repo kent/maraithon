@@ -108,10 +108,16 @@ defmodule Maraithon.Connectors.Slack do
         # Generic handler for other events
         topic = build_topic(team_id, event["channel"])
 
-        normalized = Connector.build_event(event_type, "slack", %{
-          team_id: team_id,
-          event: event
-        }, params)
+        normalized =
+          Connector.build_event(
+            event_type,
+            "slack",
+            %{
+              team_id: team_id,
+              event: event
+            },
+            params
+          )
 
         {:ok, topic, normalized}
     end

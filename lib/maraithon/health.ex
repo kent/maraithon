@@ -38,7 +38,9 @@ defmodule Maraithon.Health do
 
   defp check_database do
     case Repo.query("SELECT 1") do
-      {:ok, _} -> :ok
+      {:ok, _} ->
+        :ok
+
       {:error, reason} ->
         Logger.error("Database health check failed: #{inspect(reason)}")
         :error

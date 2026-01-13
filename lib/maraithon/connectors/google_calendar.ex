@@ -125,12 +125,13 @@ defmodule Maraithon.Connectors.GoogleCalendar do
           # Calendar changed - fetch updated events
           case sync_calendar_events(user_id) do
             {:ok, events} ->
-              event = Connector.build_event("calendar_sync", "google_calendar", %{
-                user_id: user_id,
-                channel_id: channel_id,
-                resource_id: resource_id,
-                events: events
-              })
+              event =
+                Connector.build_event("calendar_sync", "google_calendar", %{
+                  user_id: user_id,
+                  channel_id: channel_id,
+                  resource_id: resource_id,
+                  events: events
+                })
 
               {:ok, topic, event}
 
@@ -141,23 +142,25 @@ defmodule Maraithon.Connectors.GoogleCalendar do
               )
 
               # Still publish notification of change
-              event = Connector.build_event("calendar_changed", "google_calendar", %{
-                user_id: user_id,
-                channel_id: channel_id,
-                resource_id: resource_id,
-                sync_failed: true
-              })
+              event =
+                Connector.build_event("calendar_changed", "google_calendar", %{
+                  user_id: user_id,
+                  channel_id: channel_id,
+                  resource_id: resource_id,
+                  sync_failed: true
+                })
 
               {:ok, topic, event}
           end
 
         "not_exists" ->
           # Resource deleted
-          event = Connector.build_event("calendar_deleted", "google_calendar", %{
-            user_id: user_id,
-            channel_id: channel_id,
-            resource_id: resource_id
-          })
+          event =
+            Connector.build_event("calendar_deleted", "google_calendar", %{
+              user_id: user_id,
+              channel_id: channel_id,
+              resource_id: resource_id
+            })
 
           {:ok, topic, event}
 

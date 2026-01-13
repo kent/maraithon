@@ -16,14 +16,15 @@ defmodule MaraithonWeb.DashboardLive do
     agents = Agents.list_agents()
     total_spend = Spend.get_total_spend()
 
-    {:ok, assign(socket,
-      agents: agents,
-      selected_agent: nil,
-      events: [],
-      total_spend: total_spend,
-      agent_spend: nil,
-      page_title: "Dashboard"
-    )}
+    {:ok,
+     assign(socket,
+       agents: agents,
+       selected_agent: nil,
+       events: [],
+       total_spend: total_spend,
+       agent_spend: nil,
+       page_title: "Dashboard"
+     )}
   end
 
   @impl true
@@ -32,12 +33,14 @@ defmodule MaraithonWeb.DashboardLive do
       {:ok, agent_status} ->
         {:ok, events} = Runtime.get_events(id, limit: 50)
         agent_spend = Spend.get_agent_spend(id)
-        {:noreply, assign(socket,
-          selected_agent: agent_status,
-          events: events,
-          agent_spend: agent_spend,
-          page_title: "Agent #{String.slice(id, 0, 8)}"
-        )}
+
+        {:noreply,
+         assign(socket,
+           selected_agent: agent_status,
+           events: events,
+           agent_spend: agent_spend,
+           page_title: "Agent #{String.slice(id, 0, 8)}"
+         )}
 
       {:error, :not_found} ->
         {:noreply, push_navigate(socket, to: "/")}
@@ -255,26 +258,31 @@ defmodule MaraithonWeb.DashboardLive do
   end
 
   defp format_time(nil), do: "N/A"
+
   defp format_time(datetime) when is_binary(datetime) do
     case DateTime.from_iso8601(datetime) do
       {:ok, dt, _} -> format_time(dt)
       _ -> datetime
     end
   end
+
   defp format_time(%DateTime{} = dt) do
     Calendar.strftime(dt, "%H:%M:%S")
   end
+
   defp format_time(%NaiveDateTime{} = dt) do
     Calendar.strftime(dt, "%H:%M:%S")
   end
 
   defp format_datetime(nil), do: "N/A"
+
   defp format_datetime(datetime) when is_binary(datetime) do
     case DateTime.from_iso8601(datetime) do
       {:ok, dt, _} -> format_datetime(dt)
       _ -> datetime
     end
   end
+
   defp format_datetime(%DateTime{} = dt) do
     Calendar.strftime(dt, "%Y-%m-%d %H:%M:%S UTC")
   end

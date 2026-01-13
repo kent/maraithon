@@ -1,7 +1,16 @@
 defmodule MaraithonWeb.WebhookController do
   use MaraithonWeb, :controller
 
-  alias Maraithon.Connectors.{Connector, GitHub, GoogleCalendar, Gmail, Slack, WhatsApp, Linear, Telegram}
+  alias Maraithon.Connectors.{
+    Connector,
+    GitHub,
+    GoogleCalendar,
+    Gmail,
+    Slack,
+    WhatsApp,
+    Linear,
+    Telegram
+  }
 
   require Logger
 
@@ -256,6 +265,7 @@ defmodule MaraithonWeb.WebhookController do
         Logger.warning("Raw body not cached - signature verification may fail",
           path: conn.request_path
         )
+
         # Fallback to re-encoding (may not match original bytes)
         Jason.encode!(params)
 

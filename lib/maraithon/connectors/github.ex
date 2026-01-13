@@ -94,6 +94,7 @@ defmodule Maraithon.Connectors.GitHub do
             event_type: event.type,
             repo: repo
           )
+
           {:ok, topic, event}
 
         {:ignore, reason} ->
@@ -141,13 +142,23 @@ defmodule Maraithon.Connectors.GitHub do
 
     event_type =
       case action do
-        "opened" -> "pr_opened"
+        "opened" ->
+          "pr_opened"
+
         "closed" ->
           if pr["merged"], do: "pr_merged", else: "pr_closed"
-        "reopened" -> "pr_reopened"
-        "review_requested" -> "pr_review_requested"
-        "synchronize" -> "pr_updated"
-        _ -> "pr_#{action}"
+
+        "reopened" ->
+          "pr_reopened"
+
+        "review_requested" ->
+          "pr_review_requested"
+
+        "synchronize" ->
+          "pr_updated"
+
+        _ ->
+          "pr_#{action}"
       end
 
     data = %{
@@ -177,17 +188,18 @@ defmodule Maraithon.Connectors.GitHub do
       before: params["before"],
       after: params["after"],
       pusher: get_in(params, ["pusher", "name"]),
-      commits: Enum.map(commits, fn c ->
-        %{
-          sha: c["id"],
-          message: c["message"],
-          author: get_in(c, ["author", "name"]),
-          url: c["url"],
-          added: c["added"],
-          modified: c["modified"],
-          removed: c["removed"]
-        }
-      end),
+      commits:
+        Enum.map(commits, fn c ->
+          %{
+            sha: c["id"],
+            message: c["message"],
+            author: get_in(c, ["author", "name"]),
+            url: c["url"],
+            added: c["added"],
+            modified: c["modified"],
+            removed: c["removed"]
+          }
+        end),
       commit_count: length(commits),
       forced: params["forced"]
     }

@@ -119,11 +119,12 @@ defmodule Maraithon.Connectors.Gmail do
         # Fetch the actual email changes
         case sync_mail_changes(user_id, history_id) do
           {:ok, messages} ->
-            event = Connector.build_event("email_sync", "gmail", %{
-              user_id: user_id,
-              history_id: history_id,
-              messages: messages
-            })
+            event =
+              Connector.build_event("email_sync", "gmail", %{
+                user_id: user_id,
+                history_id: history_id,
+                messages: messages
+              })
 
             {:ok, topic, event}
 
@@ -135,11 +136,12 @@ defmodule Maraithon.Connectors.Gmail do
             )
 
             # Still notify that mail changed
-            event = Connector.build_event("email_changed", "gmail", %{
-              user_id: user_id,
-              history_id: history_id,
-              sync_failed: true
-            })
+            event =
+              Connector.build_event("email_changed", "gmail", %{
+                user_id: user_id,
+                history_id: history_id,
+                sync_failed: true
+              })
 
             {:ok, topic, event}
         end

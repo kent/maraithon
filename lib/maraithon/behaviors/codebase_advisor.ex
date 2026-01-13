@@ -62,6 +62,7 @@ defmodule Maraithon.Behaviors.CodebaseAdvisor do
             Logger.info("Reviewing file", file: file_path, iteration: state.iteration)
 
             prompt = build_review_prompt(file_path, content, state)
+
             params = %{
               "messages" => [
                 %{"role" => "user", "content" => prompt}
@@ -167,7 +168,8 @@ defmodule Maraithon.Behaviors.CodebaseAdvisor do
 
     truncated_content =
       if String.length(content) > 15_000 do
-        String.slice(content, 0, 15_000) <> "\n\n... (file truncated, #{String.length(content)} bytes total)"
+        String.slice(content, 0, 15_000) <>
+          "\n\n... (file truncated, #{String.length(content)} bytes total)"
       else
         content
       end

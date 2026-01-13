@@ -14,7 +14,8 @@ defmodule Maraithon.Runtime.EffectRunner do
   require Logger
 
   @poll_interval_ms 1_000
-  @claim_timeout_ms 300_000  # 5 minutes
+  # 5 minutes
+  @claim_timeout_ms 300_000
   @batch_size 10
 
   def start_link(opts) do
@@ -155,6 +156,7 @@ defmodule Maraithon.Runtime.EffectRunner do
             tokens: data.usage.total_tokens,
             cost: data.usage.total_cost
           )
+
           result
 
         {:error, reason} ->

@@ -38,6 +38,7 @@ defmodule Maraithon.Behaviors.WatchdogSummarizer do
       # Every 2nd wakeup (1 hour), ask for a summary
       rem(state.iteration, 2) == 0 ->
         prompt = build_summary_prompt(context)
+
         params = %{
           "messages" => [
             %{"role" => "user", "content" => prompt}
@@ -50,7 +51,9 @@ defmodule Maraithon.Behaviors.WatchdogSummarizer do
 
       # Otherwise, just note we're alive
       true ->
-        note = "Iteration #{state.iteration}: All quiet at #{DateTime.utc_now() |> DateTime.to_iso8601()}"
+        note =
+          "Iteration #{state.iteration}: All quiet at #{DateTime.utc_now() |> DateTime.to_iso8601()}"
+
         {:emit, {:note_appended, note}, state}
     end
   end

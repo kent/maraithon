@@ -13,8 +13,7 @@ end
 
 port = String.to_integer(System.get_env("PORT", "4000"))
 
-config :maraithon, MaraithonWeb.Endpoint,
-  http: [ip: {0, 0, 0, 0, 0, 0, 0, 0}, port: port]
+config :maraithon, MaraithonWeb.Endpoint, http: [ip: {0, 0, 0, 0, 0, 0, 0, 0}, port: port]
 
 # =============================================================================
 # Maraithon Runtime Configuration
@@ -47,7 +46,8 @@ config :maraithon, Maraithon.Runtime,
   heartbeat_interval_ms: heartbeat_interval_ms,
   checkpoint_interval_ms: checkpoint_interval_ms,
   effect_poll_interval_ms: String.to_integer(System.get_env("EFFECT_POLL_INTERVAL_MS", "1000")),
-  scheduler_poll_interval_ms: String.to_integer(System.get_env("SCHEDULER_POLL_INTERVAL_MS", "5000")),
+  scheduler_poll_interval_ms:
+    String.to_integer(System.get_env("SCHEDULER_POLL_INTERVAL_MS", "5000")),
   # Timeouts
   llm_timeout_ms: String.to_integer(System.get_env("LLM_TIMEOUT_MS", "120000")),
   tool_timeout_ms: String.to_integer(System.get_env("TOOL_TIMEOUT_MS", "30000")),

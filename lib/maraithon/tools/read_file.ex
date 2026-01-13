@@ -3,7 +3,8 @@ defmodule Maraithon.Tools.ReadFile do
   Tool for reading file contents.
   """
 
-  @max_file_size 100_000  # 100KB
+  # 100KB
+  @max_file_size 100_000
 
   def execute(args) do
     path = args["path"]

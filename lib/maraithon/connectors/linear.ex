@@ -99,11 +99,17 @@ defmodule Maraithon.Connectors.Linear do
           topic = "linear:#{team_key}"
           event_type = "#{String.downcase(type)}_#{action}"
 
-          normalized = Connector.build_event(event_type, "linear", %{
-            type: type,
-            action: action,
-            data: data
-          }, params)
+          normalized =
+            Connector.build_event(
+              event_type,
+              "linear",
+              %{
+                type: type,
+                action: action,
+                data: data
+              },
+              params
+            )
 
           {:ok, topic, normalized}
       end

@@ -6,7 +6,8 @@ defmodule Maraithon.Runtime.HealthReporter do
   use GenServer
   require Logger
 
-  @report_interval_ms 60_000  # Every minute
+  # Every minute
+  @report_interval_ms 60_000
 
   def start_link(opts) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
