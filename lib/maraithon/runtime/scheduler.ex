@@ -151,7 +151,7 @@ defmodule Maraithon.Runtime.Scheduler do
         send(pid, message)
 
       [] ->
-        Logger.warn("Agent #{agent_id} not running, job will redeliver on resume")
+        Logger.warning("Agent #{agent_id} not running, job will redeliver on resume")
     end
   end
 

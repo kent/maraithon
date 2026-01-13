@@ -158,12 +158,12 @@ defmodule Maraithon.Runtime.EffectRunner do
           result
 
         {:error, reason} ->
-          Logger.warn("LLM call failed", effect_id: effect.id, reason: inspect(reason))
+          Logger.warning("LLM call failed", effect_id: effect.id, reason: inspect(reason))
           result
       end
     catch
       :exit, {:timeout, _} ->
-        Logger.warn("LLM call timed out", effect_id: effect.id)
+        Logger.warning("LLM call timed out", effect_id: effect.id)
         {:error, "timeout"}
     end
   end
@@ -224,7 +224,7 @@ defmodule Maraithon.Runtime.EffectRunner do
         send(pid, {:effect_result, effect_id, result})
 
       [] ->
-        Logger.warn("Agent #{agent_id} not running, cannot deliver effect result")
+        Logger.warning("Agent #{agent_id} not running, cannot deliver effect result")
     end
   end
 

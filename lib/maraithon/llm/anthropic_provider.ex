@@ -57,7 +57,7 @@ defmodule Maraithon.LLM.AnthropicProvider do
 
       {:ok, %{status: 429, body: body}} ->
         retry_after = extract_retry_after(body)
-        Logger.warn("Rate limited, retry after #{retry_after}ms")
+        Logger.warning("Rate limited, retry after #{retry_after}ms")
         {:error, {:rate_limited, retry_after}}
 
       {:ok, %{status: status, body: body}} ->
@@ -65,7 +65,7 @@ defmodule Maraithon.LLM.AnthropicProvider do
         {:error, {:api_error, status, body}}
 
       {:error, %{reason: :timeout}} ->
-        Logger.warn("Anthropic API timeout")
+        Logger.warning("Anthropic API timeout")
         {:error, :timeout}
 
       {:error, reason} ->

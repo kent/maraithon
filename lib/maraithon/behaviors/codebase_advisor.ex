@@ -74,7 +74,7 @@ defmodule Maraithon.Behaviors.CodebaseAdvisor do
             {:effect, {:llm_call, params}, state}
 
           {:error, reason} ->
-            Logger.warn("Skipping unreadable file", file: file_path, reason: reason)
+            Logger.warning("Skipping unreadable file", file: file_path, reason: reason)
             state = mark_file_skipped(state, file_path)
             {:continue, state}
         end

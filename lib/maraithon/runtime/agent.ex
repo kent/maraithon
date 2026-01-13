@@ -157,7 +157,7 @@ defmodule Maraithon.Runtime.Agent do
           if has_budget?(data) do
             {:next_state, :working, data, [{:next_event, :internal, :execute_behavior}]}
           else
-            Logger.warn("No budget, staying idle")
+            Logger.warning("No budget, staying idle")
             {:keep_state, data}
           end
       end
@@ -175,7 +175,7 @@ defmodule Maraithon.Runtime.Agent do
       data = %{data | config: Map.put(data.config, "_last_message", message)}
       {:next_state, :working, data, [{:next_event, :internal, :execute_behavior}]}
     else
-      Logger.warn("No budget, cannot process message")
+      Logger.warning("No budget, cannot process message")
       {:keep_state, data}
     end
   end
@@ -194,7 +194,7 @@ defmodule Maraithon.Runtime.Agent do
         data = %{data | current_event: %{topic: topic, payload: payload}}
         {:next_state, :working, data, [{:next_event, :internal, :execute_behavior}]}
       else
-        Logger.warn("No budget, cannot process PubSub event")
+        Logger.warning("No budget, cannot process PubSub event")
         {:keep_state, data}
       end
     else
@@ -264,7 +264,7 @@ defmodule Maraithon.Runtime.Agent do
   def waiting_effect(:info, {:effect_result, effect_id, result}, data) do
     case Map.pop(data.pending_effects, effect_id) do
       {nil, _} ->
-        Logger.warn("Received result for unknown effect: #{effect_id}")
+        Logger.warning("Received result for unknown effect: #{effect_id}")
         {:keep_state, data}
 
       {effect_info, pending_effects} ->
@@ -315,7 +315,7 @@ defmodule Maraithon.Runtime.Agent do
   end
 
   def waiting_effect(:state_timeout, :effect_timeout, data) do
-    Logger.warn("Effect timeout")
+    Logger.warning("Effect timeout")
     schedule_next_wakeup(data)
     {:next_state, :idle, data}
   end
