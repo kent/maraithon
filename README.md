@@ -17,25 +17,41 @@ Agent = Prompt + State + Subscriptions + Tools
 
 An agent doesn't wake up on a schedule. It's **subscribed** to the world and reacts instantly to events.
 
+### What Makes This Powerful
+
+**Traditional Approach:**
+```
+Cron job runs → Agent wakes up → Checks for changes → Does work → Dies
+```
+
+**Maraithon Approach:**
+```
+Event happens → Agent receives it instantly → Responds → Stays alive
+```
+
+Your agent is **always watching**, **always remembering**, and **always ready**. No polling. No cold starts. No missed events.
+
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                         Maraithon                                │
-├─────────────────────────────────────────────────────────────────┤
-│  Connectors          │  Agent Runtime        │  Tools           │
-│  ─────────           │  ─────────────        │  ─────           │
-│  GitHub      ──┐     │  GenStateMachine      │  read_file       │
-│  Slack (soon)  ├──►  │  Event Sourcing       │  search_files    │
-│  Calendar      │     │  Effect Outbox        │  http_get        │
-│  Email         │     │  PubSub               │  file_tree       │
-│  Custom    ────┘     │  Supervision          │  custom...       │
-└─────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────┐
+│                            Maraithon                                 │
+├─────────────────────────────────────────────────────────────────────┤
+│  Connectors              │  Agent Runtime        │  Tools           │
+│  ──────────              │  ─────────────        │  ─────           │
+│  GitHub        ──┐       │  GenStateMachine      │  read_file       │
+│  Google Calendar ├──►    │  Event Sourcing       │  search_files    │
+│  Gmail           │       │  Effect Outbox        │  http_get        │
+│  Slack           │       │  PubSub               │  file_tree       │
+│  WhatsApp        │       │  Supervision          │  custom...       │
+│  Linear          │       │  LLM Integration      │                  │
+│  Telegram    ────┘       │  State Persistence    │                  │
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
-**Connectors** receive webhooks from external services and publish normalized events to PubSub.
+**Connectors** receive webhooks from external services and publish normalized events to PubSub. Built-in connectors for GitHub, Google Calendar, Gmail, Slack, WhatsApp, Linear, and Telegram.
 
-**Agent Runtime** manages agent lifecycle, state persistence, LLM calls, and tool execution.
+**Agent Runtime** manages agent lifecycle, state persistence, LLM calls, and tool execution. Built on OTP for fault tolerance and supervision.
 
 **Tools** are actions agents can take to interact with the world.
 
@@ -220,6 +236,54 @@ curl -X POST http://localhost:4000/api/v1/agents \
 
 **Supported events**: `message_received`, `image_received`, `audio_received`, `document_received`, `location_received`, `message_status`
 
+### Linear (Available)
+
+```bash
+# Configure Linear OAuth
+export LINEAR_CLIENT_ID="your_client_id"
+export LINEAR_CLIENT_SECRET="your_client_secret"
+export LINEAR_REDIRECT_URI="https://your-domain.com/auth/linear/callback"
+export LINEAR_WEBHOOK_SECRET="your_webhook_secret"
+
+# User authorizes via OAuth
+# Visit: /auth/linear?user_id=user_123
+
+# Create agent subscribed to Linear issues
+curl -X POST http://localhost:4000/api/v1/agents \
+  -d '{
+    "behavior": "prompt_agent",
+    "config": {
+      "prompt": "When new issues are created, analyze them and suggest implementation plans.",
+      "subscribe": ["linear:eng"]
+    }
+  }'
+```
+
+**Supported events**: `issue_created`, `issue_updated`, `issue_removed`, `comment_created`, `comment_updated`, `project_created`, `cycle_created`
+
+### Telegram (Available)
+
+```bash
+# Configure Telegram bot
+export TELEGRAM_BOT_TOKEN="123456789:ABC..."
+export TELEGRAM_WEBHOOK_SECRET="random_secret_string"
+
+# Set webhook (call once)
+# Telegram.set_webhook("https://your-domain.com/webhooks/telegram/your_secret")
+
+# Create agent subscribed to Telegram messages
+curl -X POST http://localhost:4000/api/v1/agents \
+  -d '{
+    "behavior": "prompt_agent",
+    "config": {
+      "prompt": "You are a helpful assistant. Respond to user messages.",
+      "subscribe": ["telegram:123456789:-100123456"]
+    }
+  }'
+```
+
+**Supported events**: `message`, `photo`, `document`, `voice`, `video`, `location`, `callback_query`, `edited_message`, `member_joined`, `member_left`
+
 ### Connector Status
 
 | Connector | Status | Topic Format |
@@ -229,7 +293,8 @@ curl -X POST http://localhost:4000/api/v1/agents \
 | Gmail | Available | `email:{user_id}` |
 | Slack | Available | `slack:{team_id}:{channel_id}` |
 | WhatsApp | Available | `whatsapp:{phone_number_id}` |
-| Linear | Planned | `linear:{team}` |
+| Linear | Available | `linear:{team_key}` |
+| Telegram | Available | `telegram:{bot_id}:{chat_id}` |
 | Discord | Planned | `discord:{server}:{channel}` |
 
 ### Building Custom Connectors
@@ -281,6 +346,8 @@ end
 | `POST /webhooks/slack` | Slack Events API |
 | `GET /webhooks/whatsapp` | WhatsApp webhook verification |
 | `POST /webhooks/whatsapp` | WhatsApp message events |
+| `POST /webhooks/linear` | Linear webhooks |
+| `POST /webhooks/telegram/:secret` | Telegram bot updates |
 
 ### OAuth
 
@@ -290,6 +357,8 @@ end
 | `GET /auth/google/callback` | Google OAuth callback |
 | `GET /auth/slack` | Initiate Slack OAuth flow |
 | `GET /auth/slack/callback` | Slack OAuth callback |
+| `GET /auth/linear` | Initiate Linear OAuth flow |
+| `GET /auth/linear/callback` | Linear OAuth callback |
 
 ## Configuration
 
@@ -320,21 +389,65 @@ export WHATSAPP_VERIFY_TOKEN="your_verify_token"
 export WHATSAPP_APP_SECRET="your_app_secret"
 export WHATSAPP_ACCESS_TOKEN="your_access_token"
 export WHATSAPP_PHONE_NUMBER_ID="your_phone_number_id"
+
+# Linear (required for Linear connector)
+export LINEAR_CLIENT_ID="your_client_id"
+export LINEAR_CLIENT_SECRET="your_client_secret"
+export LINEAR_REDIRECT_URI="https://your-domain.com/auth/linear/callback"
+export LINEAR_WEBHOOK_SECRET="your_webhook_secret"
+
+# Telegram (required for Telegram connector)
+export TELEGRAM_BOT_TOKEN="123456789:ABC..."
+export TELEGRAM_WEBHOOK_SECRET="random_secret_path"
 ```
 
 ## Use Cases
 
 ### GitHub Issue Planner
-Agent watches a repo, generates implementation plans for new issues.
+```json
+{
+  "prompt": "When new issues are created, analyze the codebase and generate implementation plans.",
+  "subscribe": ["github:acme/api"],
+  "tools": ["read_file", "search_files", "file_tree"]
+}
+```
+Agent watches a repo. When an issue is opened → reads relevant code → generates a plan → posts as a comment.
 
 ### Personal Assistant
-Agent connected to calendar, email, and chat—always aware of your schedule.
+```json
+{
+  "prompt": "You're my assistant. Keep me organized and respond via Telegram.",
+  "subscribe": ["calendar:user_123", "email:user_123", "telegram:bot:chat_123"]
+}
+```
+Agent connected to your calendar, email, and Telegram. Knows your schedule. Reminds you of meetings. Summarizes important emails. All through a chat interface.
 
-### Code Guardian
-Agent monitors PRs and commits, flags security issues or code smells.
+### DevOps On-Call
+```json
+{
+  "prompt": "Monitor Linear for urgent issues. Triage and notify the team on Slack.",
+  "subscribe": ["linear:eng", "slack:T123:C456"]
+}
+```
+Agent watches Linear for P0 issues. When one appears → analyzes the issue → posts to Slack with context → assigns the right engineer.
 
-### Team Digest
-Agent summarizes daily activity across GitHub, Slack, and Linear.
+### Customer Support Bot
+```json
+{
+  "prompt": "Answer customer questions on WhatsApp. Escalate complex issues.",
+  "subscribe": ["whatsapp:1234567890"]
+}
+```
+Agent responds to WhatsApp messages instantly. Uses context from previous conversations. Hands off to humans when needed.
+
+### Team Standup
+```json
+{
+  "prompt": "Every morning, summarize yesterday's GitHub and Linear activity for the team.",
+  "subscribe": ["github:acme/api", "linear:eng", "slack:T123:C456"]
+}
+```
+Agent collects commits, merged PRs, and completed issues. Posts a formatted summary to Slack each morning.
 
 ## Why OTP?
 

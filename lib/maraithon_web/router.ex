@@ -27,6 +27,8 @@ defmodule MaraithonWeb.Router do
     get "/google/callback", OAuthController, :google_callback
     get "/slack", OAuthController, :slack
     get "/slack/callback", OAuthController, :slack_callback
+    get "/linear", OAuthController, :linear
+    get "/linear/callback", OAuthController, :linear_callback
   end
 
   # Web UI - Dashboard
@@ -70,5 +72,7 @@ defmodule MaraithonWeb.Router do
     post "/slack", WebhookController, :slack
     get "/whatsapp", WebhookController, :whatsapp
     post "/whatsapp", WebhookController, :whatsapp
+    post "/linear", WebhookController, :linear
+    post "/telegram/:secret_path", WebhookController, :telegram
   end
 end

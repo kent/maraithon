@@ -8,8 +8,9 @@ defmodule MaraithonWeb.OAuthController do
   use MaraithonWeb, :controller
 
   alias Maraithon.OAuth
-  alias Maraithon.OAuth.{Google, Slack}
+  alias Maraithon.OAuth.{Google, Slack, Linear}
   alias Maraithon.Connectors.{GoogleCalendar, Gmail}
+  alias Maraithon.Connectors.Linear, as: LinearConnector
 
   require Logger
 
@@ -196,6 +197,122 @@ defmodule MaraithonWeb.OAuthController do
   end
 
   defp decode_slack_state(state) do
+    with {:ok, json} <- Base.url_decode64(state),
+         {:ok, data} <- Jason.decode(json) do
+      {:ok, data["user_id"]}
+    else
+      _ -> {:error, :invalid_state}
+    end
+  end
+
+  # ===========================================================================
+  # Linear OAuth
+  # ===========================================================================
+
+  @doc """
+  Initiates Linear OAuth flow.
+
+  GET /auth/linear?user_id=xxx
+  """
+  def linear(conn, params) do
+    user_id = params["user_id"]
+
+    if is_nil(user_id) or user_id == "" do
+      conn
+      |> put_status(:bad_request)
+      |> json(%{error: "user_id is required"})
+    else
+      state = encode_linear_state(user_id)
+      auth_url = Linear.authorize_url(Linear.default_scopes(), state)
+      redirect(conn, external: auth_url)
+    end
+  end
+
+  @doc """
+  Handles Linear OAuth callback.
+
+  GET /auth/linear/callback?code=xxx&state=xxx
+  """
+  def linear_callback(conn, %{"code" => code, "state" => state}) do
+    case decode_linear_state(state) do
+      {:ok, user_id} ->
+        handle_linear_tokens(conn, code, user_id)
+
+      {:error, _reason} ->
+        conn
+        |> put_status(:bad_request)
+        |> json(%{error: "Invalid state parameter"})
+    end
+  end
+
+  def linear_callback(conn, %{"error" => error}) do
+    Logger.warning("Linear OAuth error", error: error)
+
+    conn
+    |> put_status(:bad_request)
+    |> json(%{error: "OAuth authorization failed", details: error})
+  end
+
+  def linear_callback(conn, _params) do
+    conn
+    |> put_status(:bad_request)
+    |> json(%{error: "Missing code or state parameter"})
+  end
+
+  defp handle_linear_tokens(conn, code, user_id) do
+    case Linear.exchange_code(code) do
+      {:ok, tokens} ->
+        # Get team info
+        teams =
+          case LinearConnector.get_teams(tokens.access_token) do
+            {:ok, teams} -> teams
+            _ -> []
+          end
+
+        token_data = %{
+          access_token: tokens.access_token,
+          expires_in: tokens.expires_in,
+          scopes: String.split(tokens.scope || "", ","),
+          metadata: %{
+            teams: Enum.map(teams, fn t -> %{id: t["id"], key: t["key"], name: t["name"]} end)
+          }
+        }
+
+        case OAuth.store_tokens(user_id, "linear", token_data) do
+          {:ok, _token} ->
+            team_keys = Enum.map(teams, & &1["key"])
+
+            conn
+            |> put_status(:ok)
+            |> json(%{
+              status: "connected",
+              user_id: user_id,
+              teams: team_keys,
+              topics: Enum.map(team_keys, fn k -> "linear:#{k}" end)
+            })
+
+          {:error, changeset} ->
+            Logger.warning("Failed to store Linear tokens", error: inspect(changeset))
+
+            conn
+            |> put_status(:internal_server_error)
+            |> json(%{error: "Failed to store tokens"})
+        end
+
+      {:error, reason} ->
+        Logger.warning("Linear token exchange failed", reason: inspect(reason))
+
+        conn
+        |> put_status(:bad_request)
+        |> json(%{error: "Failed to exchange authorization code"})
+    end
+  end
+
+  defp encode_linear_state(user_id) do
+    Base.url_encode64(Jason.encode!(%{user_id: user_id, provider: "linear"}))
+  end
+
+  defp decode_linear_state(state) do
     with {:ok, json} <- Base.url_decode64(state),
          {:ok, data} <- Jason.decode(json) do
       {:ok, data["user_id"]}

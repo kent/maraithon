@@ -1,7 +1,7 @@
 defmodule MaraithonWeb.WebhookController do
   use MaraithonWeb, :controller
 
-  alias Maraithon.Connectors.{Connector, GitHub, GoogleCalendar, Gmail, Slack, WhatsApp}
+  alias Maraithon.Connectors.{Connector, GitHub, GoogleCalendar, Gmail, Slack, WhatsApp, Linear, Telegram}
 
   require Logger
 
@@ -153,6 +153,67 @@ defmodule MaraithonWeb.WebhookController do
         conn
         |> put_status(:unauthorized)
         |> json(%{error: "Invalid signature"})
+    end
+  end
+
+  @doc """
+  Handle Linear webhooks.
+
+  POST /webhooks/linear
+  """
+  def linear(conn, params) do
+    raw_body = conn.assigns[:raw_body] || Jason.encode!(params)
+
+    case Linear.verify_signature(conn, raw_body) do
+      :ok ->
+        handle_connector(conn, params, Linear)
+
+      {:error, reason} ->
+        Logger.warning("Linear signature verification failed", reason: reason)
+
+        conn
+        |> put_status(:unauthorized)
+        |> json(%{error: "Invalid signature"})
+    end
+  end
+
+  @doc """
+  Handle Telegram webhooks.
+
+  POST /webhooks/telegram/:secret_path
+  """
+  def telegram(conn, params) do
+    raw_body = conn.assigns[:raw_body] || Jason.encode!(params)
+
+    case Telegram.verify_signature(conn, raw_body) do
+      :ok ->
+        case Telegram.handle_webhook(conn, params) do
+          {:ok, topic, event} ->
+            Connector.publish(topic, event)
+
+            conn
+            |> put_status(:ok)
+            |> json(%{status: "published", topic: topic, event_type: event.type})
+
+          {:ignore, reason} ->
+            conn
+            |> put_status(:ok)
+            |> json(%{status: "ignored", reason: reason})
+
+          {:error, reason} ->
+            Logger.warning("Telegram webhook failed", reason: inspect(reason))
+
+            conn
+            |> put_status(:bad_request)
+            |> json(%{error: inspect(reason)})
+        end
+
+      {:error, reason} ->
+        Logger.warning("Telegram verification failed", reason: reason)
+
+        conn
+        |> put_status(:unauthorized)
+        |> json(%{error: "Invalid request"})
     end
   end
 

@@ -84,6 +84,18 @@ config :maraithon, :whatsapp,
   access_token: System.get_env("WHATSAPP_ACCESS_TOKEN", ""),
   phone_number_id: System.get_env("WHATSAPP_PHONE_NUMBER_ID", "")
 
+# Linear Connector
+config :maraithon, :linear,
+  client_id: System.get_env("LINEAR_CLIENT_ID", ""),
+  client_secret: System.get_env("LINEAR_CLIENT_SECRET", ""),
+  redirect_uri: System.get_env("LINEAR_REDIRECT_URI", ""),
+  webhook_secret: System.get_env("LINEAR_WEBHOOK_SECRET", "")
+
+# Telegram Connector
+config :maraithon, :telegram,
+  bot_token: System.get_env("TELEGRAM_BOT_TOKEN", ""),
+  webhook_secret_path: System.get_env("TELEGRAM_WEBHOOK_SECRET", "")
+
 # =============================================================================
 # Production Configuration
 # =============================================================================
