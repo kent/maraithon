@@ -125,14 +125,62 @@ curl -X POST http://localhost:4000/api/v1/agents \
 
 **Supported events**: `issue_opened`, `issue_closed`, `pr_opened`, `pr_merged`, `push`, `comment_created`, and more.
 
-### Future Connectors
+### Google Calendar (Available)
+
+```bash
+# Configure Google OAuth
+export GOOGLE_CLIENT_ID="your_client_id"
+export GOOGLE_CLIENT_SECRET="your_client_secret"
+export GOOGLE_REDIRECT_URI="https://your-domain.com/auth/google/callback"
+export GOOGLE_CALENDAR_WEBHOOK_URL="https://your-domain.com/webhooks/google/calendar"
+
+# User authorizes via OAuth
+# Visit: /auth/google?scopes=calendar&user_id=user_123
+
+# Create agent subscribed to user's calendar
+curl -X POST http://localhost:4000/api/v1/agents \
+  -d '{
+    "behavior": "prompt_agent",
+    "config": {
+      "prompt": "Help me manage my schedule. Alert me about upcoming meetings.",
+      "subscribe": ["calendar:user_123"]
+    }
+  }'
+```
+
+**Supported events**: `calendar_sync`, `calendar_event_created`, `calendar_event_updated`, `calendar_event_deleted`
+
+### Gmail (Available)
+
+```bash
+# Additional config for Gmail (requires Cloud Pub/Sub)
+export GOOGLE_PUBSUB_TOPIC="projects/your-project/topics/gmail-push"
+
+# User authorizes via OAuth
+# Visit: /auth/google?scopes=gmail&user_id=user_123
+# Or both: /auth/google?scopes=calendar,gmail&user_id=user_123
+
+# Create agent subscribed to user's email
+curl -X POST http://localhost:4000/api/v1/agents \
+  -d '{
+    "behavior": "prompt_agent",
+    "config": {
+      "prompt": "Summarize important emails and flag urgent ones.",
+      "subscribe": ["email:user_123"]
+    }
+  }'
+```
+
+**Supported events**: `email_sync`, `email_received`, `email_changed`
+
+### Connector Status
 
 | Connector | Status | Topic Format |
 |-----------|--------|--------------|
 | GitHub | Available | `github:{owner}/{repo}` |
+| Google Calendar | Available | `calendar:{user_id}` |
+| Gmail | Available | `email:{user_id}` |
 | Slack | Planned | `slack:{workspace}:{channel}` |
-| Google Calendar | Planned | `calendar:{user_id}` |
-| Gmail | Planned | `email:{user_id}` |
 | Linear | Planned | `linear:{team}` |
 | Discord | Planned | `discord:{server}:{channel}` |
 
@@ -180,6 +228,15 @@ end
 | Endpoint | Description |
 |----------|-------------|
 | `POST /webhooks/github` | GitHub webhook receiver |
+| `POST /webhooks/google/calendar` | Google Calendar push notifications |
+| `POST /webhooks/google/gmail` | Gmail push notifications (via Pub/Sub) |
+
+### OAuth
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /auth/google` | Initiate Google OAuth flow |
+| `GET /auth/google/callback` | OAuth callback handler |
 
 ## Configuration
 
@@ -191,6 +248,13 @@ export ANTHROPIC_API_KEY="sk-..."
 export ANTHROPIC_MODEL="claude-sonnet-4-20250514"
 export GITHUB_WEBHOOK_SECRET="your_secret"
 export DATABASE_URL="postgres://..."
+
+# Google OAuth (required for Calendar/Gmail)
+export GOOGLE_CLIENT_ID="your_client_id"
+export GOOGLE_CLIENT_SECRET="your_client_secret"
+export GOOGLE_REDIRECT_URI="https://your-domain.com/auth/google/callback"
+export GOOGLE_CALENDAR_WEBHOOK_URL="https://your-domain.com/webhooks/google/calendar"
+export GOOGLE_PUBSUB_TOPIC="projects/your-project/topics/gmail-push"
 ```
 
 ## Use Cases
