@@ -5,7 +5,6 @@ defmodule Maraithon.Runtime do
   """
 
   alias Maraithon.Agents
-  alias Maraithon.Agents.Agent
   alias Maraithon.Runtime.AgentSupervisor
   alias Maraithon.Runtime.AgentRegistry
   alias Maraithon.Events

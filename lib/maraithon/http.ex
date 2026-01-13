@@ -108,7 +108,7 @@ defmodule Maraithon.HTTP do
     end
   end
 
-  defp handle_response(status, body, url) when status in 200..299 do
+  defp handle_response(status, body, _url) when status in 200..299 do
     body_string = List.to_string(body)
 
     case Jason.decode(body_string) do

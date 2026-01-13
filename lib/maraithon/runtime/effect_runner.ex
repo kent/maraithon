@@ -53,7 +53,7 @@ defmodule Maraithon.Runtime.EffectRunner do
   end
 
   @impl true
-  def handle_info({:effect_done, effect_id, result}, state) do
+  def handle_info({:effect_done, effect_id, _result}, state) do
     running = Map.delete(state.running, effect_id)
     {:noreply, %{state | running: running}}
   end
@@ -136,7 +136,7 @@ defmodule Maraithon.Runtime.EffectRunner do
 
   defp execute_llm_call(effect) do
     params = effect.params
-    timeout = params["timeout_ms"] || 120_000
+    _timeout = params["timeout_ms"] || 120_000
 
     Logger.info("Starting LLM call for effect #{effect.id}",
       agent_id: effect.agent_id,
