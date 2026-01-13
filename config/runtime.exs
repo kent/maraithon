@@ -55,6 +55,14 @@ config :maraithon, Maraithon.Runtime,
   max_effect_attempts: String.to_integer(System.get_env("MAX_EFFECT_ATTEMPTS", "3"))
 
 # =============================================================================
+# Connector Configuration
+# =============================================================================
+
+# GitHub Connector
+config :maraithon, :github,
+  webhook_secret: System.get_env("GITHUB_WEBHOOK_SECRET", "")
+
+# =============================================================================
 # Production Configuration
 # =============================================================================
 

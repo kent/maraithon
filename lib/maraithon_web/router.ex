@@ -49,4 +49,13 @@ defmodule MaraithonWeb.Router do
     post "/events", EventController, :publish
     get "/events/topics", EventController, :topics
   end
+
+  # Webhooks from external services (connectors)
+  scope "/webhooks", MaraithonWeb do
+    pipe_through :api
+
+    post "/github", WebhookController, :github
+    # Future: post "/slack", WebhookController, :slack
+    # Future: post "/google/calendar", WebhookController, :google_calendar
+  end
 end
