@@ -11,14 +11,10 @@ defmodule Maraithon.OAuth.Linear do
         client_secret: "your_client_secret",
         redirect_uri: "https://your-domain.com/auth/linear/callback",
         webhook_secret: "your_webhook_secret"
-
-  ## Scopes
-
-  Linear uses actor-based authorization. The OAuth flow grants access based on
-  the authorizing user's permissions in their workspace.
   """
 
-  require Logger
+  alias Maraithon.HTTP
+  alias Maraithon.Crypto
 
   @linear_auth_url "https://linear.app/oauth/authorize"
   @linear_token_url "https://api.linear.app/oauth/token"
@@ -34,11 +30,6 @@ defmodule Maraithon.OAuth.Linear do
 
   @doc """
   Generates the Linear OAuth authorization URL.
-
-  ## Parameters
-
-  - `scopes` - List of OAuth scopes
-  - `state` - State parameter for CSRF protection
   """
   def authorize_url(scopes \\ @default_scopes, state) do
     config = get_config()
@@ -58,56 +49,24 @@ defmodule Maraithon.OAuth.Linear do
 
   @doc """
   Exchanges an authorization code for tokens.
-
-  ## Returns
-
-  `{:ok, tokens}` or `{:error, reason}`
-
-  Where tokens includes:
-  - `access_token` - API access token
-  - `expires_in` - Token lifetime in seconds
   """
   def exchange_code(code) do
     config = get_config()
 
-    body =
-      Jason.encode!(%{
-        code: code,
-        client_id: config.client_id,
-        client_secret: config.client_secret,
-        redirect_uri: config.redirect_uri,
-        grant_type: "authorization_code"
-      })
+    body = %{
+      code: code,
+      client_id: config.client_id,
+      client_secret: config.client_secret,
+      redirect_uri: config.redirect_uri,
+      grant_type: "authorization_code"
+    }
 
-    headers = [{"Content-Type", "application/json"}]
-
-    case :httpc.request(
-           :post,
-           {~c"#{@linear_token_url}", headers, ~c"application/json", String.to_charlist(body)},
-           [],
-           []
-         ) do
-      {:ok, {{_, 200, _}, _, response_body}} ->
-        case Jason.decode(List.to_string(response_body)) do
-          {:ok, tokens} ->
-            {:ok, parse_token_response(tokens)}
-
-          {:error, _} ->
-            Logger.warning("Linear token exchange returned invalid JSON")
-            {:error, :invalid_json_response}
-        end
-
-      {:ok, {{_, status, _}, _, response_body}} ->
-        Logger.warning("Linear token exchange failed",
-          status: status,
-          body: List.to_string(response_body)
-        )
-
-        {:error, {:token_exchange_failed, status}}
+    case HTTP.post_json(@linear_token_url, body) do
+      {:ok, response} when is_map(response) ->
+        {:ok, parse_token_response(response)}
 
       {:error, reason} ->
-        Logger.warning("Linear token exchange HTTP error", reason: inspect(reason))
-        {:error, {:http_error, reason}}
+        {:error, {:token_exchange_failed, reason}}
     end
   end
 
@@ -115,26 +74,11 @@ defmodule Maraithon.OAuth.Linear do
   Revokes a Linear token.
   """
   def revoke_token(access_token) do
-    headers = [
-      {"Authorization", "Bearer #{access_token}"},
-      {"Content-Type", "application/json"}
-    ]
+    headers = [{"Authorization", "Bearer #{access_token}"}]
 
-    case :httpc.request(
-           :post,
-           {~c"#{@linear_revoke_url}",
-            Enum.map(headers, fn {k, v} -> {~c"#{k}", ~c"#{v}"} end), ~c"application/json", ~c"{}"},
-           [],
-           []
-         ) do
-      {:ok, {{_, status, _}, _, _}} when status in 200..299 ->
-        :ok
-
-      {:ok, {{_, status, _}, _, _}} ->
-        {:error, {:revocation_failed, status}}
-
-      {:error, reason} ->
-        {:error, {:http_error, reason}}
+    case HTTP.post_json(@linear_revoke_url, %{}, headers) do
+      {:ok, _} -> :ok
+      {:error, reason} -> {:error, {:revocation_failed, reason}}
     end
   end
 
@@ -147,22 +91,13 @@ defmodule Maraithon.OAuth.Linear do
     webhook_secret = get_webhook_secret()
 
     if webhook_secret == "" do
-      # No secret configured - only allow if explicitly enabled
       if allow_unsigned?() do
         :ok
       else
         {:error, :webhook_secret_not_configured}
       end
     else
-      expected =
-        :crypto.mac(:hmac, :sha256, webhook_secret, raw_body)
-        |> Base.encode16(case: :lower)
-
-      if Plug.Crypto.secure_compare(expected, String.downcase(signature || "")) do
-        :ok
-      else
-        {:error, :invalid_signature}
-      end
+      Crypto.verify_hmac_sha256(webhook_secret, raw_body, signature)
     end
   end
 
@@ -170,47 +105,25 @@ defmodule Maraithon.OAuth.Linear do
   Makes a GraphQL request to the Linear API.
   """
   def graphql(access_token, query, variables \\ %{}) do
-    headers = [
-      {"Authorization", "Bearer #{access_token}"},
-      {"Content-Type", "application/json"}
-    ]
+    headers = [{"Authorization", "Bearer #{access_token}"}]
+    body = %{query: query, variables: variables}
 
-    body = Jason.encode!(%{query: query, variables: variables})
+    case HTTP.post_json(@linear_api_url, body, headers) do
+      {:ok, %{"errors" => errors}} ->
+        {:error, {:graphql_errors, errors}}
 
-    case :httpc.request(
-           :post,
-           {~c"#{@linear_api_url}", Enum.map(headers, fn {k, v} -> {~c"#{k}", ~c"#{v}"} end),
-            ~c"application/json", String.to_charlist(body)},
-           [],
-           []
-         ) do
-      {:ok, {{_, 200, _}, _, response_body}} ->
-        case Jason.decode(List.to_string(response_body)) do
-          {:ok, response} ->
-            if response["errors"] do
-              {:error, {:graphql_errors, response["errors"]}}
-            else
-              {:ok, response["data"]}
-            end
+      {:ok, %{"data" => data}} ->
+        {:ok, data}
 
-          {:error, _} ->
-            Logger.warning("Linear API returned invalid JSON")
-            {:error, :invalid_json_response}
-        end
+      {:ok, response} when is_map(response) ->
+        # Handle responses without explicit data key
+        {:ok, response}
 
-      {:ok, {{_, 401, _}, _, _}} ->
+      {:error, :unauthorized} ->
         {:error, :unauthorized}
 
-      {:ok, {{_, status, _}, _, response_body}} ->
-        Logger.warning("Linear API request failed",
-          status: status,
-          body: List.to_string(response_body)
-        )
-
-        {:error, {:api_error, status}}
-
       {:error, reason} ->
-        {:error, {:http_error, reason}}
+        {:error, {:api_error, reason}}
     end
   end
 

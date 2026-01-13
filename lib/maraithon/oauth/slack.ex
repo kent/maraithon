@@ -11,23 +11,15 @@ defmodule Maraithon.OAuth.Slack do
         client_secret: "your_client_secret",
         redirect_uri: "https://your-domain.com/auth/slack/callback",
         signing_secret: "your_signing_secret"
-
-  ## Scopes
-
-  Common scopes:
-  - `channels:history` - View messages in public channels
-  - `channels:read` - View basic channel info
-  - `chat:write` - Send messages
-  - `users:read` - View users
-  - `reactions:read` - View reactions
-  - `im:history` - View DM messages
   """
 
-  require Logger
+  alias Maraithon.HTTP
+  alias Maraithon.Crypto
 
   @slack_auth_url "https://slack.com/oauth/v2/authorize"
   @slack_token_url "https://slack.com/api/oauth.v2.access"
   @slack_revoke_url "https://slack.com/api/auth.revoke"
+  @slack_api_base "https://slack.com/api"
 
   @default_scopes [
     "channels:history",
@@ -44,11 +36,6 @@ defmodule Maraithon.OAuth.Slack do
 
   @doc """
   Generates the Slack OAuth authorization URL.
-
-  ## Parameters
-
-  - `scopes` - List of OAuth scopes (defaults to standard bot scopes)
-  - `state` - State parameter for CSRF protection
   """
   def authorize_url(scopes \\ @default_scopes, state) do
     config = get_config()
@@ -66,62 +53,26 @@ defmodule Maraithon.OAuth.Slack do
 
   @doc """
   Exchanges an authorization code for tokens.
-
-  ## Returns
-
-  `{:ok, tokens}` or `{:error, reason}`
-
-  Where tokens includes:
-  - `access_token` - Bot token
-  - `team_id` - Workspace ID
-  - `team_name` - Workspace name
-  - `bot_user_id` - Bot's user ID
   """
   def exchange_code(code) do
     config = get_config()
 
-    body =
-      URI.encode_query(%{
-        code: code,
-        client_id: config.client_id,
-        client_secret: config.client_secret,
-        redirect_uri: config.redirect_uri
-      })
+    params = %{
+      code: code,
+      client_id: config.client_id,
+      client_secret: config.client_secret,
+      redirect_uri: config.redirect_uri
+    }
 
-    headers = [{"Content-Type", "application/x-www-form-urlencoded"}]
+    case HTTP.post_form(@slack_token_url, params) do
+      {:ok, %{"ok" => true} = response} ->
+        {:ok, parse_token_response(response)}
 
-    case :httpc.request(
-           :post,
-           {~c"#{@slack_token_url}", headers, ~c"application/x-www-form-urlencoded",
-            String.to_charlist(body)},
-           [],
-           []
-         ) do
-      {:ok, {{_, 200, _}, _, response_body}} ->
-        case Jason.decode(List.to_string(response_body)) do
-          {:ok, response} ->
-            if response["ok"] do
-              {:ok, parse_token_response(response)}
-            else
-              {:error, {:slack_error, response["error"]}}
-            end
-
-          {:error, _} ->
-            Logger.warning("Slack token exchange returned invalid JSON")
-            {:error, :invalid_json_response}
-        end
-
-      {:ok, {{_, status, _}, _, response_body}} ->
-        Logger.warning("Slack token exchange failed",
-          status: status,
-          body: List.to_string(response_body)
-        )
-
-        {:error, {:token_exchange_failed, status}}
+      {:ok, %{"ok" => false, "error" => error}} ->
+        {:error, {:slack_error, error}}
 
       {:error, reason} ->
-        Logger.warning("Slack token exchange HTTP error", reason: inspect(reason))
-        {:error, {:http_error, reason}}
+        {:error, {:token_exchange_failed, reason}}
     end
   end
 
@@ -131,32 +82,15 @@ defmodule Maraithon.OAuth.Slack do
   def revoke_token(access_token) do
     headers = [{"Authorization", "Bearer #{access_token}"}]
 
-    case :httpc.request(
-           :post,
-           {~c"#{@slack_revoke_url}", Enum.map(headers, fn {k, v} -> {~c"#{k}", ~c"#{v}"} end),
-            ~c"application/x-www-form-urlencoded", ~c""},
-           [],
-           []
-         ) do
-      {:ok, {{_, 200, _}, _, response_body}} ->
-        case Jason.decode(List.to_string(response_body)) do
-          {:ok, response} ->
-            if response["ok"] do
-              :ok
-            else
-              {:error, {:slack_error, response["error"]}}
-            end
+    case HTTP.post_form(@slack_revoke_url, %{}, headers) do
+      {:ok, %{"ok" => true}} ->
+        :ok
 
-          {:error, _} ->
-            Logger.warning("Slack token revocation returned invalid JSON")
-            {:error, :invalid_json_response}
-        end
-
-      {:ok, {{_, status, _}, _, _}} ->
-        {:error, {:revocation_failed, status}}
+      {:ok, %{"ok" => false, "error" => error}} ->
+        {:error, {:slack_error, error}}
 
       {:error, reason} ->
-        {:error, {:http_error, reason}}
+        {:error, {:revocation_failed, reason}}
     end
   end
 
@@ -169,36 +103,13 @@ defmodule Maraithon.OAuth.Slack do
     signing_secret = get_signing_secret()
 
     if signing_secret == "" do
-      # No secret configured - only allow if explicitly enabled
       if allow_unsigned?() do
         :ok
       else
         {:error, :signing_secret_not_configured}
       end
     else
-      # Check timestamp is recent (within 5 minutes)
-      now = System.system_time(:second)
-
-      case Integer.parse(timestamp) do
-        {ts, _} when abs(now - ts) < 300 ->
-          # Compute expected signature
-          sig_basestring = "v0:#{timestamp}:#{raw_body}"
-
-          expected =
-            :crypto.mac(:hmac, :sha256, signing_secret, sig_basestring)
-            |> Base.encode16(case: :lower)
-
-          expected_sig = "v0=#{expected}"
-
-          if Plug.Crypto.secure_compare(expected_sig, signature) do
-            :ok
-          else
-            {:error, :invalid_signature}
-          end
-
-        _ ->
-          {:error, :timestamp_expired}
-      end
+      Crypto.verify_slack_signature(signing_secret, timestamp, raw_body, signature)
     end
   end
 
@@ -206,48 +117,24 @@ defmodule Maraithon.OAuth.Slack do
   Makes an authenticated request to the Slack API.
   """
   def api_request(method, endpoint, access_token, body \\ nil) do
-    url = "https://slack.com/api/#{endpoint}"
+    url = "#{@slack_api_base}/#{endpoint}"
     headers = [{"Authorization", "Bearer #{access_token}"}]
 
-    request =
+    result =
       case method do
-        :get ->
-          {~c"#{url}", Enum.map(headers, fn {k, v} -> {~c"#{k}", ~c"#{v}"} end)}
-
-        :post ->
-          content_type = ~c"application/json; charset=utf-8"
-          body_data = if body, do: Jason.encode!(body), else: "{}"
-
-          {~c"#{url}", Enum.map(headers, fn {k, v} -> {~c"#{k}", ~c"#{v}"} end), content_type,
-           String.to_charlist(body_data)}
+        :get -> HTTP.get(url, headers)
+        :post -> HTTP.post_json(url, body || %{}, headers)
       end
 
-    case :httpc.request(method, request, [], []) do
-      {:ok, {{_, 200, _}, _, response_body}} ->
-        case Jason.decode(List.to_string(response_body)) do
-          {:ok, response} ->
-            if response["ok"] do
-              {:ok, response}
-            else
-              {:error, {:slack_error, response["error"]}}
-            end
+    case result do
+      {:ok, %{"ok" => true} = response} ->
+        {:ok, response}
 
-          {:error, _} ->
-            Logger.warning("Slack API returned invalid JSON", endpoint: endpoint)
-            {:error, :invalid_json_response}
-        end
-
-      {:ok, {{_, status, _}, _, response_body}} ->
-        Logger.warning("Slack API request failed",
-          status: status,
-          endpoint: endpoint,
-          body: List.to_string(response_body)
-        )
-
-        {:error, {:api_error, status}}
+      {:ok, %{"ok" => false, "error" => error}} ->
+        {:error, {:slack_error, error}}
 
       {:error, reason} ->
-        {:error, {:http_error, reason}}
+        {:error, reason}
     end
   end
 

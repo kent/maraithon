@@ -40,6 +40,8 @@ defmodule Maraithon.Connectors.WhatsApp do
   @behaviour Maraithon.Connectors.Connector
 
   alias Maraithon.Connectors.Connector
+  alias Maraithon.Crypto
+  alias Maraithon.HTTP
 
   require Logger
 
@@ -55,7 +57,6 @@ defmodule Maraithon.Connectors.WhatsApp do
     app_secret = get_app_secret()
 
     if app_secret == "" do
-      # No secret configured - only allow if explicitly enabled
       if allow_unsigned?() do
         :ok
       else
@@ -63,16 +64,8 @@ defmodule Maraithon.Connectors.WhatsApp do
       end
     else
       case Plug.Conn.get_req_header(conn, "x-hub-signature-256") do
-        ["sha256=" <> signature] ->
-          expected =
-            :crypto.mac(:hmac, :sha256, app_secret, raw_body)
-            |> Base.encode16(case: :lower)
-
-          if Plug.Crypto.secure_compare(expected, String.downcase(signature)) do
-            :ok
-          else
-            {:error, :invalid_signature}
-          end
+        [signature] ->
+          Crypto.verify_hmac_sha256(app_secret, raw_body, signature)
 
         [] ->
           {:error, :missing_signature}
@@ -374,44 +367,14 @@ defmodule Maraithon.Connectors.WhatsApp do
 
   defp api_request(method, endpoint, access_token, body \\ nil) do
     url = "#{@whatsapp_api_base}/#{endpoint}"
+    headers = [{"Authorization", "Bearer #{access_token}"}]
 
-    headers = [
-      {"Authorization", "Bearer #{access_token}"},
-      {"Content-Type", "application/json"}
-    ]
+    case method do
+      :get ->
+        HTTP.get(url, headers)
 
-    request =
-      case method do
-        :get ->
-          {~c"#{url}", Enum.map(headers, fn {k, v} -> {~c"#{k}", ~c"#{v}"} end)}
-
-        :post ->
-          {~c"#{url}", Enum.map(headers, fn {k, v} -> {~c"#{k}", ~c"#{v}"} end),
-           ~c"application/json", String.to_charlist(Jason.encode!(body))}
-      end
-
-    case :httpc.request(method, request, [], []) do
-      {:ok, {{_, status, _}, _, response_body}} when status in 200..299 ->
-        case Jason.decode(List.to_string(response_body)) do
-          {:ok, decoded} ->
-            {:ok, decoded}
-
-          {:error, _} ->
-            Logger.warning("WhatsApp API returned invalid JSON", endpoint: endpoint)
-            {:error, :invalid_json_response}
-        end
-
-      {:ok, {{_, status, _}, _, response_body}} ->
-        Logger.warning("WhatsApp API error",
-          status: status,
-          endpoint: endpoint,
-          body: List.to_string(response_body)
-        )
-
-        {:error, {:api_error, status, List.to_string(response_body)}}
-
-      {:error, reason} ->
-        {:error, {:http_error, reason}}
+      :post ->
+        HTTP.post_json(url, body || %{}, headers)
     end
   end
 

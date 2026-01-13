@@ -48,6 +48,7 @@ defmodule Maraithon.Connectors.Telegram do
   @behaviour Maraithon.Connectors.Connector
 
   alias Maraithon.Connectors.Connector
+  alias Maraithon.HTTP
 
   require Logger
 
@@ -406,40 +407,18 @@ defmodule Maraithon.Connectors.Telegram do
     bot_token = get_bot_token()
     url = "#{@telegram_api_base}#{bot_token}/#{method}"
 
-    headers = [{"Content-Type", "application/json"}]
-    body = Jason.encode!(params)
+    case HTTP.post_json(url, params) do
+      {:ok, %{"ok" => true, "result" => result}} ->
+        {:ok, result}
 
-    case :httpc.request(
-           :post,
-           {~c"#{url}", headers, ~c"application/json", String.to_charlist(body)},
-           [],
-           []
-         ) do
-      {:ok, {{_, 200, _}, _, response_body}} ->
-        case Jason.decode(List.to_string(response_body)) do
-          {:ok, response} ->
-            if response["ok"] do
-              {:ok, response["result"]}
-            else
-              {:error, {:telegram_error, response["error_code"], response["description"]}}
-            end
+      {:ok, %{"ok" => false, "error_code" => code, "description" => desc}} ->
+        {:error, {:telegram_error, code, desc}}
 
-          {:error, _} ->
-            Logger.warning("Telegram API returned invalid JSON", method: method)
-            {:error, :invalid_json_response}
-        end
-
-      {:ok, {{_, status, _}, _, response_body}} ->
-        Logger.warning("Telegram API error",
-          status: status,
-          method: method,
-          body: List.to_string(response_body)
-        )
-
-        {:error, {:api_error, status}}
+      {:ok, _} ->
+        {:error, :unexpected_response}
 
       {:error, reason} ->
-        {:error, {:http_error, reason}}
+        {:error, reason}
     end
   end
 

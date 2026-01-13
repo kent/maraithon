@@ -41,6 +41,7 @@ defmodule Maraithon.Connectors.GitHub do
   @behaviour Maraithon.Connectors.Connector
 
   alias Maraithon.Connectors.Connector
+  alias Maraithon.Crypto
 
   require Logger
 
@@ -49,26 +50,18 @@ defmodule Maraithon.Connectors.GitHub do
     secret = get_webhook_secret()
 
     case Plug.Conn.get_req_header(conn, "x-hub-signature-256") do
-      ["sha256=" <> signature] ->
+      [signature] ->
         if secret == "" do
-          # No secret configured but signature provided - can't verify
           if allow_unsigned?() do
             :ok
           else
             {:error, :webhook_secret_not_configured}
           end
         else
-          expected = :crypto.mac(:hmac, :sha256, secret, raw_body) |> Base.encode16(case: :lower)
-
-          if Plug.Crypto.secure_compare(expected, String.downcase(signature)) do
-            :ok
-          else
-            {:error, :invalid_signature}
-          end
+          Crypto.verify_hmac_sha256(secret, raw_body, signature)
         end
 
       [] ->
-        # No signature header - only allow if explicitly configured
         if allow_unsigned?() do
           :ok
         else

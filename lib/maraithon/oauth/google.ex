@@ -17,7 +17,7 @@ defmodule Maraithon.OAuth.Google do
   - Gmail: `https://www.googleapis.com/auth/gmail.readonly`
   """
 
-  require Logger
+  alias Maraithon.HTTP
 
   @google_auth_url "https://accounts.google.com/o/oauth2/v2/auth"
   @google_token_url "https://oauth2.googleapis.com/token"
@@ -28,14 +28,6 @@ defmodule Maraithon.OAuth.Google do
 
   @doc """
   Returns the Google OAuth scopes for the given service names.
-
-  ## Examples
-
-      iex> Maraithon.OAuth.Google.scopes_for(["calendar"])
-      ["https://www.googleapis.com/auth/calendar.readonly"]
-
-      iex> Maraithon.OAuth.Google.scopes_for(["calendar", "gmail"])
-      ["https://www.googleapis.com/auth/calendar.readonly", "https://www.googleapis.com/auth/gmail.readonly"]
   """
   def scopes_for(services) when is_list(services) do
     services
@@ -50,15 +42,6 @@ defmodule Maraithon.OAuth.Google do
 
   @doc """
   Generates the Google OAuth authorization URL.
-
-  ## Parameters
-
-  - `scopes` - List of scope URLs
-  - `state` - State parameter for CSRF protection (should include user_id)
-
-  ## Returns
-
-  The authorization URL to redirect the user to.
   """
   def authorize_url(scopes, state) when is_list(scopes) do
     config = get_config()
@@ -79,213 +62,82 @@ defmodule Maraithon.OAuth.Google do
 
   @doc """
   Exchanges an authorization code for tokens.
-
-  ## Parameters
-
-  - `code` - The authorization code from Google
-
-  ## Returns
-
-  `{:ok, tokens}` or `{:error, reason}`
-
-  Where tokens is a map with:
-  - `access_token` - The access token
-  - `refresh_token` - The refresh token (only on first authorization)
-  - `expires_in` - Token lifetime in seconds
-  - `scope` - Granted scopes
   """
   def exchange_code(code) do
     config = get_config()
 
-    body =
-      URI.encode_query(%{
-        code: code,
-        client_id: config.client_id,
-        client_secret: config.client_secret,
-        redirect_uri: config.redirect_uri,
-        grant_type: "authorization_code"
-      })
+    params = %{
+      code: code,
+      client_id: config.client_id,
+      client_secret: config.client_secret,
+      redirect_uri: config.redirect_uri,
+      grant_type: "authorization_code"
+    }
 
-    headers = [{"Content-Type", "application/x-www-form-urlencoded"}]
-
-    case :httpc.request(
-           :post,
-           {~c"#{@google_token_url}", headers, ~c"application/x-www-form-urlencoded",
-            String.to_charlist(body)},
-           [],
-           []
-         ) do
-      {:ok, {{_, 200, _}, _, response_body}} ->
-        case Jason.decode(List.to_string(response_body)) do
-          {:ok, tokens} ->
-            {:ok, parse_token_response(tokens)}
-
-          {:error, _} ->
-            Logger.warning("Google token exchange returned invalid JSON")
-            {:error, :invalid_json_response}
-        end
-
-      {:ok, {{_, status, _}, _, response_body}} ->
-        Logger.warning("Google token exchange failed",
-          status: status,
-          body: List.to_string(response_body)
-        )
-
-        {:error, {:token_exchange_failed, status}}
+    case HTTP.post_form(@google_token_url, params) do
+      {:ok, response} when is_map(response) ->
+        {:ok, parse_token_response(response)}
 
       {:error, reason} ->
-        Logger.warning("Google token exchange HTTP error", reason: inspect(reason))
-        {:error, {:http_error, reason}}
+        {:error, {:token_exchange_failed, reason}}
     end
   end
 
   @doc """
   Refreshes an access token using a refresh token.
-
-  ## Parameters
-
-  - `refresh_token` - The refresh token
-
-  ## Returns
-
-  `{:ok, tokens}` or `{:error, reason}`
   """
   def refresh_token(refresh_token) do
     config = get_config()
 
-    body =
-      URI.encode_query(%{
-        refresh_token: refresh_token,
-        client_id: config.client_id,
-        client_secret: config.client_secret,
-        grant_type: "refresh_token"
-      })
+    params = %{
+      refresh_token: refresh_token,
+      client_id: config.client_id,
+      client_secret: config.client_secret,
+      grant_type: "refresh_token"
+    }
 
-    headers = [{"Content-Type", "application/x-www-form-urlencoded"}]
-
-    case :httpc.request(
-           :post,
-           {~c"#{@google_token_url}", headers, ~c"application/x-www-form-urlencoded",
-            String.to_charlist(body)},
-           [],
-           []
-         ) do
-      {:ok, {{_, 200, _}, _, response_body}} ->
-        case Jason.decode(List.to_string(response_body)) do
-          {:ok, tokens} ->
-            {:ok, parse_token_response(tokens)}
-
-          {:error, _} ->
-            Logger.warning("Google token refresh returned invalid JSON")
-            {:error, :invalid_json_response}
-        end
-
-      {:ok, {{_, status, _}, _, response_body}} ->
-        Logger.warning("Google token refresh failed",
-          status: status,
-          body: List.to_string(response_body)
-        )
-
-        {:error, {:token_refresh_failed, status}}
+    case HTTP.post_form(@google_token_url, params) do
+      {:ok, response} when is_map(response) ->
+        {:ok, parse_token_response(response)}
 
       {:error, reason} ->
-        Logger.warning("Google token refresh HTTP error", reason: inspect(reason))
-        {:error, {:http_error, reason}}
+        {:error, {:token_refresh_failed, reason}}
     end
   end
 
   @doc """
   Revokes an access or refresh token.
-
-  ## Parameters
-
-  - `token` - The token to revoke
-
-  ## Returns
-
-  `:ok` or `{:error, reason}`
   """
   def revoke_token(token) do
     url = "#{@google_revoke_url}?token=#{URI.encode(token)}"
 
-    case :httpc.request(:post, {~c"#{url}", [], ~c"", ~c""}, [], []) do
-      {:ok, {{_, 200, _}, _, _}} ->
-        :ok
-
-      {:ok, {{_, status, _}, _, response_body}} ->
-        Logger.warning("Google token revocation failed",
-          status: status,
-          body: List.to_string(response_body)
-        )
-
-        {:error, {:revocation_failed, status}}
-
-      {:error, reason} ->
-        Logger.warning("Google token revocation HTTP error", reason: inspect(reason))
-        {:error, {:http_error, reason}}
+    case HTTP.post_form(url, %{}) do
+      {:ok, _} -> :ok
+      {:error, reason} -> {:error, {:revocation_failed, reason}}
     end
   end
 
   @doc """
   Makes an authenticated request to a Google API.
-
-  ## Parameters
-
-  - `method` - HTTP method (:get, :post, etc.)
-  - `url` - The API URL
-  - `access_token` - The access token
-  - `body` - Request body (optional, for POST/PUT/PATCH)
-  - `headers` - Additional headers (optional)
-
-  ## Returns
-
-  `{:ok, response_body}` or `{:error, reason}`
   """
   def api_request(method, url, access_token, body \\ nil, extra_headers \\ []) do
     headers = [{"Authorization", "Bearer #{access_token}"} | extra_headers]
 
-    request =
-      case method do
-        :get ->
-          {~c"#{url}", Enum.map(headers, fn {k, v} -> {~c"#{k}", ~c"#{v}"} end)}
+    case method do
+      :get ->
+        HTTP.get(url, headers)
 
-        method when method in [:post, :put, :patch] ->
-          content_type = ~c"application/json"
-          body_data = if body, do: Jason.encode!(body), else: ""
+      :post ->
+        HTTP.post_json(url, body || %{}, headers)
 
-          {~c"#{url}", Enum.map(headers, fn {k, v} -> {~c"#{k}", ~c"#{v}"} end), content_type,
-           String.to_charlist(body_data)}
+      :put ->
+        HTTP.put_json(url, body || %{}, headers)
 
-        :delete ->
-          {~c"#{url}", Enum.map(headers, fn {k, v} -> {~c"#{k}", ~c"#{v}"} end)}
-      end
+      :patch ->
+        HTTP.patch_json(url, body || %{}, headers)
 
-    case :httpc.request(method, request, [], []) do
-      {:ok, {{_, status, _}, _, response_body}} when status in 200..299 ->
-        case Jason.decode(List.to_string(response_body)) do
-          {:ok, decoded} ->
-            {:ok, decoded}
-
-          {:error, _} ->
-            Logger.warning("Google API returned invalid JSON", url: url)
-            {:error, :invalid_json_response}
-        end
-
-      {:ok, {{_, 401, _}, _, _}} ->
-        {:error, :unauthorized}
-
-      {:ok, {{_, status, _}, _, response_body}} ->
-        Logger.warning("Google API request failed",
-          status: status,
-          url: url,
-          body: List.to_string(response_body)
-        )
-
-        {:error, {:api_error, status, List.to_string(response_body)}}
-
-      {:error, reason} ->
-        Logger.warning("Google API HTTP error", reason: inspect(reason))
-        {:error, {:http_error, reason}}
+      :delete ->
+        HTTP.delete(url, headers)
     end
   end
 
