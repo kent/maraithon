@@ -11,9 +11,8 @@ defmodule MaraithonWeb.WebhookController do
   POST /webhooks/github
   """
   def github(conn, params) do
-    # Get raw body for signature verification
-    # Note: This requires a custom plug to cache the raw body
-    raw_body = conn.assigns[:raw_body] || Jason.encode!(params)
+    # Get raw body for signature verification (cached by CacheRawBody plug)
+    raw_body = get_raw_body!(conn, params)
 
     case GitHub.verify_signature(conn, raw_body) do
       :ok ->
@@ -52,7 +51,7 @@ defmodule MaraithonWeb.WebhookController do
   POST /webhooks/slack
   """
   def slack(conn, params) do
-    raw_body = conn.assigns[:raw_body] || Jason.encode!(params)
+    raw_body = get_raw_body!(conn, params)
 
     case Slack.verify_signature(conn, raw_body) do
       :ok ->
@@ -122,7 +121,7 @@ defmodule MaraithonWeb.WebhookController do
   end
 
   defp handle_whatsapp_event(conn, params) do
-    raw_body = conn.assigns[:raw_body] || Jason.encode!(params)
+    raw_body = get_raw_body!(conn, params)
 
     case WhatsApp.verify_signature(conn, raw_body) do
       :ok ->
@@ -162,7 +161,7 @@ defmodule MaraithonWeb.WebhookController do
   POST /webhooks/linear
   """
   def linear(conn, params) do
-    raw_body = conn.assigns[:raw_body] || Jason.encode!(params)
+    raw_body = get_raw_body!(conn, params)
 
     case Linear.verify_signature(conn, raw_body) do
       :ok ->
@@ -183,7 +182,7 @@ defmodule MaraithonWeb.WebhookController do
   POST /webhooks/telegram/:secret_path
   """
   def telegram(conn, params) do
-    raw_body = conn.assigns[:raw_body] || Jason.encode!(params)
+    raw_body = get_raw_body!(conn, params)
 
     case Telegram.verify_signature(conn, raw_body) do
       :ok ->
@@ -245,6 +244,23 @@ defmodule MaraithonWeb.WebhookController do
         conn
         |> put_status(:bad_request)
         |> json(%{error: "Failed to process webhook", reason: inspect(reason)})
+    end
+  end
+
+  # Gets the cached raw body, falling back to re-encoding with a warning.
+  # The CacheRawBody plug should always provide the raw body, but we handle
+  # the edge case gracefully while logging a warning.
+  defp get_raw_body!(conn, params) do
+    case conn.assigns[:raw_body] do
+      nil ->
+        Logger.warning("Raw body not cached - signature verification may fail",
+          path: conn.request_path
+        )
+        # Fallback to re-encoding (may not match original bytes)
+        Jason.encode!(params)
+
+      raw_body ->
+        raw_body
     end
   end
 end

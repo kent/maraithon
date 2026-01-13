@@ -40,6 +40,8 @@ defmodule MaraithonWeb.Endpoint do
   plug Plug.Parsers,
     parsers: [:urlencoded, :multipart, :json],
     pass: ["*/*"],
+    # Cache raw body for webhook signature verification
+    body_reader: {MaraithonWeb.Plugs.CacheRawBody, :read_body, []},
     json_decoder: Phoenix.json_library()
 
   plug Plug.MethodOverride
