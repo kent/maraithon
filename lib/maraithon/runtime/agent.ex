@@ -23,7 +23,9 @@ defmodule Maraithon.Runtime.Agent do
     :handled_jobs,
     :last_heartbeat_at,
     :last_checkpoint_at,
-    :started_at
+    :started_at,
+    :subscriptions,
+    :current_event
   ]
 
   # ==========================================================================
@@ -89,11 +91,20 @@ defmodule Maraithon.Runtime.Agent do
     # Initialize behavior state
     behavior_state = behavior_module.init(agent.config)
 
+    # Subscribe to PubSub topics from config
+    subscriptions = agent.config["subscribe"] || []
+    Enum.each(subscriptions, fn topic ->
+      Phoenix.PubSub.subscribe(Maraithon.PubSub, topic)
+      Logger.info("Subscribed to topic", topic: topic)
+    end)
+
     data = %{data |
       behavior_module: behavior_module,
       behavior_state: behavior_state,
       budget: budget,
-      sequence_num: Events.latest_sequence_num(agent.id)
+      sequence_num: Events.latest_sequence_num(agent.id),
+      subscriptions: subscriptions,
+      current_event: nil
     }
 
     # Emit started event (capture updated data with new sequence_num)
@@ -165,6 +176,28 @@ defmodule Maraithon.Runtime.Agent do
       {:next_state, :working, data, [{:next_event, :internal, :execute_behavior}]}
     else
       Logger.warn("No budget, cannot process message")
+      {:keep_state, data}
+    end
+  end
+
+  # Handle PubSub events
+  def idle(:info, {:pubsub_event, topic, payload}, data) do
+    if topic in (data.subscriptions || []) do
+      Logger.info("Received PubSub event", topic: topic)
+
+      data = emit_event(data, "pubsub_event_received", %{
+        topic: topic,
+        payload: payload
+      })
+
+      if has_budget?(data) do
+        data = %{data | current_event: %{topic: topic, payload: payload}}
+        {:next_state, :working, data, [{:next_event, :internal, :execute_behavior}]}
+      else
+        Logger.warn("No budget, cannot process PubSub event")
+        {:keep_state, data}
+      end
+    else
       {:keep_state, data}
     end
   end
@@ -376,7 +409,8 @@ defmodule Maraithon.Runtime.Agent do
       timestamp: DateTime.utc_now(),
       budget: data.budget,
       recent_events: [], # TODO: Load recent events
-      last_message: Map.get(data.config, "_last_message")
+      last_message: Map.get(data.config, "_last_message"),
+      event: data.current_event
     }
   end
 

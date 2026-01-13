@@ -44,5 +44,9 @@ defmodule MaraithonWeb.Router do
 
     # System health with details
     get "/health", HealthController, :detailed
+
+    # Event ingress - external systems publish events here
+    post "/events", EventController, :publish
+    get "/events/topics", EventController, :topics
   end
 end

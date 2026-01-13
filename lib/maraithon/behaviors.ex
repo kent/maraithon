@@ -6,7 +6,8 @@ defmodule Maraithon.Behaviors do
   @behaviors %{
     "codebase_advisor" => Maraithon.Behaviors.CodebaseAdvisor,
     "watchdog_summarizer" => Maraithon.Behaviors.WatchdogSummarizer,
-    "repo_planner" => Maraithon.Behaviors.RepoPlanner
+    "repo_planner" => Maraithon.Behaviors.RepoPlanner,
+    "prompt_agent" => Maraithon.Behaviors.PromptAgent
   }
 
   @doc """

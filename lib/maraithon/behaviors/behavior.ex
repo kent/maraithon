@@ -9,7 +9,8 @@ defmodule Maraithon.Behaviors.Behavior do
           timestamp: DateTime.t(),
           budget: map(),
           recent_events: [map()],
-          last_message: String.t() | nil
+          last_message: String.t() | nil,
+          event: map() | nil
         }
 
   @type effect ::
