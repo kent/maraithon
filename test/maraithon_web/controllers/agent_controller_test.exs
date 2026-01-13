@@ -1,7 +1,28 @@
 defmodule MaraithonWeb.AgentControllerTest do
-  use MaraithonWeb.ConnCase, async: true
+  # async: false because creating agents spawns processes that need DB access
+  use MaraithonWeb.ConnCase, async: false
 
   alias Maraithon.Agents
+
+  setup do
+    # Stop any existing scheduler
+    case Process.whereis(Maraithon.Runtime.Scheduler) do
+      nil -> :ok
+      pid -> GenServer.stop(pid, :normal)
+    end
+
+    {:ok, scheduler_pid} = Maraithon.Runtime.Scheduler.start_link([])
+    Ecto.Adapters.SQL.Sandbox.allow(Maraithon.Repo, self(), scheduler_pid)
+
+    on_exit(fn ->
+      case Process.whereis(Maraithon.Runtime.Scheduler) do
+        nil -> :ok
+        pid -> if Process.alive?(pid), do: GenServer.stop(pid, :normal)
+      end
+    end)
+
+    :ok
+  end
 
   describe "GET /api/v1/agents" do
     test "returns empty list when no agents", %{conn: conn} do
@@ -119,6 +140,10 @@ defmodule MaraithonWeb.AgentControllerTest do
       assert response["behavior"] == "watchdog_summarizer"
       assert response["status"] == "running"
       assert response["id"] != nil
+
+      # Clean up: wait briefly and stop the agent to avoid orphaned processes
+      Process.sleep(50)
+      Maraithon.Runtime.stop_agent(response["id"])
     end
   end
 

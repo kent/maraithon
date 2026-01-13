@@ -2,7 +2,6 @@ defmodule MaraithonWeb.Plugs.CacheRawBodyTest do
   use ExUnit.Case, async: true
 
   import Plug.Test
-  import Plug.Conn
 
   alias MaraithonWeb.Plugs.CacheRawBody
 
