@@ -36,6 +36,7 @@ defmodule MaraithonWeb.Router do
     pipe_through :browser
 
     live "/", DashboardLive, :index
+    live "/admin", DashboardLive, :index
   end
 
   # API v1

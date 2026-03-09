@@ -112,11 +112,12 @@
 # ==============================================================================
 
 defmodule MaraithonWeb.DashboardLiveTest do
-  use MaraithonWeb.ConnCase, async: true
+  use MaraithonWeb.ConnCase, async: false
 
   import Phoenix.LiveViewTest
 
   alias Maraithon.Agents
+  alias Maraithon.Runtime
 
   # ============================================================================
   # INITIAL MOUNT TESTS
@@ -160,6 +161,53 @@ defmodule MaraithonWeb.DashboardLiveTest do
       assert html =~ "prompt_agent"
       refute html =~ "No agents yet"
       assert has_element?(view, "p", "prompt_agent")
+    end
+
+    @doc """
+    Verifies that admin-specific monitoring panels are rendered.
+    """
+    test "renders health and logs sections", %{conn: conn} do
+      {:ok, view, _html} = live(conn, "/")
+
+      assert has_element?(view, "h2", "Health & Monitoring")
+      assert has_element?(view, "h3", "Operational Logs")
+      assert has_element?(view, "h3", "Failures & Stale Work")
+    end
+  end
+
+  describe "launch agent form" do
+    test "launches an agent from the admin UI", %{conn: conn} do
+      {:ok, view, _html} = live(conn, "/")
+
+      _html =
+        view
+        |> form("#launch-agent-form",
+          launch: %{
+            behavior: "prompt_agent",
+            name: "admin-launched-agent",
+            prompt: "Monitor and summarize activity.",
+            subscriptions: "github:acme/repo",
+            tools: "read_file,search_files",
+            memory_limit: "25",
+            budget_llm_calls: "120",
+            budget_tool_calls: "240",
+            config_json: ""
+          }
+        )
+        |> render_submit()
+
+      agents = Agents.list_agents()
+      assert length(agents) == 1
+
+      [agent] = agents
+      assert agent.behavior == "prompt_agent"
+      assert agent.config["name"] == "admin-launched-agent"
+      assert agent.config["subscribe"] == ["github:acme/repo"]
+      assert agent.config["tools"] == ["read_file", "search_files"]
+      assert agent.config["budget"]["llm_calls"] == 120
+      assert agent.config["budget"]["tool_calls"] == 240
+
+      assert {:ok, _} = Runtime.stop_agent(agent.id, "test_cleanup")
     end
   end
 
