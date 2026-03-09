@@ -42,8 +42,11 @@ defmodule Maraithon.Connectors.GitHub do
 
   alias Maraithon.Connectors.Connector
   alias Maraithon.Crypto
+  alias Req.Response
 
   require Logger
+
+  @default_api_base "https://api.github.com"
 
   @impl true
   def verify_signature(conn, raw_body) do
@@ -102,6 +105,48 @@ defmodule Maraithon.Connectors.GitHub do
 
         {:error, reason} ->
           {:error, reason}
+      end
+    end
+  end
+
+  @doc """
+  Creates a comment on an issue or pull request using the configured API token.
+  """
+  def create_issue_comment(owner, repo, issue_number, body)
+      when is_binary(owner) and is_binary(repo) and is_integer(issue_number) and is_binary(body) do
+    token = get_api_token()
+
+    if token == "" do
+      {:error, :api_token_not_configured}
+    else
+      req =
+        Req.new(
+          base_url: api_base_url(),
+          headers: [
+            {"accept", "application/vnd.github+json"},
+            {"authorization", "Bearer #{token}"},
+            {"x-github-api-version", "2022-11-28"}
+          ],
+          retry: false
+        )
+
+      case Req.post(req,
+             url: "/repos/#{owner}/#{repo}/issues/#{issue_number}/comments",
+             json: %{body: body}
+           ) do
+        {:ok, %Response{status: 201, body: response}} when is_map(response) ->
+          {:ok,
+           %{
+             "id" => response["id"],
+             "html_url" => response["html_url"],
+             "body" => response["body"]
+           }}
+
+        {:ok, %Response{status: status, body: response}} ->
+          {:error, {:github_api_error, status, response}}
+
+        {:error, reason} ->
+          {:error, {:github_transport_error, reason}}
       end
     end
   end
@@ -288,6 +333,16 @@ defmodule Maraithon.Connectors.GitHub do
   defp get_webhook_secret do
     Application.get_env(:maraithon, :github, [])
     |> Keyword.get(:webhook_secret, "")
+  end
+
+  defp get_api_token do
+    Application.get_env(:maraithon, :github, [])
+    |> Keyword.get(:api_token, "")
+  end
+
+  defp api_base_url do
+    Application.get_env(:maraithon, :github, [])
+    |> Keyword.get(:api_base_url, @default_api_base)
   end
 
   defp allow_unsigned? do

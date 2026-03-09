@@ -112,6 +112,8 @@ end
 # GitHub Connector
 config :maraithon, :github,
   webhook_secret: System.get_env("GITHUB_WEBHOOK_SECRET", ""),
+  api_token: System.get_env("GITHUB_ACCESS_TOKEN", ""),
+  api_base_url: System.get_env("GITHUB_API_BASE_URL", "https://api.github.com"),
   allow_unsigned: allow_unsigned
 
 # Google OAuth & Connectors

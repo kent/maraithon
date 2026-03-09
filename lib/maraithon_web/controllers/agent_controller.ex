@@ -14,12 +14,7 @@ defmodule MaraithonWeb.AgentController do
       {:ok, agent} ->
         conn
         |> put_status(:created)
-        |> json(%{
-          id: agent.id,
-          status: agent.status,
-          behavior: agent.behavior,
-          started_at: agent.started_at
-        })
+        |> json(agent_payload(agent))
 
       {:error, changeset} ->
         conn
@@ -42,6 +37,23 @@ defmodule MaraithonWeb.AgentController do
         conn
         |> put_status(:not_found)
         |> json(%{error: "not_found", message: "Agent not found"})
+    end
+  end
+
+  def update(conn, %{"id" => id} = params) do
+    case Runtime.update_agent(id, params) do
+      {:ok, agent} ->
+        json(conn, agent_payload(agent))
+
+      {:error, :not_found} ->
+        conn
+        |> put_status(:not_found)
+        |> json(%{error: "not_found", message: "Agent not found"})
+
+      {:error, changeset} ->
+        conn
+        |> put_status(:bad_request)
+        |> json(%{error: "invalid_params", details: format_errors(changeset)})
     end
   end
 
@@ -72,6 +84,28 @@ defmodule MaraithonWeb.AgentController do
     end
   end
 
+  def start(conn, %{"id" => id}) do
+    case Runtime.start_existing_agent(id) do
+      {:ok, agent} ->
+        json(conn, agent_payload(agent))
+
+      {:error, :not_found} ->
+        conn
+        |> put_status(:not_found)
+        |> json(%{error: "not_found", message: "Agent not found"})
+
+      {:error, :already_running} ->
+        conn
+        |> put_status(:conflict)
+        |> json(%{error: "already_running", message: "Agent is already running"})
+
+      {:error, changeset} ->
+        conn
+        |> put_status(:bad_request)
+        |> json(%{error: "invalid_params", details: format_errors(changeset)})
+    end
+  end
+
   def stop(conn, %{"id" => id} = params) do
     reason = params["reason"] || "manual_stop"
 
@@ -91,23 +125,26 @@ defmodule MaraithonWeb.AgentController do
   end
 
   def events(conn, %{"id" => id} = params) do
-    opts = [
-      after_seq: params["after_seq"],
-      limit: String.to_integer(params["limit"] || "100"),
-      types: parse_types(params["types"])
-    ]
+    with {:ok, limit} <- parse_positive_integer_param(params["limit"], 100, "limit") do
+      opts = [after_seq: params["after_seq"], limit: limit, types: parse_types(params["types"])]
 
-    case Runtime.get_events(id, opts) do
-      {:ok, events} ->
-        json(conn, %{
-          events: events,
-          has_more: length(events) == opts[:limit]
-        })
+      case Runtime.get_events(id, opts) do
+        {:ok, events} ->
+          json(conn, %{
+            events: events,
+            has_more: length(events) == opts[:limit]
+          })
 
-      {:error, :not_found} ->
+        {:error, :not_found} ->
+          conn
+          |> put_status(:not_found)
+          |> json(%{error: "not_found"})
+      end
+    else
+      {:error, message} ->
         conn
-        |> put_status(:not_found)
-        |> json(%{error: "not_found"})
+        |> put_status(:bad_request)
+        |> json(%{error: "invalid_params", message: message})
     end
   end
 
@@ -142,6 +179,18 @@ defmodule MaraithonWeb.AgentController do
     })
   end
 
+  def delete(conn, %{"id" => id}) do
+    case Runtime.delete_agent(id) do
+      :ok ->
+        json(conn, %{id: id, deleted: true})
+
+      {:error, :not_found} ->
+        conn
+        |> put_status(:not_found)
+        |> json(%{error: "not_found", message: "Agent not found"})
+    end
+  end
+
   # Private helpers
 
   defp format_errors(%Ecto.Changeset{} = changeset) do
@@ -159,8 +208,31 @@ defmodule MaraithonWeb.AgentController do
       id: agent.id,
       behavior: agent.behavior,
       status: agent.status,
-      started_at: agent.started_at
+      started_at: agent.started_at,
+      stopped_at: agent.stopped_at,
+      updated_at: agent.updated_at
     }
+  end
+
+  defp agent_payload(agent) do
+    %{
+      id: agent.id,
+      behavior: agent.behavior,
+      status: agent.status,
+      config: agent.config,
+      started_at: agent.started_at,
+      stopped_at: agent.stopped_at
+    }
+  end
+
+  defp parse_positive_integer_param(nil, default, _field_name), do: {:ok, default}
+  defp parse_positive_integer_param("", default, _field_name), do: {:ok, default}
+
+  defp parse_positive_integer_param(value, _default, field_name) when is_binary(value) do
+    case Integer.parse(value) do
+      {parsed, ""} when parsed > 0 -> {:ok, parsed}
+      _ -> {:error, "#{field_name} must be a positive integer"}
+    end
   end
 
   defp parse_types(nil), do: nil

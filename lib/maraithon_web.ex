@@ -50,8 +50,7 @@ defmodule MaraithonWeb do
 
   def live_view do
     quote do
-      use Phoenix.LiveView,
-        layout: {MaraithonWeb.Layouts, :app}
+      use Phoenix.LiveView
 
       import MaraithonWeb.CoreComponents
       unquote(html_helpers())
@@ -82,6 +81,7 @@ defmodule MaraithonWeb do
     quote do
       import Phoenix.HTML
       import MaraithonWeb.CoreComponents
+      alias MaraithonWeb.Layouts
 
       use Gettext, backend: MaraithonWeb.Gettext
 

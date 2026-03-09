@@ -9,11 +9,16 @@ defmodule Maraithon.Admin do
   alias Maraithon.Effects.Effect
   alias Maraithon.Events.Event
   alias Maraithon.Health
+  alias Maraithon.LogBuffer
   alias Maraithon.Repo
   alias Maraithon.Runtime.ScheduledJob
 
   @default_activity_limit 40
   @default_failure_limit 20
+  @default_log_limit 200
+  @default_effect_limit 20
+  @default_job_limit 20
+  @default_agent_log_limit 80
   @stale_dispatch_seconds 300
 
   @doc """
@@ -22,12 +27,14 @@ defmodule Maraithon.Admin do
   def dashboard_snapshot(opts \\ []) do
     activity_limit = Keyword.get(opts, :activity_limit, @default_activity_limit)
     failure_limit = Keyword.get(opts, :failure_limit, @default_failure_limit)
+    log_limit = Keyword.get(opts, :log_limit, @default_log_limit)
 
     %{
       health: Health.check(),
       queue_metrics: queue_metrics(),
       recent_activity: recent_activity(activity_limit),
-      recent_failures: recent_failures(failure_limit)
+      recent_failures: recent_failures(failure_limit),
+      recent_logs: recent_logs(log_limit)
     }
   end
 
@@ -83,6 +90,32 @@ defmodule Maraithon.Admin do
     (failed_effects ++ stale_jobs)
     |> Enum.sort_by(&timestamp_or_epoch/1, {:desc, DateTime})
     |> Enum.take(limit)
+  end
+
+  @doc """
+  Returns recent raw runtime logs captured from Logger.
+  """
+  def recent_logs(limit \\ @default_log_limit)
+      when is_integer(limit) and limit > 0 do
+    LogBuffer.recent(limit)
+  end
+
+  @doc """
+  Returns an agent-specific operational snapshot for admin inspection.
+  """
+  def agent_inspection(agent_id, opts \\ []) when is_binary(agent_id) do
+    effect_limit = Keyword.get(opts, :effect_limit, @default_effect_limit)
+    job_limit = Keyword.get(opts, :job_limit, @default_job_limit)
+    log_limit = Keyword.get(opts, :log_limit, @default_agent_log_limit)
+
+    %{
+      event_count: count_events(agent_id),
+      effect_counts: effect_counts(agent_id),
+      recent_effects: recent_effects(agent_id, effect_limit),
+      job_counts: job_counts(agent_id),
+      recent_jobs: recent_jobs(agent_id, job_limit),
+      recent_logs: recent_agent_logs(agent_id, log_limit)
+    }
   end
 
   defp count_effects_by_status(status) do
@@ -145,4 +178,93 @@ defmodule Maraithon.Admin do
 
   defp timestamp_or_epoch(%{inserted_at: %DateTime{} = inserted_at}), do: inserted_at
   defp timestamp_or_epoch(_), do: DateTime.from_unix!(0)
+
+  defp count_events(agent_id) do
+    Event
+    |> where([event], event.agent_id == ^agent_id)
+    |> Repo.aggregate(:count)
+  end
+
+  defp effect_counts(agent_id) do
+    %{
+      pending: count_agent_effects(agent_id, "pending"),
+      claimed: count_agent_effects(agent_id, "claimed"),
+      completed: count_agent_effects(agent_id, "completed"),
+      failed: count_agent_effects(agent_id, "failed"),
+      cancelled: count_agent_effects(agent_id, "cancelled")
+    }
+  end
+
+  defp count_agent_effects(agent_id, status) do
+    Effect
+    |> where([effect], effect.agent_id == ^agent_id and effect.status == ^status)
+    |> Repo.aggregate(:count)
+  end
+
+  defp recent_effects(agent_id, limit) do
+    Effect
+    |> where([effect], effect.agent_id == ^agent_id)
+    |> order_by([effect], desc: effect.updated_at, desc: effect.inserted_at)
+    |> limit(^limit)
+    |> select([effect], %{
+      id: effect.id,
+      effect_type: effect.effect_type,
+      status: effect.status,
+      attempts: effect.attempts,
+      claimed_by: effect.claimed_by,
+      retry_after: effect.retry_after,
+      params: effect.params,
+      result: effect.result,
+      error: effect.error,
+      inserted_at: effect.inserted_at,
+      updated_at: effect.updated_at
+    })
+    |> Repo.all()
+  end
+
+  defp job_counts(agent_id) do
+    %{
+      pending: count_agent_jobs(agent_id, "pending"),
+      dispatched: count_agent_jobs(agent_id, "dispatched"),
+      delivered: count_agent_jobs(agent_id, "delivered"),
+      cancelled: count_agent_jobs(agent_id, "cancelled")
+    }
+  end
+
+  defp count_agent_jobs(agent_id, status) do
+    ScheduledJob
+    |> where([job], job.agent_id == ^agent_id and job.status == ^status)
+    |> Repo.aggregate(:count)
+  end
+
+  defp recent_jobs(agent_id, limit) do
+    ScheduledJob
+    |> where([job], job.agent_id == ^agent_id)
+    |> order_by([job], desc: job.inserted_at)
+    |> limit(^limit)
+    |> select([job], %{
+      id: job.id,
+      job_type: job.job_type,
+      status: job.status,
+      attempts: job.attempts,
+      fire_at: job.fire_at,
+      claimed_at: job.claimed_at,
+      delivered_at: job.delivered_at,
+      payload: job.payload,
+      inserted_at: job.inserted_at
+    })
+    |> Repo.all()
+  end
+
+  defp recent_agent_logs(agent_id, limit) do
+    limit
+    |> recent_logs()
+    |> Enum.filter(fn log ->
+      case log.metadata do
+        %{"agent_id" => ^agent_id} -> true
+        _ -> false
+      end
+    end)
+    |> Enum.take(limit)
+  end
 end

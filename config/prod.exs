@@ -11,7 +11,7 @@ config :logger, :default_formatter,
 
 config :logger,
   level: :info,
-  backends: [:console]
+  backends: [:console, Maraithon.LogBufferBackend]
 
 # Runtime production configuration, including reading
 # of environment variables, is done on config/runtime.exs.

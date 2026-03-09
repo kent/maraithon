@@ -1,5 +1,5 @@
 defmodule Maraithon.AdminTest do
-  use Maraithon.DataCase, async: true
+  use Maraithon.DataCase, async: false
 
   alias Maraithon.Admin
   alias Maraithon.Agents
@@ -9,6 +9,8 @@ defmodule Maraithon.AdminTest do
 
   describe "dashboard_snapshot/1" do
     test "returns health, queue metrics, activity, and failures" do
+      Maraithon.LogBuffer.clear()
+
       {:ok, agent} =
         Agents.create_agent(%{
           behavior: "prompt_agent",
@@ -18,6 +20,12 @@ defmodule Maraithon.AdminTest do
         })
 
       {:ok, _event} = Events.append(agent.id, "issue_opened", %{title: "Investigate regression"})
+
+      Maraithon.LogBuffer.record(%{
+        level: :info,
+        message: "runtime initialized",
+        metadata: %{agent_id: agent.id}
+      })
 
       {:ok, _failed_effect} =
         %Effect{}
@@ -54,6 +62,7 @@ defmodule Maraithon.AdminTest do
       assert Enum.any?(snapshot.recent_activity, &(&1.event_type == "issue_opened"))
       assert Enum.any?(snapshot.recent_failures, &(&1.source == "effect"))
       assert Enum.any?(snapshot.recent_failures, &(&1.source == "job"))
+      assert Enum.any?(snapshot.recent_logs, &(&1.message == "runtime initialized"))
     end
   end
 
@@ -103,6 +112,63 @@ defmodule Maraithon.AdminTest do
       assert length(failures) == 2
       assert hd(failures).id == new_effect.id
       assert Enum.at(failures, 1).id == old_effect.id
+    end
+  end
+
+  describe "agent_inspection/2" do
+    test "returns agent-specific queue, event, and log details" do
+      Maraithon.LogBuffer.clear()
+
+      {:ok, agent} =
+        Agents.create_agent(%{
+          behavior: "prompt_agent",
+          config: %{},
+          status: "stopped"
+        })
+
+      {:ok, _event} = Events.append(agent.id, "inspection_event", %{ok: true})
+
+      {:ok, _effect} =
+        %Effect{}
+        |> Effect.changeset(%{
+          id: Ecto.UUID.generate(),
+          agent_id: agent.id,
+          idempotency_key: Ecto.UUID.generate(),
+          effect_type: "tool_call",
+          status: "pending",
+          attempts: 0
+        })
+        |> Repo.insert()
+
+      {:ok, _job} =
+        %ScheduledJob{}
+        |> ScheduledJob.changeset(%{
+          agent_id: agent.id,
+          job_type: "heartbeat",
+          fire_at: DateTime.utc_now(),
+          status: "pending",
+          attempts: 1
+        })
+        |> Repo.insert()
+
+      Maraithon.LogBuffer.record(%{
+        level: :info,
+        message: "agent inspection ready",
+        metadata: %{agent_id: agent.id}
+      })
+
+      on_exit(fn ->
+        Maraithon.LogBuffer.clear()
+      end)
+
+      inspection = Admin.agent_inspection(agent.id, effect_limit: 5, job_limit: 5, log_limit: 5)
+
+      assert inspection.event_count == 1
+      assert inspection.effect_counts.pending == 1
+      assert inspection.job_counts.pending == 1
+      assert Enum.any?(inspection.recent_effects, &(&1.effect_type == "tool_call"))
+      assert Enum.any?(inspection.recent_jobs, &(&1.job_type == "heartbeat"))
+      assert Enum.any?(inspection.recent_logs, &(&1.message == "agent inspection ready"))
     end
   end
 end

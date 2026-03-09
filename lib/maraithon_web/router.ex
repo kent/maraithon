@@ -55,10 +55,15 @@ defmodule MaraithonWeb.Router do
     post "/agents", AgentController, :create
     get "/agents", AgentController, :index
     get "/agents/:id", AgentController, :show
+    patch "/agents/:id", AgentController, :update
+    delete "/agents/:id", AgentController, :delete
+    post "/agents/:id/start", AgentController, :start
     post "/agents/:id/ask", AgentController, :ask
     post "/agents/:id/stop", AgentController, :stop
     get "/agents/:id/events", AgentController, :events
     get "/agents/:id/spend", AgentController, :spend
+    get "/admin/dashboard", AdminController, :dashboard
+    get "/admin/agents/:id/inspection", AdminController, :agent_inspection
 
     # Spend tracking
     get "/spend", AgentController, :total_spend

@@ -117,7 +117,9 @@ defmodule MaraithonWeb.DashboardLiveTest do
   import Phoenix.LiveViewTest
 
   alias Maraithon.Agents
+  alias Maraithon.Effects.Effect
   alias Maraithon.Runtime
+  alias Maraithon.Runtime.ScheduledJob
 
   # ============================================================================
   # INITIAL MOUNT TESTS
@@ -160,7 +162,7 @@ defmodule MaraithonWeb.DashboardLiveTest do
 
       assert html =~ "prompt_agent"
       refute html =~ "No agents yet"
-      assert has_element?(view, "p", "prompt_agent")
+      assert has_element?(view, "div", "prompt_agent")
     end
 
     @doc """
@@ -172,6 +174,27 @@ defmodule MaraithonWeb.DashboardLiveTest do
       assert has_element?(view, "h2", "Health & Monitoring")
       assert has_element?(view, "h3", "Operational Logs")
       assert has_element?(view, "h3", "Failures & Stale Work")
+      assert has_element?(view, "h3", "Raw Logs")
+    end
+
+    test "renders recent raw logs", %{conn: conn} do
+      Maraithon.LogBuffer.clear()
+
+      Maraithon.LogBuffer.record(%{
+        level: :info,
+        message: "runtime booted",
+        metadata: %{"agent_id" => "agent-123"}
+      })
+
+      on_exit(fn ->
+        Maraithon.LogBuffer.clear()
+      end)
+
+      {:ok, _view, html} = live(conn, "/")
+
+      assert html =~ "Raw Logs"
+      assert html =~ "runtime booted"
+      assert html =~ "agent_id=agent-123"
     end
   end
 
@@ -209,6 +232,78 @@ defmodule MaraithonWeb.DashboardLiveTest do
 
       assert {:ok, _} = Runtime.stop_agent(agent.id, "test_cleanup")
     end
+
+    test "updates a stopped agent from the admin UI", %{conn: conn} do
+      {:ok, agent} =
+        Agents.create_agent(%{
+          behavior: "prompt_agent",
+          config: %{
+            "name" => "before-edit",
+            "prompt" => "Before edit",
+            "subscribe" => ["github:acme/repo"],
+            "tools" => ["read_file"],
+            "memory_limit" => 10,
+            "budget" => %{"llm_calls" => 10, "tool_calls" => 20}
+          },
+          status: "stopped"
+        })
+
+      {:ok, view, _html} = live(conn, "/")
+
+      view
+      |> element("button[phx-click=edit_agent][phx-value-id=\"#{agent.id}\"]")
+      |> render_click()
+
+      html =
+        view
+        |> form("#launch-agent-form",
+          launch: %{
+            behavior: "watchdog_summarizer",
+            name: "after-edit",
+            prompt: "After edit",
+            subscriptions: "linear:team-1,notaui:tasks",
+            tools: "search_files,notaui_list_tasks",
+            memory_limit: "30",
+            budget_llm_calls: "200",
+            budget_tool_calls: "300",
+            config_json: "{\"custom_flag\":true}"
+          }
+        )
+        |> render_submit()
+
+      updated_agent = Agents.get_agent!(agent.id)
+
+      assert updated_agent.behavior == "watchdog_summarizer"
+      assert updated_agent.config["name"] == "after-edit"
+      assert updated_agent.config["prompt"] == "After edit"
+      assert updated_agent.config["subscribe"] == ["linear:team-1", "notaui:tasks"]
+      assert updated_agent.config["tools"] == ["search_files", "notaui_list_tasks"]
+      assert updated_agent.config["memory_limit"] == 30
+      assert updated_agent.config["budget"]["llm_calls"] == 200
+      assert updated_agent.config["budget"]["tool_calls"] == 300
+      assert updated_agent.config["custom_flag"] == true
+      assert html =~ "Agent Details"
+      assert html =~ "after-edit"
+    end
+
+    test "deletes a stopped agent from the admin UI", %{conn: conn} do
+      {:ok, agent} =
+        Agents.create_agent(%{
+          behavior: "prompt_agent",
+          config: %{"name" => "delete-me"},
+          status: "stopped"
+        })
+
+      {:ok, view, _html} = live(conn, "/")
+
+      _html =
+        view
+        |> element("button[phx-click=delete_agent][phx-value-id=\"#{agent.id}\"]")
+        |> render_click()
+
+      assert Agents.get_agent(agent.id) == nil
+      refute render(view) =~ "delete-me"
+    end
   end
 
   # ============================================================================
@@ -238,7 +333,7 @@ defmodule MaraithonWeb.DashboardLiveTest do
       assert html =~ "Agent Details"
       assert html =~ "watchdog_summarizer"
       assert html =~ agent.id
-      assert has_element?(view, "h3", "Agent Details")
+      assert has_element?(view, "h2", "Agent Details")
     end
 
     @doc """
@@ -465,6 +560,7 @@ defmodule MaraithonWeb.DashboardLiveTest do
 
       assert html =~ "Agent Details"
       assert html =~ agent.id
+      assert_patch(view, "/?id=#{agent.id}")
     end
   end
 
@@ -545,6 +641,67 @@ defmodule MaraithonWeb.DashboardLiveTest do
       assert html =~ "Recent Events"
       assert html =~ "test_event"
     end
+
+    test "shows inspection panels with queued work and logs", %{conn: conn} do
+      Maraithon.LogBuffer.clear()
+
+      {:ok, agent} =
+        Agents.create_agent(%{
+          behavior: "prompt_agent",
+          config: %{
+            "name" => "inspected-agent",
+            "prompt" => "Inspect me",
+            "budget" => %{"llm_calls" => 100, "tool_calls" => 50}
+          },
+          status: "stopped"
+        })
+
+      {:ok, _event} = Maraithon.Events.append(agent.id, "inspection_ready", %{message: "ok"})
+
+      {:ok, _effect} =
+        %Effect{}
+        |> Effect.changeset(%{
+          id: Ecto.UUID.generate(),
+          agent_id: agent.id,
+          idempotency_key: Ecto.UUID.generate(),
+          effect_type: "tool_call",
+          status: "failed",
+          attempts: 2,
+          error: "Tool timeout"
+        })
+        |> Maraithon.Repo.insert()
+
+      {:ok, _job} =
+        %ScheduledJob{}
+        |> ScheduledJob.changeset(%{
+          agent_id: agent.id,
+          job_type: "heartbeat",
+          fire_at: DateTime.utc_now(),
+          status: "pending",
+          attempts: 1
+        })
+        |> Maraithon.Repo.insert()
+
+      Maraithon.LogBuffer.record(%{
+        level: :warning,
+        message: "agent inspection log",
+        metadata: %{agent_id: agent.id}
+      })
+
+      on_exit(fn ->
+        Maraithon.LogBuffer.clear()
+      end)
+
+      {:ok, _view, html} = live(conn, "/?id=#{agent.id}")
+
+      assert html =~ "Effect Queue"
+      assert html =~ "tool_call"
+      assert html =~ "Scheduled Jobs"
+      assert html =~ "heartbeat"
+      assert html =~ "Agent Logs"
+      assert html =~ "agent inspection log"
+      assert html =~ "Config Snapshot"
+    end
   end
 
   # ============================================================================
@@ -572,10 +729,10 @@ defmodule MaraithonWeb.DashboardLiveTest do
       |> Ecto.Changeset.change(%{started_at: nil})
       |> Maraithon.Repo.update!()
 
-      {:ok, _view, html} = live(conn, "/")
+      {:ok, _view, html} = live(conn, "/?id=#{agent.id}")
 
-      # Should show N/A or similar for nil date
-      assert html =~ "N/A" or html =~ "Started"
+      assert html =~ "Started"
+      assert html =~ "N/A"
     end
   end
 

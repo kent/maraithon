@@ -28,6 +28,11 @@ defmodule Maraithon.ToolsTest do
       assert "list_files" in tools
       assert "file_tree" in tools
       assert "search_files" in tools
+      assert "github_create_issue_comment" in tools
+      assert "slack_post_message" in tools
+      assert "linear_create_comment" in tools
+      assert "linear_create_issue" in tools
+      assert "linear_update_issue_state" in tools
       assert "notaui_list_tasks" in tools
       assert "notaui_complete_task" in tools
       assert "notaui_update_task" in tools
@@ -38,6 +43,7 @@ defmodule Maraithon.ToolsTest do
     test "returns true for existing tool" do
       assert Tools.exists?("time")
       assert Tools.exists?("read_file")
+      assert Tools.exists?("github_create_issue_comment")
       assert Tools.exists?("notaui_list_tasks")
     end
 

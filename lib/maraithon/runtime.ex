@@ -43,6 +43,37 @@ defmodule Maraithon.Runtime do
   end
 
   @doc """
+  Start an existing persisted agent by ID.
+  """
+  def start_existing_agent(id) when is_binary(id) do
+    case Agents.get_agent(id) do
+      nil ->
+        {:error, :not_found}
+
+      %{status: status} when status in ["running", "degraded"] ->
+        {:error, :already_running}
+
+      agent ->
+        running_attrs = %{status: "running", started_at: DateTime.utc_now(), stopped_at: nil}
+
+        with {:ok, updated_agent} <- Agents.update_agent(agent, running_attrs),
+             {:ok, _pid} <- start_agent_process(updated_agent) do
+          Logger.info("Started existing agent #{id}",
+            agent_id: id,
+            behavior: updated_agent.behavior
+          )
+
+          {:ok, updated_agent}
+        else
+          {:error, reason} = error ->
+            _ = Agents.update_agent(agent, %{status: "stopped", stopped_at: DateTime.utc_now()})
+            Logger.error("Failed to start existing agent #{id}: #{inspect(reason)}", agent_id: id)
+            error
+        end
+    end
+  end
+
+  @doc """
   Stop an agent by ID.
   """
   def stop_agent(id, reason \\ "manual_stop") do
@@ -60,6 +91,58 @@ defmodule Maraithon.Runtime do
 
         Logger.info("Stopped agent #{id}", agent_id: id, reason: reason)
         {:ok, %{stopped_at: agent.stopped_at}}
+    end
+  end
+
+  @doc """
+  Update an existing agent definition. Running agents are stopped, updated, and restarted.
+  """
+  def update_agent(id, params) when is_binary(id) do
+    case Agents.get_agent(id) do
+      nil ->
+        {:error, :not_found}
+
+      agent ->
+        was_running = agent.status in ["running", "degraded"]
+
+        with {:ok, stopped_agent} <- stop_for_update(agent, was_running),
+             {:ok, updated_agent} <- apply_agent_update(stopped_agent, params),
+             {:ok, final_agent} <- maybe_restart(updated_agent, was_running) do
+          Logger.info("Updated agent #{id}", agent_id: id, behavior: final_agent.behavior)
+          {:ok, final_agent}
+        else
+          {:error, reason} = error ->
+            Logger.error("Failed to update agent #{id}: #{inspect(reason)}", agent_id: id)
+            error
+        end
+    end
+  end
+
+  @doc """
+  Delete an agent and all dependent runtime records.
+  """
+  def delete_agent(id) when is_binary(id) do
+    case Agents.get_agent(id) do
+      nil ->
+        {:error, :not_found}
+
+      agent ->
+        was_running = agent.status in ["running", "degraded"]
+
+        if was_running do
+          Dispatch.dispatch(id, {:control, :stop, "deleted_from_admin"})
+          stop_agent_process(id)
+        end
+
+        case Agents.delete_agent(agent) do
+          {:ok, _agent} ->
+            Logger.info("Deleted agent #{id}", agent_id: id)
+            :ok
+
+          {:error, reason} = error ->
+            Logger.error("Failed to delete agent #{id}: #{inspect(reason)}", agent_id: id)
+            error
+        end
     end
   end
 
@@ -202,5 +285,56 @@ defmodule Maraithon.Runtime do
       "llm_calls" => 500,
       "tool_calls" => 1000
     }
+  end
+
+  defp stop_for_update(agent, false), do: {:ok, agent}
+
+  defp stop_for_update(agent, true) do
+    Dispatch.dispatch(agent.id, {:control, :stop, "restarting_with_updated_config"})
+    stop_agent_process(agent.id)
+    Agents.mark_stopped(agent)
+  end
+
+  defp apply_agent_update(agent, params) do
+    existing_config = agent.config || %{}
+    incoming_config = params["config"] || params[:config] || %{}
+    behavior = params["behavior"] || params[:behavior] || agent.behavior
+
+    config =
+      case incoming_config do
+        map when is_map(map) -> Map.merge(existing_config, map)
+        _ -> existing_config
+      end
+
+    attrs = %{
+      behavior: behavior,
+      config: config
+    }
+
+    budget = params["budget"] || params[:budget] || Map.get(existing_config, "budget")
+
+    attrs =
+      if is_map(budget) do
+        put_in(attrs, [:config, "budget"], budget)
+      else
+        attrs
+      end
+
+    Agents.update_agent(agent, attrs)
+  end
+
+  defp maybe_restart(agent, false), do: {:ok, agent}
+
+  defp maybe_restart(agent, true) do
+    running_attrs = %{status: "running", started_at: DateTime.utc_now(), stopped_at: nil}
+
+    with {:ok, running_agent} <- Agents.update_agent(agent, running_attrs),
+         {:ok, _pid} <- start_agent_process(running_agent) do
+      {:ok, running_agent}
+    else
+      {:error, reason} ->
+        _ = Agents.update_agent(agent, %{status: "stopped", stopped_at: DateTime.utc_now()})
+        {:error, reason}
+    end
   end
 end

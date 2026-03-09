@@ -10,6 +10,11 @@ defmodule Maraithon.Tools do
     "list_files" => Maraithon.Tools.ListFiles,
     "file_tree" => Maraithon.Tools.FileTree,
     "search_files" => Maraithon.Tools.SearchFiles,
+    "github_create_issue_comment" => Maraithon.Tools.GitHubCreateIssueComment,
+    "slack_post_message" => Maraithon.Tools.SlackPostMessage,
+    "linear_create_comment" => Maraithon.Tools.LinearCreateComment,
+    "linear_create_issue" => Maraithon.Tools.LinearCreateIssue,
+    "linear_update_issue_state" => Maraithon.Tools.LinearUpdateIssueState,
     "notaui_list_tasks" => Maraithon.Tools.NotauiListTasks,
     "notaui_complete_task" => Maraithon.Tools.NotauiCompleteTask,
     "notaui_update_task" => Maraithon.Tools.NotauiUpdateTask

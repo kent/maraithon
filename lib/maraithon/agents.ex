@@ -11,7 +11,9 @@ defmodule Maraithon.Agents do
   List all agents.
   """
   def list_agents do
-    Repo.all(Agent)
+    Agent
+    |> order_by([agent], desc: agent.updated_at, desc: agent.inserted_at)
+    |> Repo.all()
   end
 
   @doc """

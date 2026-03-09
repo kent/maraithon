@@ -412,6 +412,73 @@ defmodule MaraithonWeb.AgentControllerTest do
     end
   end
 
+  describe "POST /api/v1/agents/:id/start - existing agent" do
+    test "starts a stopped agent", %{conn: conn} do
+      {:ok, agent} =
+        Agents.create_agent(%{
+          behavior: "watchdog_summarizer",
+          config: %{},
+          status: "stopped",
+          stopped_at: DateTime.utc_now()
+        })
+
+      conn = post(conn, "/api/v1/agents/#{agent.id}/start", %{})
+
+      response = json_response(conn, 200)
+      assert response["id"] == agent.id
+      assert response["status"] == "running"
+
+      case Registry.lookup(Maraithon.Runtime.AgentRegistry, agent.id) do
+        [{pid, _value}] -> Maraithon.Runtime.AgentSupervisor.stop_agent(pid)
+        [] -> :ok
+      end
+    end
+  end
+
+  describe "PATCH /api/v1/agents/:id" do
+    test "updates a stopped agent", %{conn: conn} do
+      {:ok, agent} =
+        Agents.create_agent(%{
+          behavior: "prompt_agent",
+          config: %{"name" => "before-update"},
+          status: "stopped"
+        })
+
+      conn =
+        patch(conn, "/api/v1/agents/#{agent.id}", %{
+          "behavior" => "watchdog_summarizer",
+          "config" => %{"name" => "after-update", "prompt" => "Updated prompt"},
+          "budget" => %{"llm_calls" => 25, "tool_calls" => 50}
+        })
+
+      response = json_response(conn, 200)
+      assert response["id"] == agent.id
+      assert response["behavior"] == "watchdog_summarizer"
+      assert response["config"]["name"] == "after-update"
+      assert response["config"]["prompt"] == "Updated prompt"
+      assert response["config"]["budget"]["llm_calls"] == 25
+      assert response["config"]["budget"]["tool_calls"] == 50
+    end
+  end
+
+  describe "DELETE /api/v1/agents/:id" do
+    test "deletes a stopped agent", %{conn: conn} do
+      {:ok, agent} =
+        Agents.create_agent(%{
+          behavior: "prompt_agent",
+          config: %{},
+          status: "stopped"
+        })
+
+      conn = delete(conn, "/api/v1/agents/#{agent.id}")
+
+      response = json_response(conn, 200)
+      assert response["id"] == agent.id
+      assert response["deleted"] == true
+      assert Agents.get_agent(agent.id) == nil
+    end
+  end
+
   # ============================================================================
   # GET EVENTS - EXISTING AGENT TESTS
   # ============================================================================

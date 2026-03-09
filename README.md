@@ -175,6 +175,7 @@ Connectors bridge external services to agents via webhooks.
 ```bash
 # Configure webhook secret
 export GITHUB_WEBHOOK_SECRET="your_secret"
+export GITHUB_ACCESS_TOKEN="ghp_xxx" # required for outbound agent actions like issue comments
 
 # Create agent subscribed to a repo
 curl -X POST http://localhost:4000/api/v1/agents \
@@ -193,6 +194,8 @@ curl -X POST http://localhost:4000/api/v1/agents \
 ```
 
 **Supported events**: `issue_opened`, `issue_closed`, `pr_opened`, `pr_merged`, `push`, `comment_created`, and more.
+
+**Available tools**: `github_create_issue_comment`
 
 ### Google Calendar (Available)
 
@@ -266,6 +269,8 @@ curl -X POST http://localhost:4000/api/v1/agents \
 ```
 
 **Supported events**: `message`, `message_changed`, `message_deleted`, `reaction_added`, `reaction_removed`, `app_mention`, `member_joined`, `member_left`
+
+**Available tools**: `slack_post_message`
 
 ### Notaui MCP (Available)
 
@@ -345,6 +350,8 @@ curl -X POST http://localhost:4000/api/v1/agents \
 
 **Supported events**: `issue_created`, `issue_updated`, `issue_removed`, `comment_created`, `comment_updated`, `project_created`, `cycle_created`
 
+**Available tools**: `linear_create_comment`, `linear_create_issue`, `linear_update_issue_state`
+
 ### Telegram (Available)
 
 ```bash
@@ -413,10 +420,15 @@ When enabled, include: `Authorization: Bearer <API_BEARER_TOKEN>`.
 | `POST /api/v1/agents` | Create agent |
 | `GET /api/v1/agents` | List agents |
 | `GET /api/v1/agents/:id` | Get agent details |
+| `PATCH /api/v1/agents/:id` | Update agent definition |
+| `DELETE /api/v1/agents/:id` | Delete agent |
+| `POST /api/v1/agents/:id/start` | Start existing agent |
 | `POST /api/v1/agents/:id/ask` | Send message to agent |
 | `POST /api/v1/agents/:id/stop` | Stop agent |
 | `GET /api/v1/agents/:id/events` | Get agent events |
 | `GET /api/v1/agents/:id/spend` | Get agent LLM spend |
+| `GET /api/v1/admin/agents/:id/inspection` | Deep agent inspection payload |
+| `GET /api/v1/admin/dashboard` | Fleet-wide health, queue, activity, and raw logs |
 
 ### Events
 
@@ -449,6 +461,76 @@ When enabled, include: `Authorization: Bearer <API_BEARER_TOKEN>`.
 | `GET /auth/linear` | Initiate Linear OAuth flow |
 | `GET /auth/linear/callback` | Linear OAuth callback |
 
+## Admin Control Center
+
+The Phoenix admin interface is your browser-based operator console. It lives at `/` and `/admin` and is protected by HTTP Basic auth when `ADMIN_USERNAME` and `ADMIN_PASSWORD` are set.
+
+High-value workflows:
+
+- **Create or edit an agent** from the right-hand form. The form writes the persisted definition and starts or restarts the runtime when needed.
+- **Inspect an agent** from the registry table. The selected agent panel shows status, spend, prompt, config snapshot, recent events, queued effects, scheduled jobs, and agent-scoped raw logs.
+- **Operate a running agent** from the operator console. Use it to send direct instructions into the agent runtime without opening another tool surface.
+- **Monitor the fleet** from the lower panels. Health, queue depth, failures, operational activity, and raw runtime logs are all visible from the same page.
+
+## Operator CLI
+
+The repo now includes a first-party operator CLI implemented as Mix tasks. It talks to the same API surface the admin interface uses.
+
+Configure it once:
+
+```bash
+export MARAITHON_BASE_URL="https://maraithon.fly.dev"
+export MARAITHON_API_TOKEN="replace-with-your-api-token"
+```
+
+Agent lifecycle:
+
+```bash
+mix maraithon.agent list
+mix maraithon.agent show AGENT_ID
+mix maraithon.agent create --behavior prompt_agent --name inbox-watcher --prompt "Watch GitHub and Notaui." --subscriptions github:acme/repo,notaui:tasks --tools search_files,notaui_list_tasks
+mix maraithon.agent update AGENT_ID --prompt "Updated prompt"
+mix maraithon.agent start AGENT_ID
+mix maraithon.agent stop AGENT_ID --reason maintenance
+mix maraithon.agent delete AGENT_ID
+mix maraithon.agent ask AGENT_ID "Summarize what needs attention."
+mix maraithon.agent inspect AGENT_ID
+mix maraithon.agent events AGENT_ID --limit 25
+```
+
+Fleet inspection:
+
+```bash
+mix maraithon.admin dashboard
+mix maraithon.admin dashboard --activity-limit 20 --log-limit 100
+```
+
+## Fly.io Deployment
+
+Deploy the production app with Fly Managed Postgres and Fly secrets. The app boots Phoenix, runs migrations from `entrypoint.sh`, and resumes persisted agents on startup.
+
+```bash
+flyctl auth token
+flyctl status -a maraithon
+
+flyctl secrets set -a maraithon \
+  SECRET_KEY_BASE="$(mix phx.gen.secret)" \
+  ADMIN_USERNAME="admin" \
+  ADMIN_PASSWORD="replace-with-long-random-password" \
+  API_BEARER_TOKEN="replace-with-long-random-token" \
+  DATABASE_URL="ecto://..." \
+  CLOAK_KEY="$(openssl rand -base64 32)" \
+  ANTHROPIC_API_KEY="sk-ant-..."
+
+flyctl deploy -a maraithon
+```
+
+After deploy:
+
+- Open `https://maraithon.fly.dev/` and sign in with the admin credentials.
+- Use the CLI with `MARAITHON_BASE_URL=https://maraithon.fly.dev`.
+- Keep all third-party tokens in Fly secrets, never in the repo.
+
 ## Configuration
 
 ```bash
@@ -463,6 +545,7 @@ export API_BEARER_TOKEN="replace-with-long-random-token"
 # Optional
 export ANTHROPIC_MODEL="claude-sonnet-4-20250514"
 export GITHUB_WEBHOOK_SECRET="your_secret"
+export GITHUB_ACCESS_TOKEN="ghp_xxx"
 export DATABASE_URL="postgres://..."
 
 # Google OAuth (required for Calendar/Gmail)

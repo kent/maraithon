@@ -327,6 +327,79 @@ defmodule Maraithon.RuntimeTest do
     # database sandbox access for spawned processes.
   end
 
+  describe "start_existing_agent/1" do
+    test "returns not_found for non-existent agent" do
+      assert {:error, :not_found} = Runtime.start_existing_agent(Ecto.UUID.generate())
+    end
+
+    test "returns already_running when persisted agent is already running" do
+      {:ok, agent} =
+        Agents.create_agent(%{
+          behavior: "prompt_agent",
+          config: %{},
+          status: "running",
+          started_at: DateTime.utc_now()
+        })
+
+      assert {:error, :already_running} = Runtime.start_existing_agent(agent.id)
+    end
+  end
+
+  describe "update_agent/2" do
+    test "returns not_found for non-existent agent" do
+      assert {:error, :not_found} =
+               Runtime.update_agent(Ecto.UUID.generate(), %{
+                 "behavior" => "prompt_agent",
+                 "config" => %{}
+               })
+    end
+
+    test "updates a stopped agent definition without starting it" do
+      {:ok, agent} =
+        Agents.create_agent(%{
+          behavior: "prompt_agent",
+          config: %{
+            "name" => "before-update",
+            "budget" => %{"llm_calls" => 10, "tool_calls" => 20}
+          },
+          status: "stopped"
+        })
+
+      {:ok, updated_agent} =
+        Runtime.update_agent(agent.id, %{
+          "behavior" => "watchdog_summarizer",
+          "config" => %{"name" => "after-update", "prompt" => "New prompt"},
+          "budget" => %{"llm_calls" => 50, "tool_calls" => 75}
+        })
+
+      assert updated_agent.id == agent.id
+      assert updated_agent.status == "stopped"
+      assert updated_agent.behavior == "watchdog_summarizer"
+      assert updated_agent.config["name"] == "after-update"
+      assert updated_agent.config["prompt"] == "New prompt"
+      assert updated_agent.config["budget"]["llm_calls"] == 50
+      assert updated_agent.config["budget"]["tool_calls"] == 75
+    end
+  end
+
+  describe "delete_agent/1" do
+    test "returns not_found for non-existent agent" do
+      assert {:error, :not_found} = Runtime.delete_agent(Ecto.UUID.generate())
+    end
+
+    test "deletes a stopped agent" do
+      {:ok, agent} =
+        Agents.create_agent(%{
+          behavior: "prompt_agent",
+          config: %{},
+          status: "stopped"
+        })
+
+      assert :ok = Runtime.delete_agent(agent.id)
+      assert Agents.get_agent(agent.id) == nil
+    end
+  end
+
   # ============================================================================
   # AGENT RESUME TESTS
   # ============================================================================
