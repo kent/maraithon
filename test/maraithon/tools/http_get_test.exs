@@ -10,10 +10,34 @@ defmodule Maraithon.Tools.HttpGetTest do
       assert message == "url is required"
     end
 
+    test "returns error when url is empty string" do
+      {:error, message} = HttpGet.execute(%{"url" => "   "})
+
+      assert message == "url is required"
+    end
+
     test "returns error when url is nil" do
       {:error, message} = HttpGet.execute(%{"url" => nil})
 
       assert message == "url is required"
+    end
+
+    test "returns error for unsupported scheme" do
+      {:error, message} = HttpGet.execute(%{"url" => "ftp://example.com/file.txt"})
+
+      assert message == "url scheme must be http or https"
+    end
+
+    test "returns error when scheme is missing" do
+      {:error, message} = HttpGet.execute(%{"url" => "example.com/path"})
+
+      assert message == "url must include scheme (http or https)"
+    end
+
+    test "returns error when credentials are included in url" do
+      {:error, message} = HttpGet.execute(%{"url" => "http://user:pass@example.com/private"})
+
+      assert message == "url must not include credentials"
     end
 
     test "fetches URL successfully" do

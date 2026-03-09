@@ -20,20 +20,11 @@ defmodule MaraithonWeb.WebhookController do
   POST /webhooks/github
   """
   def github(conn, params) do
-    # Get raw body for signature verification (cached by CacheRawBody plug)
-    raw_body = get_raw_body!(conn, params)
-
-    case GitHub.verify_signature(conn, raw_body) do
-      :ok ->
-        handle_connector(conn, params, GitHub)
-
-      {:error, reason} ->
-        Logger.warning("GitHub webhook signature verification failed", reason: reason)
-
-        conn
-        |> put_status(:unauthorized)
-        |> json(%{error: "Invalid signature"})
-    end
+    handle_signed_connector(conn, params,
+      connector_module: GitHub,
+      signature_log: "GitHub webhook signature verification failed",
+      signature_error: "Invalid signature"
+    )
   end
 
   @doc """
@@ -60,44 +51,12 @@ defmodule MaraithonWeb.WebhookController do
   POST /webhooks/slack
   """
   def slack(conn, params) do
-    raw_body = get_raw_body!(conn, params)
-
-    case Slack.verify_signature(conn, raw_body) do
-      :ok ->
-        case Slack.handle_webhook(conn, params) do
-          {:challenge, challenge} ->
-            # URL verification - return the challenge
-            conn
-            |> put_status(:ok)
-            |> text(challenge)
-
-          {:ok, topic, event} ->
-            Connector.publish(topic, event)
-
-            conn
-            |> put_status(:ok)
-            |> json(%{status: "published", topic: topic, event_type: event.type})
-
-          {:ignore, reason} ->
-            conn
-            |> put_status(:ok)
-            |> json(%{status: "ignored", reason: reason})
-
-          {:error, reason} ->
-            Logger.warning("Slack webhook failed", reason: inspect(reason))
-
-            conn
-            |> put_status(:bad_request)
-            |> json(%{error: inspect(reason)})
-        end
-
-      {:error, reason} ->
-        Logger.warning("Slack signature verification failed", reason: reason)
-
-        conn
-        |> put_status(:unauthorized)
-        |> json(%{error: "Invalid signature"})
-    end
+    handle_signed_connector(conn, params,
+      connector_module: Slack,
+      signature_log: "Slack signature verification failed",
+      signature_error: "Invalid signature",
+      on_verified: &handle_slack/2
+    )
   end
 
   @doc """
@@ -130,38 +89,12 @@ defmodule MaraithonWeb.WebhookController do
   end
 
   defp handle_whatsapp_event(conn, params) do
-    raw_body = get_raw_body!(conn, params)
-
-    case WhatsApp.verify_signature(conn, raw_body) do
-      :ok ->
-        case WhatsApp.handle_webhook(conn, params) do
-          {:ok, topic, event} ->
-            Connector.publish(topic, event)
-
-            conn
-            |> put_status(:ok)
-            |> json(%{status: "published", topic: topic, event_type: event.type})
-
-          {:ignore, reason} ->
-            conn
-            |> put_status(:ok)
-            |> json(%{status: "ignored", reason: reason})
-
-          {:error, reason} ->
-            Logger.warning("WhatsApp webhook failed", reason: inspect(reason))
-
-            conn
-            |> put_status(:bad_request)
-            |> json(%{error: inspect(reason)})
-        end
-
-      {:error, reason} ->
-        Logger.warning("WhatsApp signature verification failed", reason: reason)
-
-        conn
-        |> put_status(:unauthorized)
-        |> json(%{error: "Invalid signature"})
-    end
+    handle_signed_connector(conn, params,
+      connector_module: WhatsApp,
+      signature_log: "WhatsApp signature verification failed",
+      signature_error: "Invalid signature",
+      failure_log: "WhatsApp webhook failed"
+    )
   end
 
   @doc """
@@ -170,19 +103,11 @@ defmodule MaraithonWeb.WebhookController do
   POST /webhooks/linear
   """
   def linear(conn, params) do
-    raw_body = get_raw_body!(conn, params)
-
-    case Linear.verify_signature(conn, raw_body) do
-      :ok ->
-        handle_connector(conn, params, Linear)
-
-      {:error, reason} ->
-        Logger.warning("Linear signature verification failed", reason: reason)
-
-        conn
-        |> put_status(:unauthorized)
-        |> json(%{error: "Invalid signature"})
-    end
+    handle_signed_connector(conn, params,
+      connector_module: Linear,
+      signature_log: "Linear signature verification failed",
+      signature_error: "Invalid signature"
+    )
   end
 
   @doc """
@@ -191,45 +116,35 @@ defmodule MaraithonWeb.WebhookController do
   POST /webhooks/telegram/:secret_path
   """
   def telegram(conn, params) do
-    raw_body = get_raw_body!(conn, params)
+    handle_signed_connector(conn, params,
+      connector_module: Telegram,
+      signature_log: "Telegram verification failed",
+      signature_error: "Invalid request",
+      failure_log: "Telegram webhook failed"
+    )
+  end
 
-    case Telegram.verify_signature(conn, raw_body) do
-      :ok ->
-        case Telegram.handle_webhook(conn, params) do
-          {:ok, topic, event} ->
-            Connector.publish(topic, event)
-
-            conn
-            |> put_status(:ok)
-            |> json(%{status: "published", topic: topic, event_type: event.type})
-
-          {:ignore, reason} ->
-            conn
-            |> put_status(:ok)
-            |> json(%{status: "ignored", reason: reason})
-
-          {:error, reason} ->
-            Logger.warning("Telegram webhook failed", reason: inspect(reason))
-
-            conn
-            |> put_status(:bad_request)
-            |> json(%{error: inspect(reason)})
-        end
-
-      {:error, reason} ->
-        Logger.warning("Telegram verification failed", reason: reason)
-
+  defp handle_slack(conn, params) do
+    case Slack.handle_webhook(conn, params) do
+      {:challenge, challenge} ->
         conn
-        |> put_status(:unauthorized)
-        |> json(%{error: "Invalid request"})
+        |> put_status(:ok)
+        |> text(challenge)
+
+      result ->
+        handle_connector_result(conn, result, failure_log: "Slack webhook failed")
     end
   end
 
   # Generic handler for any connector
-  defp handle_connector(conn, params, connector_module) do
-    case connector_module.handle_webhook(conn, params) do
+  defp handle_connector(conn, params, connector_module, opts \\ []) do
+    result = connector_module.handle_webhook(conn, params)
+    handle_connector_result(conn, result, opts)
+  end
+
+  defp handle_connector_result(conn, result, opts) do
+    case result do
       {:ok, topic, event} ->
-        # Publish to PubSub
         Connector.publish(topic, event)
 
         conn
@@ -248,29 +163,72 @@ defmodule MaraithonWeb.WebhookController do
         |> json(%{status: "ignored", reason: reason})
 
       {:error, reason} ->
-        Logger.warning("Webhook processing failed", reason: inspect(reason))
+        failure_log = Keyword.get(opts, :failure_log, "Webhook processing failed")
+        error_message = Keyword.get(opts, :error_message, "Failed to process webhook")
+        Logger.warning(failure_log, reason: inspect(reason))
+        bad_request(conn, error_message)
+    end
+  end
 
-        conn
-        |> put_status(:bad_request)
-        |> json(%{error: "Failed to process webhook", reason: inspect(reason)})
+  defp handle_signed_connector(conn, params, opts) do
+    connector_module = Keyword.fetch!(opts, :connector_module)
+    signature_log = Keyword.fetch!(opts, :signature_log)
+    signature_error = Keyword.fetch!(opts, :signature_error)
+
+    on_verified =
+      Keyword.get(opts, :on_verified, fn conn, params ->
+        handle_connector(conn, params, connector_module, opts)
+      end)
+
+    raw_body = get_raw_body(conn, params)
+
+    case connector_module.verify_signature(conn, raw_body) do
+      :ok ->
+        on_verified.(conn, params)
+
+      {:error, reason} ->
+        Logger.warning(signature_log, reason: reason)
+        unauthorized(conn, signature_error)
     end
   end
 
   # Gets the cached raw body, falling back to re-encoding with a warning.
   # The CacheRawBody plug should always provide the raw body, but we handle
   # the edge case gracefully while logging a warning.
-  defp get_raw_body!(conn, params) do
+  defp get_raw_body(conn, params) do
     case conn.assigns[:raw_body] do
       nil ->
         Logger.warning("Raw body not cached - signature verification may fail",
           path: conn.request_path
         )
 
-        # Fallback to re-encoding (may not match original bytes)
-        Jason.encode!(params)
+        case Jason.encode(params) do
+          {:ok, raw_body} ->
+            raw_body
+
+          {:error, reason} ->
+            Logger.warning("Failed to encode raw body fallback",
+              path: conn.request_path,
+              reason: inspect(reason)
+            )
+
+            ""
+        end
 
       raw_body ->
         raw_body
     end
+  end
+
+  defp unauthorized(conn, message) do
+    conn
+    |> put_status(:unauthorized)
+    |> json(%{error: message})
+  end
+
+  defp bad_request(conn, message) do
+    conn
+    |> put_status(:bad_request)
+    |> json(%{error: message})
   end
 end
