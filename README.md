@@ -66,14 +66,14 @@ Your agent is **always watching**, **always remembering**, and **always ready**.
 ║   │   CONNECTORS     │          │        AGENT RUNTIME         │    │    TOOLS    │  ║
 ║   │                  │          │                              │    │             │  ║
 ║   │  ┌────────────┐  │  events  │   ╭────────────────────╮     │    │ read_file   │  ║
-║   │  │  GitHub    │──┼─────────►│   │  GenStateMachine   │     │    │ search_files│  ║
-║   │  └────────────┘  │          │   │  ┌──────┐ ┌──────┐ │     │    │ http_get    │  ║
+║   │  │  GitHub    │──┼─────────►│   │  GenStateMachine   │     │    │ list_files  │  ║
+║   │  └────────────┘  │          │   │  ┌──────┐ ┌──────┐ │     │    │ search_files│  ║
 ║   │  ┌────────────┐  │          │   │  │ idle │►│ work │ │     │    │ file_tree   │  ║
-║   │  │  Slack     │──┼─────────►│   │  └──────┘ └──┬───┘ │     │    │ bash        │  ║
-║   │  └────────────┘  │          │   │       ▲      │     │     │    │ edit_file   │  ║
-║   │  ┌────────────┐  │          │   │       └──────┘     │     │    │ write_file  │  ║
-║   │  │  Linear    │──┼─────────►│   ╰────────────────────╯     │◄───┤             │  ║
-║   │  └────────────┘  │          │                              │    │ custom...   │  ║
+║   │  │  Slack     │──┼─────────►│   │  └──────┘ └──┬───┘ │     │    │ http_get    │  ║
+║   │  └────────────┘  │          │   │       ▲      │     │     │    │ github_*    │  ║
+║   │  ┌────────────┐  │          │   │       └──────┘     │     │    │ slack_*     │  ║
+║   │  │  Linear    │──┼─────────►│   ╰────────────────────╯     │◄───┤ linear_*    │  ║
+║   │  └────────────┘  │          │                              │    │ notaui_*    │  ║
 ║   │  ┌────────────┐  │          │   ┌────────────────────┐     │    │             │  ║
 ║   │  │  Gmail     │──┼─────────►│   │   Event Sourcing   │     │    └─────────────┘  ║
 ║   │  └────────────┘  │          │   │   ┌─┬─┬─┬─┬─┬─┬─┐  │     │                     ║
@@ -136,6 +136,18 @@ curl -X POST http://localhost:4000/api/v1/events \
 # Check agent events
 curl http://localhost:4000/api/v1/agents/{id}/events
 ```
+
+## Production Shape
+
+The current production shape is intentionally simple:
+
+- One Fly app: `maraithon`
+- One always-on app machine in `yyz`
+- Phoenix, the admin control center, the API, and the OTP runtime all run in the same release
+- Database-backed runtime state in PostgreSQL
+- `POOL_SIZE=5` in production for the current Fly footprint
+
+This is the right shape for a single-user or small-team ambient agent deployment. Do not scale app machines horizontally until the database capacity and runtime polling strategy are adjusted to match.
 
 ## Behaviors
 
@@ -472,6 +484,23 @@ High-value workflows:
 - **Operate a running agent** from the operator console. Use it to send direct instructions into the agent runtime without opening another tool surface.
 - **Monitor the fleet** from the lower panels. Health, queue depth, failures, operational activity, and raw runtime logs are all visible from the same page.
 
+Recommended first workflow:
+
+1. Open `https://maraithon.fly.dev/`
+2. Create a `prompt_agent`
+3. Give it one narrow subscription set, such as `notaui:tasks` or `github:owner/repo`
+4. Give it only the tools it actually needs
+5. Inspect the agent after the first few events before broadening permissions
+
+Useful fields in the create/edit form:
+
+- `behavior`: One of `prompt_agent`, `repo_planner`, `watchdog_summarizer`, `codebase_advisor`
+- `subscriptions`: Comma-separated topic list such as `github:acme/repo,notaui:tasks`
+- `tools`: Comma-separated tool list such as `notaui_list_tasks,notaui_update_task,github_create_issue_comment`
+- `memory_limit`: Prompt-agent memory window
+- `budget_llm_calls` and `budget_tool_calls`: Hard per-agent execution budgets
+- `config_json`: Extra behavior-specific config as a JSON object
+
 ## Operator CLI
 
 The repo now includes a first-party operator CLI implemented as Mix tasks. It talks to the same API surface the admin interface uses.
@@ -481,6 +510,12 @@ Configure it once:
 ```bash
 export MARAITHON_BASE_URL="https://maraithon.fly.dev"
 export MARAITHON_API_TOKEN="replace-with-your-api-token"
+```
+
+If you keep local operator credentials in a shell file outside the repo, load that instead:
+
+```bash
+source ~/.config/maraithon/fly-prod.env
 ```
 
 Agent lifecycle:
@@ -505,22 +540,39 @@ mix maraithon.admin dashboard
 mix maraithon.admin dashboard --activity-limit 20 --log-limit 100
 ```
 
+The CLI is the terminal equivalent of the admin UI:
+
+- `mix maraithon.admin dashboard` = fleet health, queue, failures, logs
+- `mix maraithon.agent create|update|start|stop|delete` = agent CRUD and lifecycle
+- `mix maraithon.agent inspect` = deep inspection for one agent
+- `mix maraithon.agent ask` = operator console from the terminal
+
 ## Fly.io Deployment
 
-Deploy the production app with Fly Managed Postgres and Fly secrets. The app boots Phoenix, runs migrations from `entrypoint.sh`, and resumes persisted agents on startup.
+Deploy the production app with Fly secrets and PostgreSQL. The app boots Phoenix, runs migrations from `entrypoint.sh`, and resumes persisted agents on startup.
+
+Recommended shape:
+
+- Fly app `maraithon`
+- Region `yyz`
+- One always-on `shared-cpu-1x` 1 GB machine
+- Fly Managed Postgres in the same region
+- `POOL_SIZE=5` unless you have measured reason to change it
 
 ```bash
-flyctl auth token
-flyctl status -a maraithon
+flyctl auth login
+
+fly mpg create -r yyz
+fly mpg attach <postgres-app-name> -a maraithon
 
 flyctl secrets set -a maraithon \
   SECRET_KEY_BASE="$(mix phx.gen.secret)" \
+  CLOAK_KEY="$(openssl rand -base64 32)" \
   ADMIN_USERNAME="admin" \
   ADMIN_PASSWORD="replace-with-long-random-password" \
   API_BEARER_TOKEN="replace-with-long-random-token" \
-  DATABASE_URL="ecto://..." \
-  CLOAK_KEY="$(openssl rand -base64 32)" \
-  ANTHROPIC_API_KEY="sk-ant-..."
+  ANTHROPIC_API_KEY="sk-ant-..." \
+  POOL_SIZE="5"
 
 flyctl deploy -a maraithon
 ```
@@ -530,6 +582,34 @@ After deploy:
 - Open `https://maraithon.fly.dev/` and sign in with the admin credentials.
 - Use the CLI with `MARAITHON_BASE_URL=https://maraithon.fly.dev`.
 - Keep all third-party tokens in Fly secrets, never in the repo.
+- Verify the app with `curl https://maraithon.fly.dev/health`.
+
+Operational checks:
+
+```bash
+flyctl status -a maraithon
+flyctl machine list -a maraithon
+flyctl logs -a maraithon
+curl https://maraithon.fly.dev/health
+```
+
+If you are still using an unmanaged Fly Postgres app rather than Fly Managed Postgres, the database machine must be running or the admin UI and API will return `500`s:
+
+```bash
+flyctl machine list -a maraithon-db
+flyctl machine start <machine-id> -a maraithon-db
+```
+
+This repo currently runs well on one app machine. If you add more app machines before fixing the DB footprint and runtime polling load, you can starve the database and take the control plane down.
+
+## Secrets Hygiene
+
+Never commit deployment secrets.
+
+- Keep production secrets in Fly secrets
+- Keep local operator credentials in a file outside the repo, such as `~/.config/maraithon/fly-prod.env`
+- Do not commit `.env`, `.env.*`, service-account JSON, or copied API tokens
+- Treat `API_BEARER_TOKEN`, `ADMIN_PASSWORD`, `DATABASE_URL`, `CLOAK_KEY`, and third-party OAuth secrets as production credentials
 
 ## Configuration
 
@@ -541,6 +621,9 @@ export ANTHROPIC_API_KEY="sk-..."
 export ADMIN_USERNAME="admin"
 export ADMIN_PASSWORD="replace-with-long-random-password"
 export API_BEARER_TOKEN="replace-with-long-random-token"
+export SECRET_KEY_BASE="$(mix phx.gen.secret)"
+export CLOAK_KEY="$(openssl rand -base64 32)"
+export POOL_SIZE="5"
 
 # Optional
 export ANTHROPIC_MODEL="claude-sonnet-4-20250514"
