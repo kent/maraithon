@@ -49,6 +49,11 @@ defmodule MaraithonWeb.Router do
 
     live "/", DashboardLive, :index
     live "/admin", DashboardLive, :index
+    get "/connectors", ConnectorsController, :index
+    post "/connectors/:provider/disconnect", ConnectorsController, :disconnect
+    get "/conenctors", ConnectorsController, :legacy_redirect
+    get "/how-it-works", HowItWorksController, :index
+    get "/settings", SettingsController, :index
   end
 
   # API v1

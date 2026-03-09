@@ -1,0 +1,78 @@
+<Layouts.app flash={@flash} current_path={@current_path}>
+  <div class="space-y-6">
+    <section class="rounded-2xl bg-gradient-to-r from-slate-900 via-slate-800 to-indigo-900 px-6 py-6 text-white shadow">
+      <p class="text-xs font-semibold uppercase tracking-[0.28em] text-indigo-200">Admin Settings</p>
+      <h1 class="mt-2 text-3xl font-semibold tracking-tight">Settings</h1>
+      <p class="mt-2 max-w-3xl text-sm text-slate-200">
+        Configuration visibility for runtime, security, and connector readiness.
+      </p>
+    </section>
+
+    <section class="rounded-xl bg-white p-6 shadow">
+      <h2 class="text-xl font-semibold text-slate-900">Runtime</h2>
+      <div class="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
+        <%= for item <- @runtime_items do %>
+          <div class="rounded-lg border border-slate-200 bg-slate-50 p-3">
+            <div class="text-xs font-semibold uppercase tracking-wide text-slate-500"><%= item.name %></div>
+            <div class="mt-1 break-all font-mono text-sm text-slate-800"><%= item.value %></div>
+          </div>
+        <% end %>
+      </div>
+    </section>
+
+    <section class="rounded-xl bg-white p-6 shadow">
+      <h2 class="text-xl font-semibold text-slate-900">Security Secrets</h2>
+      <div class="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
+        <%= for item <- @security_items do %>
+          <div class="rounded-lg border border-slate-200 bg-slate-50 p-3">
+            <div class="flex items-center justify-between gap-2">
+              <div class="font-mono text-xs text-slate-800"><%= item.name %></div>
+              <span class={setting_badge_class(item.present?)}>
+                <%= setting_badge_label(item.present?) %>
+              </span>
+            </div>
+            <p class="mt-2 text-xs text-slate-500">
+              <%= if item.required?, do: "required", else: "optional" %>
+            </p>
+          </div>
+        <% end %>
+      </div>
+    </section>
+
+    <section class="rounded-xl bg-white p-6 shadow">
+      <h2 class="text-xl font-semibold text-slate-900">OAuth Provider Readiness</h2>
+      <div class="mt-4 overflow-x-auto">
+        <table class="min-w-full divide-y divide-slate-200 text-sm">
+          <thead class="bg-slate-50">
+            <tr>
+              <th class="px-3 py-2 text-left font-medium text-slate-600">Provider</th>
+              <th class="px-3 py-2 text-left font-medium text-slate-600">Client ID</th>
+              <th class="px-3 py-2 text-left font-medium text-slate-600">Client Secret</th>
+              <th class="px-3 py-2 text-left font-medium text-slate-600">Redirect URI</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-200 bg-white">
+            <%= for item <- @oauth_items do %>
+              <tr>
+                <td class="px-3 py-2 font-medium text-slate-900"><%= item.name %></td>
+                <td class="px-3 py-2">
+                  <span class={setting_badge_class(item.client_id_present?)}>
+                    <%= setting_badge_label(item.client_id_present?) %>
+                  </span>
+                </td>
+                <td class="px-3 py-2">
+                  <span class={setting_badge_class(item.client_secret_present?)}>
+                    <%= setting_badge_label(item.client_secret_present?) %>
+                  </span>
+                </td>
+                <td class="px-3 py-2 font-mono text-xs text-slate-700">
+                  <%= if item.redirect_uri == "", do: "not set", else: item.redirect_uri %>
+                </td>
+              </tr>
+            <% end %>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+</Layouts.app>

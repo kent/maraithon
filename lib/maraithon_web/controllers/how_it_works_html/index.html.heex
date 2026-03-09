@@ -1,0 +1,32 @@
+<Layouts.app flash={@flash} current_path={@current_path}>
+  <div class="space-y-6">
+    <section class="rounded-2xl bg-gradient-to-r from-slate-900 via-slate-800 to-indigo-900 px-6 py-6 text-white shadow">
+      <p class="text-xs font-semibold uppercase tracking-[0.28em] text-indigo-200">Operator Guide</p>
+      <h1 class="mt-2 text-3xl font-semibold tracking-tight">How it works</h1>
+      <p class="mt-2 max-w-3xl text-sm text-slate-200">
+        Maraithon is a long-running agent runtime with explicit control loops, durable storage, and observable operations.
+      </p>
+    </section>
+
+    <section class="rounded-xl bg-white p-6 shadow">
+      <h2 class="text-xl font-semibold text-slate-900">Execution Flow</h2>
+      <div class="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <%= for stage <- @stages do %>
+          <article class="rounded-xl border border-slate-200 bg-slate-50 p-4">
+            <h3 class="text-base font-semibold text-slate-900"><%= stage.title %></h3>
+            <p class="mt-2 text-sm text-slate-600"><%= stage.description %></p>
+          </article>
+        <% end %>
+      </div>
+    </section>
+
+    <section class="rounded-xl bg-white p-6 shadow">
+      <h2 class="text-xl font-semibold text-slate-900">Engineering Principles</h2>
+      <ul class="mt-4 space-y-2 text-sm text-slate-700">
+        <li :for={principle <- @principles} class="rounded-lg bg-slate-50 px-3 py-2">
+          <%= principle %>
+        </li>
+      </ul>
+    </section>
+  </div>
+</Layouts.app>

@@ -181,9 +181,7 @@ defmodule MaraithonWeb.DashboardLiveTest do
     test "renders health and logs sections", %{conn: conn} do
       {:ok, view, _html} = live(conn, "/")
 
-      assert has_element?(view, "h2", "Connections")
-      assert has_element?(view, "h2", "Connected Accounts")
-      assert has_element?(view, "h2", "OAuth Configuration")
+      assert has_element?(view, "h2", "Connectors")
       assert has_element?(view, "h2", "Health & Monitoring")
       assert has_element?(view, "h3", "Operational Logs")
       assert has_element?(view, "h3", "Failures & Stale Work")
@@ -191,16 +189,13 @@ defmodule MaraithonWeb.DashboardLiveTest do
       assert has_element?(view, "h3", "Fly.io Platform Logs")
     end
 
-    test "renders OAuth setup checklist content", %{conn: conn} do
+    test "shows connectors are available from the dedicated tab", %{conn: conn} do
       {:ok, _view, html} = live(conn, "/")
 
-      assert html =~ "Google Workspace"
-      assert html =~ "GitHub"
-      assert html =~ "Notion"
-      assert html =~ "GOOGLE_REDIRECT_URI"
-      assert html =~ "GITHUB_CLIENT_ID"
-      assert html =~ "OAuth callback"
-      assert html =~ "Google Contacts read-only People API access"
+      assert html =~
+               "Connected Accounts and OAuth configuration now live in the dedicated Connectors tab."
+
+      assert html =~ "Open Connectors"
     end
 
     test "renders recent raw logs", %{conn: conn} do
