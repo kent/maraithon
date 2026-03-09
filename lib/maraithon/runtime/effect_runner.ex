@@ -8,10 +8,9 @@ defmodule Maraithon.Runtime.EffectRunner do
   import Ecto.Query
   alias Maraithon.Repo
   alias Maraithon.Effects.Effect
-  alias Maraithon.LLM
   alias Maraithon.Runtime.Config, as: RuntimeConfig
   alias Maraithon.Runtime.Dispatch
-  alias Maraithon.Tools
+  alias Maraithon.Runtime.Effects.CommandFactory
 
   require Logger
 
@@ -126,12 +125,7 @@ defmodule Maraithon.Runtime.EffectRunner do
   defp execute_effect(effect) do
     Logger.info("Executing effect #{effect.id}", effect_id: effect.id, type: effect.effect_type)
 
-    result =
-      case effect.effect_type do
-        "llm_call" -> execute_llm_call(effect)
-        "tool_call" -> execute_tool_call(effect)
-        _ -> {:error, "unknown_effect_type"}
-      end
+    result = execute_with_command(effect)
 
     case result do
       {:ok, data} ->
@@ -152,48 +146,12 @@ defmodule Maraithon.Runtime.EffectRunner do
     result
   end
 
-  defp execute_llm_call(effect) do
-    params = effect.params
-    _timeout = params["timeout_ms"] || 120_000
-
-    Logger.info("Starting LLM call for effect #{effect.id}",
-      agent_id: effect.agent_id,
-      effect_id: effect.id
-    )
-
-    try do
-      provider = LLM.provider()
-      result = provider.complete(params)
-
-      case result do
-        {:ok, data} ->
-          Logger.info("LLM call succeeded",
-            effect_id: effect.id,
-            model: data.model,
-            tokens: data.usage.total_tokens,
-            cost: data.usage.total_cost
-          )
-
-          result
-
-        {:error, reason} ->
-          Logger.warning("LLM call failed", effect_id: effect.id, reason: inspect(reason))
-          result
-      end
-    catch
-      :exit, {:timeout, _} ->
-        Logger.warning("LLM call timed out", effect_id: effect.id)
-        {:error, "timeout"}
-    end
-  end
-
-  defp execute_tool_call(effect) do
-    tool_name = effect.params["tool"]
-    args = effect.params["args"] || %{}
-
-    case Tools.execute(tool_name, args) do
-      {:ok, result} -> {:ok, result}
-      {:error, reason} -> {:error, reason}
+  defp execute_with_command(effect) do
+    with {:ok, command_module} <- CommandFactory.fetch(effect.effect_type) do
+      command_module.execute(effect)
+    else
+      {:error, :unknown_effect_type} ->
+        {:error, "unknown_effect_type"}
     end
   end
 
