@@ -88,6 +88,8 @@ config :maraithon, Maraithon.Runtime,
     String.to_integer(System.get_env("SCHEDULER_POLL_INTERVAL_MS", "5000")),
   scheduler_dispatch_timeout_ms:
     String.to_integer(System.get_env("SCHEDULER_DISPATCH_TIMEOUT_MS", "60000")),
+  bootstrap_retry_interval_ms:
+    String.to_integer(System.get_env("BOOTSTRAP_RETRY_INTERVAL_MS", "5000")),
   health_report_interval_ms:
     String.to_integer(System.get_env("HEALTH_REPORT_INTERVAL_MS", "60000")),
   tool_allowed_paths: tool_allowed_paths,
@@ -167,6 +169,25 @@ config :maraithon, :telegram,
   webhook_secret_path: System.get_env("TELEGRAM_WEBHOOK_SECRET", ""),
   allow_unsigned: allow_unsigned
 
+fly_log_apps =
+  System.get_env("FLY_LOG_APPS", System.get_env("FLY_APP_NAME", ""))
+  |> String.split(",", trim: true)
+  |> Enum.map(&String.trim/1)
+  |> Enum.reject(&(&1 == ""))
+
+fly_log_region =
+  case System.get_env("FLY_LOG_REGION", "") do
+    "" -> nil
+    value -> value
+  end
+
+config :maraithon, Maraithon.FlyLogs,
+  api_token: System.get_env("FLY_API_TOKEN", ""),
+  api_base_url: System.get_env("FLY_API_BASE_URL", "https://api.fly.io/api/v1"),
+  apps: fly_log_apps,
+  region: fly_log_region,
+  receive_timeout_ms: String.to_integer(System.get_env("FLY_LOG_TIMEOUT_MS", "15000"))
+
 # =============================================================================
 # Production Configuration
 # =============================================================================
@@ -196,7 +217,11 @@ if config_env() == :prod do
         password: password,
         database: database,
         socket: socket_dir <> "/.s.PGSQL.5432",
-        pool_size: String.to_integer(System.get_env("POOL_SIZE", "5"))
+        pool_size: String.to_integer(System.get_env("POOL_SIZE", "5")),
+        queue_target: String.to_integer(System.get_env("DB_QUEUE_TARGET_MS", "5000")),
+        queue_interval: String.to_integer(System.get_env("DB_QUEUE_INTERVAL_MS", "10000")),
+        timeout: String.to_integer(System.get_env("DB_QUERY_TIMEOUT_MS", "15000")),
+        connect_timeout: String.to_integer(System.get_env("DB_CONNECT_TIMEOUT_MS", "30000"))
       ]
     else
       # Direct connection (local/testing)
@@ -206,7 +231,11 @@ if config_env() == :prod do
         url: database_url,
         pool_size: String.to_integer(System.get_env("POOL_SIZE", "10")),
         socket_options: maybe_ipv6,
-        ssl: System.get_env("DATABASE_SSL", "false") == "true"
+        ssl: System.get_env("DATABASE_SSL", "false") == "true",
+        queue_target: String.to_integer(System.get_env("DB_QUEUE_TARGET_MS", "5000")),
+        queue_interval: String.to_integer(System.get_env("DB_QUEUE_INTERVAL_MS", "10000")),
+        timeout: String.to_integer(System.get_env("DB_QUERY_TIMEOUT_MS", "15000")),
+        connect_timeout: String.to_integer(System.get_env("DB_CONNECT_TIMEOUT_MS", "30000"))
       ]
     end
 

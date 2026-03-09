@@ -64,6 +64,7 @@ defmodule MaraithonWeb.Router do
     get "/agents/:id/spend", AgentController, :spend
     get "/admin/dashboard", AdminController, :dashboard
     get "/admin/agents/:id/inspection", AdminController, :agent_inspection
+    get "/admin/fly/logs", AdminController, :fly_logs
 
     # Spend tracking
     get "/spend", AgentController, :total_spend

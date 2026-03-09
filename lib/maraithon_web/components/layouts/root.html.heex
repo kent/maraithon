@@ -9,6 +9,24 @@
     <script defer src="https://unpkg.com/phoenix@1.7.10/priv/static/phoenix.min.js"></script>
     <script defer src="https://unpkg.com/phoenix_live_view@1.0.0/priv/static/phoenix_live_view.min.js"></script>
     <script>
+      window.addEventListener("DOMContentLoaded", () => {
+        const csrfToken = document
+          .querySelector("meta[name='csrf-token']")
+          ?.getAttribute("content")
+
+        if (!window.Phoenix || !window.LiveView || !csrfToken) {
+          console.error("LiveView bootstrap skipped: missing runtime dependencies")
+          return
+        }
+
+        const liveSocket = new window.LiveView.LiveSocket("/live", window.Phoenix.Socket, {
+          params: {_csrf_token: csrfToken}
+        })
+
+        liveSocket.connect()
+        window.liveSocket = liveSocket
+      })
+
       window.addEventListener("phx:page-loading-start", info => console.log("loading", info))
       window.addEventListener("phx:page-loading-stop", info => console.log("loaded", info))
     </script>

@@ -5,19 +5,24 @@ defmodule Maraithon.Admin do
 
   import Ecto.Query
 
+  alias Maraithon.Agents
   alias Maraithon.Agents.Agent
   alias Maraithon.Effects.Effect
   alias Maraithon.Events.Event
+  alias Maraithon.FlyLogs
   alias Maraithon.Health
   alias Maraithon.LogBuffer
   alias Maraithon.Repo
+  alias Maraithon.Runtime
   alias Maraithon.Runtime.ScheduledJob
+  alias Maraithon.Spend
 
   @default_activity_limit 40
   @default_failure_limit 20
   @default_log_limit 200
   @default_effect_limit 20
   @default_job_limit 20
+  @default_event_limit 50
   @default_agent_log_limit 80
   @stale_dispatch_seconds 300
 
@@ -36,6 +41,47 @@ defmodule Maraithon.Admin do
       recent_failures: recent_failures(failure_limit),
       recent_logs: recent_logs(log_limit)
     }
+  end
+
+  @doc """
+  Returns a control-center snapshot that degrades gracefully when the database
+  is unavailable.
+  """
+  def safe_control_center_snapshot(opts \\ []) do
+    activity_limit = Keyword.get(opts, :activity_limit, @default_activity_limit)
+    failure_limit = Keyword.get(opts, :failure_limit, @default_failure_limit)
+    log_limit = Keyword.get(opts, :log_limit, @default_log_limit)
+    health = Keyword.get_lazy(opts, :health, &Health.check/0)
+    recent_logs = recent_logs(log_limit)
+
+    db_fetcher =
+      Keyword.get(opts, :db_fetcher, fn ->
+        %{
+          agents: Agents.list_agents(),
+          total_spend: Spend.get_total_spend(),
+          queue_metrics: queue_metrics(),
+          recent_activity: recent_activity(activity_limit),
+          recent_failures: recent_failures(failure_limit)
+        }
+      end)
+
+    if database_available?(health) do
+      case safe_fetch(db_fetcher) do
+        {:ok, snapshot} ->
+          {:ok,
+           Map.merge(snapshot, %{
+             health: health,
+             recent_logs: recent_logs,
+             degraded: false,
+             errors: []
+           })}
+
+        {:error, reason} ->
+          {:degraded, fallback_control_center_snapshot(health, recent_logs, reason)}
+      end
+    else
+      {:degraded, fallback_control_center_snapshot(health, recent_logs, :database_unavailable)}
+    end
   end
 
   @doc """
@@ -118,6 +164,65 @@ defmodule Maraithon.Admin do
     }
   end
 
+  @doc """
+  Returns an agent inspection snapshot that degrades gracefully when the
+  database is unavailable.
+  """
+  def safe_agent_snapshot(agent_id, opts \\ []) when is_binary(agent_id) do
+    event_limit = Keyword.get(opts, :event_limit, @default_event_limit)
+    effect_limit = Keyword.get(opts, :effect_limit, @default_effect_limit)
+    job_limit = Keyword.get(opts, :job_limit, @default_job_limit)
+    log_limit = Keyword.get(opts, :log_limit, @default_agent_log_limit)
+    health = Keyword.get_lazy(opts, :health, &Health.check/0)
+
+    fetcher =
+      Keyword.get(opts, :fetcher, fn ->
+        case Runtime.get_agent_status(agent_id) do
+          {:ok, agent_status} ->
+            {:ok, events} = Runtime.get_events(agent_id, limit: event_limit)
+
+            {:ok,
+             %{
+               agent: agent_status,
+               spend: Spend.get_agent_spend(agent_id),
+               events: events,
+               inspection:
+                 agent_inspection(
+                   agent_id,
+                   effect_limit: effect_limit,
+                   job_limit: job_limit,
+                   log_limit: log_limit
+                 )
+             }}
+
+          {:error, :not_found} ->
+            {:error, :not_found}
+        end
+      end)
+
+    if database_available?(health) do
+      case safe_fetch(fetcher) do
+        {:ok, {:ok, snapshot}} ->
+          {:ok, Map.merge(snapshot, %{degraded: false, errors: []})}
+
+        {:ok, {:error, :not_found}} ->
+          {:error, :not_found}
+
+        {:error, reason} ->
+          {:degraded, fallback_agent_snapshot(agent_id, log_limit, reason)}
+      end
+    else
+      {:degraded, fallback_agent_snapshot(agent_id, log_limit, :database_unavailable)}
+    end
+  end
+
+  @doc """
+  Returns recent Fly platform logs for the configured app set.
+  """
+  def fly_logs(opts \\ []) do
+    FlyLogs.recent_logs(opts)
+  end
+
   defp count_effects_by_status(status) do
     Effect
     |> where([effect], effect.status == ^status)
@@ -178,6 +283,107 @@ defmodule Maraithon.Admin do
 
   defp timestamp_or_epoch(%{inserted_at: %DateTime{} = inserted_at}), do: inserted_at
   defp timestamp_or_epoch(_), do: DateTime.from_unix!(0)
+
+  defp database_available?(%{checks: %{database: :ok}}), do: true
+  defp database_available?(_health), do: false
+
+  defp fallback_control_center_snapshot(health, recent_logs, reason) do
+    %{
+      agents: [],
+      total_spend: empty_spend(),
+      health: health,
+      queue_metrics: empty_queue_metrics(),
+      recent_activity: [],
+      recent_failures: [],
+      recent_logs: recent_logs,
+      degraded: true,
+      errors: [control_center_error(reason)]
+    }
+  end
+
+  defp fallback_agent_snapshot(agent_id, log_limit, reason) do
+    %{
+      agent: nil,
+      spend: empty_spend(),
+      events: [],
+      inspection: %{
+        event_count: 0,
+        effect_counts: %{pending: 0, claimed: 0, completed: 0, failed: 0, cancelled: 0},
+        recent_effects: [],
+        job_counts: %{pending: 0, dispatched: 0, delivered: 0, cancelled: 0},
+        recent_jobs: [],
+        recent_logs: recent_agent_logs(agent_id, log_limit)
+      },
+      degraded: true,
+      errors: [agent_snapshot_error(reason)]
+    }
+  end
+
+  defp empty_queue_metrics do
+    %{
+      effects: %{pending: 0, claimed: 0, completed: 0, failed: 0},
+      jobs: %{pending: 0, dispatched: 0, delivered: 0, cancelled: 0}
+    }
+  end
+
+  defp empty_spend do
+    %{
+      total_cost: 0.0,
+      input_tokens: 0,
+      output_tokens: 0,
+      llm_calls: 0
+    }
+  end
+
+  defp control_center_error(:database_unavailable) do
+    %{
+      scope: "control_center",
+      message:
+        "Database-backed control-center data is temporarily unavailable. Fly and runtime logs remain available below.",
+      details: "Database health check failed."
+    }
+  end
+
+  defp control_center_error(reason) do
+    %{
+      scope: "control_center",
+      message:
+        "Database-backed control-center data is temporarily unavailable. Fly and runtime logs remain available below.",
+      details: format_failure_reason(reason)
+    }
+  end
+
+  defp agent_snapshot_error(:database_unavailable) do
+    %{
+      scope: "agent_inspection",
+      message:
+        "Selected agent inspection is temporarily unavailable while the database is degraded.",
+      details: "Database health check failed."
+    }
+  end
+
+  defp agent_snapshot_error(reason) do
+    %{
+      scope: "agent_inspection",
+      message:
+        "Selected agent inspection is temporarily unavailable while the database is degraded.",
+      details: format_failure_reason(reason)
+    }
+  end
+
+  defp safe_fetch(fun) when is_function(fun, 0) do
+    {:ok, fun.()}
+  rescue
+    exception ->
+      {:error, exception}
+  catch
+    :exit, reason ->
+      {:error, {:exit, reason}}
+  end
+
+  defp format_failure_reason({:exit, reason}), do: "exit: #{inspect(reason)}"
+  defp format_failure_reason(%_{} = exception), do: Exception.message(exception)
+  defp format_failure_reason(reason), do: inspect(reason)
 
   defp count_events(agent_id) do
     Event

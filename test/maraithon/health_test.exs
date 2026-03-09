@@ -56,5 +56,19 @@ defmodule Maraithon.HealthTest do
       assert is_integer(result.checks.uptime_seconds)
       assert result.checks.uptime_seconds >= 0
     end
+
+    test "skips agent counting when the database check fails" do
+      result =
+        Health.check(
+          database_checker: fn -> :error end,
+          agent_counter: fn ->
+            flunk("agent counts should not run when database is unavailable")
+          end
+        )
+
+      assert result.status == :unhealthy
+      assert result.checks.database == :error
+      assert result.checks.agents == %{running: 0, degraded: 0, stopped: 0}
+    end
   end
 end

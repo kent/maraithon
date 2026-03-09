@@ -441,6 +441,7 @@ When enabled, include: `Authorization: Bearer <API_BEARER_TOKEN>`.
 | `GET /api/v1/agents/:id/spend` | Get agent LLM spend |
 | `GET /api/v1/admin/agents/:id/inspection` | Deep agent inspection payload |
 | `GET /api/v1/admin/dashboard` | Fleet-wide health, queue, activity, and raw logs |
+| `GET /api/v1/admin/fly/logs` | Fly app and machine logs for platform troubleshooting |
 
 ### Events
 
@@ -476,6 +477,7 @@ When enabled, include: `Authorization: Bearer <API_BEARER_TOKEN>`.
 ## Admin Control Center
 
 The Phoenix admin interface is your browser-based operator console. It lives at `/` and `/admin` and is protected by HTTP Basic auth when `ADMIN_USERNAME` and `ADMIN_PASSWORD` are set.
+When PostgreSQL is degraded, the page now stays up in a degraded mode so Fly platform logs and in-app raw logs remain available for troubleshooting instead of crashing the dashboard.
 
 High-value workflows:
 
@@ -483,6 +485,7 @@ High-value workflows:
 - **Inspect an agent** from the registry table. The selected agent panel shows status, spend, prompt, config snapshot, recent events, queued effects, scheduled jobs, and agent-scoped raw logs.
 - **Operate a running agent** from the operator console. Use it to send direct instructions into the agent runtime without opening another tool surface.
 - **Monitor the fleet** from the lower panels. Health, queue depth, failures, operational activity, and raw runtime logs are all visible from the same page.
+- **Troubleshoot Fly deployment issues** from the Fly.io Platform Logs panel. This surfaces runner, machine, and app logs from Fly itself, including machine stops, restarts, and DB machine problems when configured.
 
 Recommended first workflow:
 
@@ -538,11 +541,14 @@ Fleet inspection:
 ```bash
 mix maraithon.admin dashboard
 mix maraithon.admin dashboard --activity-limit 20 --log-limit 100
+mix maraithon.admin fly-logs
+mix maraithon.admin fly-logs --app maraithon-db --limit 50
 ```
 
 The CLI is the terminal equivalent of the admin UI:
 
 - `mix maraithon.admin dashboard` = fleet health, queue, failures, logs
+- `mix maraithon.admin fly-logs` = Fly platform logs from the configured app set
 - `mix maraithon.agent create|update|start|stop|delete` = agent CRUD and lifecycle
 - `mix maraithon.agent inspect` = deep inspection for one agent
 - `mix maraithon.agent ask` = operator console from the terminal
@@ -572,6 +578,9 @@ flyctl secrets set -a maraithon \
   ADMIN_PASSWORD="replace-with-long-random-password" \
   API_BEARER_TOKEN="replace-with-long-random-token" \
   ANTHROPIC_API_KEY="sk-ant-..." \
+  FLY_API_TOKEN="replace-with-fly-token" \
+  FLY_LOG_APPS="maraithon,maraithon-db" \
+  FLY_LOG_REGION="yyz" \
   POOL_SIZE="5"
 
 flyctl deploy -a maraithon
@@ -609,7 +618,7 @@ Never commit deployment secrets.
 - Keep production secrets in Fly secrets
 - Keep local operator credentials in a file outside the repo, such as `~/.config/maraithon/fly-prod.env`
 - Do not commit `.env`, `.env.*`, service-account JSON, or copied API tokens
-- Treat `API_BEARER_TOKEN`, `ADMIN_PASSWORD`, `DATABASE_URL`, `CLOAK_KEY`, and third-party OAuth secrets as production credentials
+- Treat `API_BEARER_TOKEN`, `ADMIN_PASSWORD`, `DATABASE_URL`, `CLOAK_KEY`, `FLY_API_TOKEN`, and third-party OAuth secrets as production credentials
 
 ## Configuration
 
@@ -623,6 +632,9 @@ export ADMIN_PASSWORD="replace-with-long-random-password"
 export API_BEARER_TOKEN="replace-with-long-random-token"
 export SECRET_KEY_BASE="$(mix phx.gen.secret)"
 export CLOAK_KEY="$(openssl rand -base64 32)"
+export FLY_API_TOKEN="replace-with-fly-token"
+export FLY_LOG_APPS="maraithon,maraithon-db"
+export FLY_LOG_REGION="yyz"
 export POOL_SIZE="5"
 
 # Optional

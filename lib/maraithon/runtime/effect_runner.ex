@@ -9,6 +9,7 @@ defmodule Maraithon.Runtime.EffectRunner do
   alias Maraithon.Repo
   alias Maraithon.Effects.Effect
   alias Maraithon.Runtime.Config, as: RuntimeConfig
+  alias Maraithon.Runtime.DbResilience
   alias Maraithon.Runtime.Dispatch
   alias Maraithon.Runtime.Effects.CommandFactory
 
@@ -40,33 +41,41 @@ defmodule Maraithon.Runtime.EffectRunner do
        running: %{},
        poll_interval_ms: poll_interval_ms,
        claim_timeout_ms: claim_timeout_ms,
-       batch_size: batch_size
+       batch_size: batch_size,
+       poll_retry_attempts: 0
      }}
   end
 
   @impl true
   def handle_info(:poll, state) do
-    # Reclaim stale effects
-    reclaim_stale_effects(state.claim_timeout_ms)
+    case DbResilience.with_database("effect runner poll", fn ->
+           reclaim_stale_effects(state.claim_timeout_ms)
+           fetch_pending_effects(state.batch_size)
+         end) do
+      {:ok, effects} ->
+        running =
+          Enum.reduce(effects, state.running, fn effect, acc ->
+            case claim_effect(effect) do
+              {:ok, claimed} ->
+                execute_effect_async(claimed)
+                Map.put(acc, effect.id, effect)
 
-    # Fetch pending effects
-    effects = fetch_pending_effects(state.batch_size)
+              :already_claimed ->
+                acc
 
-    # Claim and execute each
-    running =
-      Enum.reduce(effects, state.running, fn effect, acc ->
-        case claim_effect(effect) do
-          {:ok, claimed} ->
-            execute_effect_async(claimed)
-            Map.put(acc, effect.id, effect)
+              {:error, _reason} ->
+                acc
+            end
+          end)
 
-          :already_claimed ->
-            acc
-        end
-      end)
+        schedule_poll(state.poll_interval_ms)
+        {:noreply, %{state | running: running, poll_retry_attempts: 0}}
 
-    schedule_poll(state.poll_interval_ms)
-    {:noreply, %{state | running: running}}
+      {:error, _reason} ->
+        retry_in_ms = DbResilience.backoff_ms(state.poll_interval_ms, state.poll_retry_attempts)
+        schedule_poll(retry_in_ms)
+        {:noreply, %{state | poll_retry_attempts: state.poll_retry_attempts + 1}}
+    end
   end
 
   @impl true
@@ -97,19 +106,29 @@ defmodule Maraithon.Runtime.EffectRunner do
   defp claim_effect(effect) do
     node_id = node() |> to_string()
 
-    case Repo.update_all(
-           from(e in Effect,
-             where: e.id == ^effect.id,
-             where: e.status == "pending"
-           ),
-           set: [
-             status: "claimed",
-             claimed_by: node_id,
-             claimed_at: DateTime.utc_now()
-           ]
-         ) do
-      {1, _} -> {:ok, Repo.get!(Effect, effect.id)}
-      {0, _} -> :already_claimed
+    case DbResilience.with_database("effect runner claim effect", fn ->
+           Repo.update_all(
+             from(e in Effect,
+               where: e.id == ^effect.id,
+               where: e.status == "pending"
+             ),
+             set: [
+               status: "claimed",
+               claimed_by: node_id,
+               claimed_at: DateTime.utc_now()
+             ]
+           )
+         end) do
+      {:ok, {1, _}} ->
+        DbResilience.with_database("effect runner load claimed effect", fn ->
+          Repo.get!(Effect, effect.id)
+        end)
+
+      {:ok, {0, _}} ->
+        :already_claimed
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -129,8 +148,10 @@ defmodule Maraithon.Runtime.EffectRunner do
 
     case result do
       {:ok, data} ->
-        mark_completed(effect, data)
-        notify_agent(effect.agent_id, effect.id, {:ok, data})
+        case mark_completed(effect, data) do
+          :ok -> notify_agent(effect.agent_id, effect.id, {:ok, data})
+          {:error, _reason} -> :ok
+        end
 
       {:error, reason} ->
         attempts = effect.attempts + 1
@@ -138,8 +159,10 @@ defmodule Maraithon.Runtime.EffectRunner do
         if attempts < effect.max_attempts do
           mark_pending_retry(effect, reason, attempts)
         else
-          mark_failed(effect, reason)
-          notify_agent(effect.agent_id, effect.id, {:error, reason})
+          case mark_failed(effect, reason) do
+            :ok -> notify_agent(effect.agent_id, effect.id, {:error, reason})
+            {:error, _reason} -> :ok
+          end
         end
     end
 
@@ -156,47 +179,62 @@ defmodule Maraithon.Runtime.EffectRunner do
   end
 
   defp mark_completed(effect, result) do
-    Repo.update_all(
-      from(e in Effect, where: e.id == ^effect.id),
-      set: [
-        status: "completed",
-        result: result,
-        claimed_by: nil,
-        claimed_at: nil,
-        updated_at: DateTime.utc_now()
-      ]
-    )
+    case DbResilience.with_database("effect runner mark completed", fn ->
+           Repo.update_all(
+             from(e in Effect, where: e.id == ^effect.id),
+             set: [
+               status: "completed",
+               result: result,
+               claimed_by: nil,
+               claimed_at: nil,
+               updated_at: DateTime.utc_now()
+             ]
+           )
+         end) do
+      {:ok, _} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
   end
 
   defp mark_pending_retry(effect, reason, attempts) do
     backoff_ms = calculate_backoff(attempts)
     retry_after = DateTime.add(DateTime.utc_now(), backoff_ms, :millisecond)
 
-    Repo.update_all(
-      from(e in Effect, where: e.id == ^effect.id),
-      set: [
-        status: "pending",
-        claimed_by: nil,
-        claimed_at: nil,
-        attempts: attempts,
-        retry_after: retry_after,
-        error: inspect(reason),
-        updated_at: DateTime.utc_now()
-      ]
-    )
+    case DbResilience.with_database("effect runner mark retry", fn ->
+           Repo.update_all(
+             from(e in Effect, where: e.id == ^effect.id),
+             set: [
+               status: "pending",
+               claimed_by: nil,
+               claimed_at: nil,
+               attempts: attempts,
+               retry_after: retry_after,
+               error: inspect(reason),
+               updated_at: DateTime.utc_now()
+             ]
+           )
+         end) do
+      {:ok, _} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
   end
 
   defp mark_failed(effect, reason) do
-    Repo.update_all(
-      from(e in Effect, where: e.id == ^effect.id),
-      set: [
-        status: "failed",
-        error: inspect(reason),
-        claimed_by: nil,
-        claimed_at: nil,
-        updated_at: DateTime.utc_now()
-      ]
-    )
+    case DbResilience.with_database("effect runner mark failed", fn ->
+           Repo.update_all(
+             from(e in Effect, where: e.id == ^effect.id),
+             set: [
+               status: "failed",
+               error: inspect(reason),
+               claimed_by: nil,
+               claimed_at: nil,
+               updated_at: DateTime.utc_now()
+             ]
+           )
+         end) do
+      {:ok, _} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
   end
 
   defp notify_agent(agent_id, effect_id, result) do

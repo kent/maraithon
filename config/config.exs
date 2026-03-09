@@ -58,6 +58,13 @@ config :phoenix, :json_library, Jason
 
 config :maraithon, Maraithon.LogBuffer, max_entries: 500
 
+config :maraithon, Maraithon.FlyLogs,
+  api_token: "",
+  api_base_url: "https://api.fly.io/api/v1",
+  apps: [],
+  region: nil,
+  receive_timeout_ms: 15_000
+
 # Import environment specific config. This must remain at the bottom
 # of this file so it overrides the configuration defined above.
 import_config "#{config_env()}.exs"

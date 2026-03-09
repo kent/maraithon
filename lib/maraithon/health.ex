@@ -8,12 +8,29 @@ defmodule Maraithon.Health do
 
   require Logger
 
+  @database_timeout_ms 1_500
+  @empty_agent_counts %{running: 0, degraded: 0, stopped: 0}
+
   @doc """
   Perform a comprehensive health check.
   """
-  def check do
-    db_status = check_database()
-    agent_counts = count_agents()
+  def check(opts \\ []) do
+    db_status =
+      case Keyword.get(opts, :database_checker) do
+        fun when is_function(fun, 0) -> fun.()
+        nil -> check_database(opts)
+      end
+
+    agent_counts =
+      if db_status == :ok do
+        case Keyword.get(opts, :agent_counter) do
+          fun when is_function(fun, 0) -> fun.()
+          nil -> count_agents()
+        end
+      else
+        @empty_agent_counts
+      end
+
     memory = get_memory_usage()
     uptime = get_uptime()
 
@@ -36,8 +53,11 @@ defmodule Maraithon.Health do
     }
   end
 
-  defp check_database do
-    case Repo.query("SELECT 1") do
+  defp check_database(opts) do
+    timeout_ms = Keyword.get(opts, :database_timeout_ms, @database_timeout_ms)
+    pool_timeout_ms = Keyword.get(opts, :database_pool_timeout_ms, timeout_ms)
+
+    case Repo.query("SELECT 1", [], timeout: timeout_ms, pool_timeout: pool_timeout_ms) do
       {:ok, _} ->
         :ok
 
@@ -59,7 +79,7 @@ defmodule Maraithon.Health do
         stopped: Agents.count_by_status("stopped")
       }
     rescue
-      _ -> %{running: 0, degraded: 0, stopped: 0}
+      _ -> @empty_agent_counts
     end
   end
 

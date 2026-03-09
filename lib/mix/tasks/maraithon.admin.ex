@@ -10,7 +10,11 @@ defmodule Mix.Tasks.Maraithon.Admin do
     token: :string,
     activity_limit: :string,
     failure_limit: :string,
-    log_limit: :string
+    log_limit: :string,
+    app: :string,
+    region: :string,
+    limit: :string,
+    next_token: :string
   ]
 
   @impl true
@@ -32,6 +36,31 @@ defmodule Mix.Tasks.Maraithon.Admin do
           |> maybe_put_param("log_limit", opts[:log_limit])
 
         case Client.get("/api/v1/admin/dashboard", client_opts(opts, params)) do
+          {:ok, body} ->
+            Mix.shell().info(Jason.encode!(body, pretty: true))
+
+          {:error, message} when is_binary(message) ->
+            Mix.raise(message)
+
+          {:error, {:http_status, status, body}} ->
+            Mix.raise("Request failed with status #{status}: #{render_body(body)}")
+
+          {:error, {:request_failed, exception}} ->
+            Mix.raise("Request failed: #{Exception.message(exception)}")
+
+          {:error, {:startup_failed, reason}} ->
+            Mix.raise("Failed to start CLI client: #{inspect(reason)}")
+        end
+
+      ["fly-logs"] ->
+        params =
+          %{}
+          |> maybe_put_param("app", opts[:app])
+          |> maybe_put_param("region", opts[:region])
+          |> maybe_put_param("limit", opts[:limit])
+          |> maybe_put_param("next_token", opts[:next_token])
+
+        case Client.get("/api/v1/admin/fly/logs", client_opts(opts, params)) do
           {:ok, body} ->
             Mix.shell().info(Jason.encode!(body, pretty: true))
 
@@ -78,6 +107,7 @@ defmodule Mix.Tasks.Maraithon.Admin do
     """
     Usage:
       mix maraithon.admin dashboard [--activity-limit N] [--failure-limit N] [--log-limit N]
+      mix maraithon.admin fly-logs [--app APP] [--region REGION] [--limit N] [--next-token TOKEN]
 
     Shared configuration:
       --base-url URL     Override MARAITHON_BASE_URL

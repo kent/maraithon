@@ -5,7 +5,6 @@ defmodule MaraithonWeb.DashboardLive do
   alias Maraithon.Agents
   alias Maraithon.Behaviors
   alias Maraithon.Runtime
-  alias Maraithon.Spend
 
   @refresh_interval 5_000
   @event_limit 50
@@ -44,30 +43,31 @@ defmodule MaraithonWeb.DashboardLive do
         },
         recent_activity: [],
         recent_failures: [],
-        recent_logs: []
+        recent_logs: [],
+        fly_logs: empty_fly_logs(),
+        dashboard_errors: [],
+        inspection_errors: []
       )
-      |> refresh_dashboard()
+      |> refresh_dashboard(include_fly_logs: true)
 
     {:ok, socket}
   end
 
   @impl true
   def handle_params(%{"id" => id}, _uri, socket) do
-    case Runtime.get_agent_status(id) do
-      {:ok, _agent_status} ->
-        {:noreply,
-         socket
-         |> refresh_selected_agent(id)
-         |> assign(page_title: "Agent #{String.slice(id, 0, 8)}")}
+    case refresh_selected_agent(socket, id) do
+      {:ok, socket} ->
+        {:noreply, assign(socket, page_title: "Agent #{String.slice(id, 0, 8)}")}
 
-      {:error, :not_found} ->
+      {:not_found, socket} ->
         {:noreply,
          socket
          |> assign(
            selected_agent: nil,
            events: [],
            agent_spend: nil,
-           inspection: empty_inspection()
+           inspection: empty_inspection(),
+           inspection_errors: []
          )
          |> push_navigate(to: "/")}
     end
@@ -80,6 +80,7 @@ defmodule MaraithonWeb.DashboardLive do
        events: [],
        agent_spend: nil,
        inspection: empty_inspection(),
+       inspection_errors: [],
        page_title: "Control Center"
      )}
   end
@@ -91,7 +92,14 @@ defmodule MaraithonWeb.DashboardLive do
 
   @impl true
   def handle_event("refresh_now", _params, socket) do
-    {:noreply, socket |> refresh_dashboard() |> put_flash(:info, "Dashboard refreshed")}
+    {:noreply,
+     socket
+     |> refresh_dashboard(include_fly_logs: true)
+     |> put_flash(:info, "Dashboard refreshed")}
+  end
+
+  def handle_event("refresh_fly_logs", _params, socket) do
+    {:noreply, socket |> refresh_fly_logs() |> put_flash(:info, "Fly logs refreshed")}
   end
 
   def handle_event("new_agent", _params, socket) do
@@ -267,6 +275,19 @@ defmodule MaraithonWeb.DashboardLive do
           </div>
         </div>
       </section>
+
+      <%= if @dashboard_errors != [] do %>
+        <section class="rounded-xl border border-amber-200 bg-amber-50 px-4 py-4 shadow-sm">
+          <div class="space-y-2">
+            <%= for error <- @dashboard_errors do %>
+              <div>
+                <p class="text-sm font-medium text-amber-900"><%= error.message %></p>
+                <p class="mt-1 text-xs text-amber-800"><%= error.details %></p>
+              </div>
+            <% end %>
+          </div>
+        </section>
+      <% end %>
 
       <section class="grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-6">
         <.stat_card title="Total Agents" value={length(@agents)} />
@@ -632,6 +653,16 @@ defmodule MaraithonWeb.DashboardLive do
               Selected agent inspection across runtime, spend, and configuration.
             </p>
           </div>
+          <%= if @inspection_errors != [] do %>
+            <div class="border-b border-amber-200 bg-amber-50 px-4 py-3 sm:px-6">
+              <%= for error <- @inspection_errors do %>
+                <div class="text-sm text-amber-900">
+                  <p class="font-medium"><%= error.message %></p>
+                  <p class="mt-1 text-xs text-amber-800"><%= error.details %></p>
+                </div>
+              <% end %>
+            </div>
+          <% end %>
           <%= if @selected_agent do %>
             <div class="space-y-4 px-4 py-5 sm:px-6">
               <div class="flex items-start justify-between gap-3">
@@ -1041,6 +1072,70 @@ defmodule MaraithonWeb.DashboardLive do
           <% end %>
         </div>
       </section>
+
+      <section class="overflow-hidden rounded-xl bg-slate-950 shadow">
+        <div class="border-b border-slate-800 px-4 py-5 sm:px-6">
+          <div class="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h3 class="text-lg font-medium leading-6 text-slate-100">Fly.io Platform Logs</h3>
+              <p class="mt-1 text-sm text-slate-400">
+                App, machine, and runner logs fetched from Fly for full production troubleshooting.
+              </p>
+            </div>
+            <button
+              type="button"
+              phx-click="refresh_fly_logs"
+              class="inline-flex items-center rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-xs font-medium text-slate-100 hover:bg-slate-800"
+            >
+              Refresh Fly Logs
+            </button>
+          </div>
+          <%= if @fly_logs.apps != [] do %>
+            <div class="mt-3 flex flex-wrap gap-2">
+              <%= for app <- @fly_logs.apps do %>
+                <span class="rounded-full bg-slate-800 px-2.5 py-1 text-[11px] font-medium text-slate-300">
+                  <%= app %>
+                </span>
+              <% end %>
+            </div>
+          <% end %>
+        </div>
+        <div class="max-h-[32rem] overflow-y-auto px-4 py-4 font-mono text-[11px] leading-5 sm:px-6">
+          <%= for error <- @fly_logs.errors do %>
+            <div class="mb-3 rounded-md border border-red-900 bg-red-950/50 px-3 py-2 text-red-200">
+              <%= if error[:app] do %>
+                <span class="mr-2 font-semibold"><%= error.app %></span>
+              <% end %>
+              <span><%= error.message %></span>
+            </div>
+          <% end %>
+
+          <%= if not @fly_logs.available and @fly_logs.apps == [] do %>
+            <p class="text-sm text-slate-500">
+              Configure `FLY_API_TOKEN` and `FLY_LOG_APPS` to load Fly platform logs in-app.
+            </p>
+          <% else %>
+            <%= if @fly_logs.logs == [] do %>
+              <p class="text-sm text-slate-500">No Fly logs returned yet.</p>
+            <% else %>
+              <%= for log <- @fly_logs.logs do %>
+                <div class="grid grid-cols-[auto_auto_1fr] gap-3 border-b border-slate-900 py-2">
+                  <span class="text-slate-500"><%= format_log_timestamp(log.timestamp) %></span>
+                  <span class={["font-semibold uppercase tracking-wide", log_level_class(log.level)]}>
+                    <%= log.level %>
+                  </span>
+                  <div class="min-w-0">
+                    <%= if metadata = fly_log_metadata_preview(log) do %>
+                      <span class="mr-2 text-slate-500"><%= metadata %></span>
+                    <% end %>
+                    <span class="break-words whitespace-pre-wrap text-slate-100"><%= log.message %></span>
+                  </div>
+                </div>
+              <% end %>
+            <% end %>
+          <% end %>
+        </div>
+      </section>
       </div>
     </Layouts.app>
     """
@@ -1140,59 +1235,102 @@ defmodule MaraithonWeb.DashboardLive do
     end
   end
 
-  defp refresh_dashboard(socket) do
-    agents = Agents.list_agents()
-    total_spend = Spend.get_total_spend()
+  defp refresh_dashboard(socket, opts \\ []) do
+    socket =
+      case Admin.safe_control_center_snapshot(
+             activity_limit: @activity_limit,
+             failure_limit: @failure_limit
+           ) do
+        {:ok, snapshot} ->
+          assign(socket,
+            agents: snapshot.agents,
+            total_spend: snapshot.total_spend,
+            health: snapshot.health,
+            queue_metrics: snapshot.queue_metrics,
+            recent_activity: snapshot.recent_activity,
+            recent_failures: snapshot.recent_failures,
+            recent_logs: snapshot.recent_logs,
+            dashboard_errors: snapshot.errors
+          )
 
-    snapshot =
-      Admin.dashboard_snapshot(activity_limit: @activity_limit, failure_limit: @failure_limit)
+        {:degraded, snapshot} ->
+          assign(socket,
+            health: snapshot.health,
+            recent_logs: snapshot.recent_logs,
+            dashboard_errors: snapshot.errors
+          )
+      end
 
     socket =
-      assign(socket,
-        agents: agents,
-        total_spend: total_spend,
-        health: snapshot.health,
-        queue_metrics: snapshot.queue_metrics,
-        recent_activity: snapshot.recent_activity,
-        recent_failures: snapshot.recent_failures,
-        recent_logs: snapshot.recent_logs
-      )
+      if Keyword.get(opts, :include_fly_logs, false) do
+        refresh_fly_logs(socket)
+      else
+        socket
+      end
 
     if socket.assigns.selected_agent do
-      refresh_selected_agent(socket, socket.assigns.selected_agent.id)
+      case refresh_selected_agent(socket, socket.assigns.selected_agent.id,
+             health: socket.assigns.health
+           ) do
+        {:ok, socket} -> socket
+        {:not_found, socket} -> socket
+      end
     else
       socket
     end
   end
 
-  defp refresh_selected_agent(socket, id) do
-    case Runtime.get_agent_status(id) do
-      {:ok, agent_status} ->
-        {:ok, events} = Runtime.get_events(id, limit: @event_limit)
-        agent_spend = Spend.get_agent_spend(id)
-        inspection = Admin.agent_inspection(id)
+  defp refresh_selected_agent(socket, id, opts \\ []) do
+    case Admin.safe_agent_snapshot(
+           id,
+           event_limit: @event_limit,
+           log_limit: 80,
+           health: Keyword.get(opts, :health, socket.assigns.health)
+         ) do
+      {:ok, snapshot} ->
+        {:ok,
+         assign(socket,
+           selected_agent: snapshot.agent,
+           events: snapshot.events,
+           agent_spend: snapshot.spend,
+           inspection: snapshot.inspection,
+           inspection_errors: snapshot.errors
+         )}
 
-        assign(socket,
-          selected_agent: agent_status,
-          events: events,
-          agent_spend: agent_spend,
-          inspection: inspection
-        )
+      {:degraded, snapshot} ->
+        inspection =
+          if socket.assigns.selected_agent && socket.assigns.selected_agent.id == id do
+            merge_degraded_inspection(socket.assigns.inspection, snapshot.inspection)
+          else
+            snapshot.inspection
+          end
+
+        {:ok,
+         assign(socket,
+           selected_agent: socket.assigns.selected_agent,
+           inspection: inspection,
+           inspection_errors: snapshot.errors
+         )}
 
       {:error, :not_found} ->
-        assign(socket,
-          selected_agent: nil,
-          events: [],
-          agent_spend: nil,
-          inspection: empty_inspection(),
-          page_title: "Control Center"
-        )
+        {:not_found,
+         assign(socket,
+           selected_agent: nil,
+           events: [],
+           agent_spend: nil,
+           inspection: empty_inspection(),
+           inspection_errors: [],
+           page_title: "Control Center"
+         )}
     end
   end
 
   defp refresh_if_selected(socket, id) do
     if socket.assigns.selected_agent && socket.assigns.selected_agent.id == id do
-      refresh_selected_agent(socket, id)
+      case refresh_selected_agent(socket, id) do
+        {:ok, socket} -> socket
+        {:not_found, socket} -> socket
+      end
     else
       socket
     end
@@ -1393,6 +1531,38 @@ defmodule MaraithonWeb.DashboardLive do
     }
   end
 
+  defp merge_degraded_inspection(current, degraded) do
+    %{current | recent_logs: degraded.recent_logs}
+  end
+
+  defp empty_fly_logs do
+    %{
+      available: false,
+      apps: [],
+      logs: [],
+      next_tokens: %{},
+      errors: []
+    }
+  end
+
+  defp refresh_fly_logs(socket) do
+    case Admin.fly_logs(limit: 120) do
+      {:ok, snapshot} ->
+        assign(socket, fly_logs: snapshot)
+
+      {:error, reason} ->
+        assign(socket,
+          fly_logs: %{
+            available: false,
+            apps: [],
+            logs: [],
+            next_tokens: %{},
+            errors: [%{app: nil, message: "Failed to fetch Fly logs: #{inspect(reason)}"}]
+          }
+        )
+    end
+  end
+
   defp agent_name(config), do: config["name"] || "unnamed_agent"
   defp agent_prompt(config), do: config["prompt"] || @default_prompt
 
@@ -1565,6 +1735,17 @@ defmodule MaraithonWeb.DashboardLive do
   end
 
   defp log_metadata_preview(_), do: nil
+
+  defp fly_log_metadata_preview(%{app: app, metadata: metadata}) when is_map(metadata) do
+    metadata
+    |> Map.put_new("app", app)
+    |> Enum.reject(fn {_key, value} -> is_nil(value) or value == "" end)
+    |> Enum.sort_by(fn {key, _value} -> key end)
+    |> Enum.map_join(" ", fn {key, value} -> "#{key}=#{value}" end)
+    |> truncate(140)
+  end
+
+  defp fly_log_metadata_preview(_), do: nil
 
   defp format_uptime(seconds) when is_integer(seconds) and seconds >= 0 do
     hours = div(seconds, 3600)

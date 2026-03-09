@@ -7,7 +7,12 @@ defmodule Maraithon.Runtime.Bootstrap do
 
   use GenServer
 
+  alias Maraithon.Runtime.Config, as: RuntimeConfig
+  alias Maraithon.Runtime.DbResilience
+
   require Logger
+
+  @default_retry_interval_ms 5_000
 
   def child_spec(opts) do
     %{
@@ -24,13 +29,33 @@ defmodule Maraithon.Runtime.Bootstrap do
   @impl true
   def init(_opts) do
     send(self(), :bootstrap)
-    {:ok, %{}}
+
+    retry_interval_ms =
+      RuntimeConfig.positive_integer(:bootstrap_retry_interval_ms, @default_retry_interval_ms)
+
+    {:ok, %{retry_attempts: 0, retry_interval_ms: retry_interval_ms}}
   end
 
   @impl true
   def handle_info(:bootstrap, state) do
     Logger.info("Bootstrapping runtime")
-    Maraithon.Runtime.resume_all_agents()
-    {:stop, :normal, state}
+
+    case DbResilience.with_database("runtime bootstrap", fn ->
+           Maraithon.Runtime.resume_all_agents()
+         end) do
+      {:ok, _} ->
+        {:stop, :normal, state}
+
+      {:error, _reason} ->
+        retry_in_ms = DbResilience.backoff_ms(state.retry_interval_ms, state.retry_attempts)
+
+        Logger.warning("Runtime bootstrap will retry",
+          retry_in_ms: retry_in_ms,
+          retry_attempt: state.retry_attempts + 1
+        )
+
+        Process.send_after(self(), :bootstrap, retry_in_ms)
+        {:noreply, %{state | retry_attempts: state.retry_attempts + 1}}
+    end
   end
 end

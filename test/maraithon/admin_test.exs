@@ -66,6 +66,30 @@ defmodule Maraithon.AdminTest do
     end
   end
 
+  describe "safe_control_center_snapshot/1" do
+    test "returns a degraded snapshot when database-backed queries fail" do
+      health = %{
+        status: :unhealthy,
+        checks: %{database: :error, agents: %{running: 0, degraded: 0, stopped: 0}},
+        version: "test"
+      }
+
+      assert {:degraded, snapshot} =
+               Admin.safe_control_center_snapshot(
+                 health: health,
+                 db_fetcher: fn ->
+                   raise DBConnection.ConnectionError, message: "queue timeout"
+                 end
+               )
+
+      assert snapshot.degraded
+      assert snapshot.health == health
+      assert is_list(snapshot.recent_logs)
+      assert snapshot.errors != []
+      assert hd(snapshot.errors).scope == "control_center"
+    end
+  end
+
   describe "recent_failures/1" do
     test "returns most recent failures first" do
       {:ok, agent} =
@@ -169,6 +193,40 @@ defmodule Maraithon.AdminTest do
       assert Enum.any?(inspection.recent_effects, &(&1.effect_type == "tool_call"))
       assert Enum.any?(inspection.recent_jobs, &(&1.job_type == "heartbeat"))
       assert Enum.any?(inspection.recent_logs, &(&1.message == "agent inspection ready"))
+    end
+  end
+
+  describe "safe_agent_snapshot/2" do
+    test "returns a degraded inspection snapshot with in-app logs preserved" do
+      Maraithon.LogBuffer.clear()
+
+      Maraithon.LogBuffer.record(%{
+        level: :error,
+        message: "agent query failed",
+        metadata: %{"agent_id" => "agent-123"}
+      })
+
+      on_exit(fn ->
+        Maraithon.LogBuffer.clear()
+      end)
+
+      health = %{
+        status: :unhealthy,
+        checks: %{database: :error, agents: %{running: 0, degraded: 0, stopped: 0}},
+        version: "test"
+      }
+
+      assert {:degraded, snapshot} =
+               Admin.safe_agent_snapshot("agent-123",
+                 health: health,
+                 fetcher: fn -> raise DBConnection.ConnectionError, message: "queue timeout" end
+               )
+
+      assert snapshot.degraded
+      assert snapshot.agent == nil
+      assert snapshot.events == []
+      assert snapshot.errors != []
+      assert Enum.any?(snapshot.inspection.recent_logs, &(&1.message == "agent query failed"))
     end
   end
 end

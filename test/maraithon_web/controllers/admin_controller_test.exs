@@ -101,4 +101,61 @@ defmodule MaraithonWeb.AdminControllerTest do
              )
     end
   end
+
+  describe "GET /api/v1/admin/fly/logs" do
+    test "returns configured Fly platform logs", %{conn: conn} do
+      previous = Application.get_env(:maraithon, Maraithon.FlyLogs, [])
+      bypass = Bypass.open()
+
+      on_exit(fn ->
+        Application.put_env(:maraithon, Maraithon.FlyLogs, previous)
+      end)
+
+      Application.put_env(:maraithon, Maraithon.FlyLogs,
+        api_token: "FlyV1 test-token",
+        api_base_url: "http://localhost:#{bypass.port}/api/v1",
+        apps: ["maraithon", "maraithon-db"],
+        region: "yyz",
+        receive_timeout_ms: 1_000
+      )
+
+      Bypass.expect_once(bypass, "GET", "/api/v1/apps/maraithon-db/logs", fn conn ->
+        assert Plug.Conn.get_req_header(conn, "authorization") == ["FlyV1 test-token"]
+        assert URI.decode_query(conn.query_string) == %{"region" => "yyz"}
+
+        body = %{
+          "data" => [
+            %{
+              "id" => "db-log-1",
+              "attributes" => %{
+                "timestamp" => "2026-03-09T12:15:00Z",
+                "message" => "database machine restarted",
+                "level" => "warn",
+                "instance" => "db-machine",
+                "region" => "yyz",
+                "meta" => %{"event" => %{"provider" => "runner"}}
+              }
+            }
+          ],
+          "meta" => %{"next_token" => "db-next"}
+        }
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(200, Jason.encode!(body))
+      end)
+
+      conn = get(conn, "/api/v1/admin/fly/logs?app=maraithon-db&limit=25")
+
+      response = json_response(conn, 200)
+      assert response["available"] == true
+      assert response["apps"] == ["maraithon-db"]
+      assert response["next_tokens"] == %{"maraithon-db" => "db-next"}
+
+      assert Enum.any?(response["logs"], fn log ->
+               log["message"] == "database machine restarted" and
+                 log["metadata"]["provider"] == "runner"
+             end)
+    end
+  end
 end

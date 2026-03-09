@@ -145,6 +145,16 @@ defmodule MaraithonWeb.DashboardLiveTest do
       assert has_element?(view, "dt", "Total Agents")
     end
 
+    test "renders the LiveView bootstrap script", %{conn: conn} do
+      html =
+        conn
+        |> get("/")
+        |> html_response(200)
+
+      assert html =~ "new window.LiveView.LiveSocket"
+      assert html =~ "window.liveSocket = liveSocket"
+    end
+
     @doc """
     Verifies the Dashboard shows agents when they exist.
     Each agent should appear in the list with its behavior name.
@@ -175,6 +185,7 @@ defmodule MaraithonWeb.DashboardLiveTest do
       assert has_element?(view, "h3", "Operational Logs")
       assert has_element?(view, "h3", "Failures & Stale Work")
       assert has_element?(view, "h3", "Raw Logs")
+      assert has_element?(view, "h3", "Fly.io Platform Logs")
     end
 
     test "renders recent raw logs", %{conn: conn} do
@@ -195,6 +206,29 @@ defmodule MaraithonWeb.DashboardLiveTest do
       assert html =~ "Raw Logs"
       assert html =~ "runtime booted"
       assert html =~ "agent_id=agent-123"
+    end
+
+    test "shows Fly log configuration guidance when platform log access is disabled", %{
+      conn: conn
+    } do
+      previous = Application.get_env(:maraithon, Maraithon.FlyLogs, [])
+
+      on_exit(fn ->
+        Application.put_env(:maraithon, Maraithon.FlyLogs, previous)
+      end)
+
+      Application.put_env(:maraithon, Maraithon.FlyLogs,
+        api_token: "",
+        api_base_url: "https://api.fly.io/api/v1",
+        apps: [],
+        region: nil,
+        receive_timeout_ms: 1_000
+      )
+
+      {:ok, _view, html} = live(conn, "/")
+
+      assert html =~ "Fly.io Platform Logs"
+      assert html =~ "Configure `FLY_API_TOKEN` and `FLY_LOG_APPS`"
     end
   end
 
