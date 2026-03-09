@@ -148,40 +148,24 @@ defmodule MaraithonWeb.DashboardLive do
       </section>
 
       <section class="grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-6">
-        <div class="overflow-hidden rounded-lg bg-white px-4 py-5 shadow sm:p-6">
-          <dt class="truncate text-sm font-medium text-gray-500">Total Agents</dt>
-          <dd class="mt-1 text-3xl font-semibold tracking-tight text-gray-900"><%= length(@agents) %></dd>
-        </div>
-        <div class="overflow-hidden rounded-lg bg-white px-4 py-5 shadow sm:p-6">
-          <dt class="truncate text-sm font-medium text-gray-500">Running</dt>
-          <dd class="mt-1 text-3xl font-semibold tracking-tight text-green-600">
-            <%= Enum.count(@agents, &(&1.status == "running")) %>
-          </dd>
-        </div>
-        <div class="overflow-hidden rounded-lg bg-white px-4 py-5 shadow sm:p-6">
-          <dt class="truncate text-sm font-medium text-gray-500">Degraded</dt>
-          <dd class="mt-1 text-3xl font-semibold tracking-tight text-amber-600">
-            <%= Enum.count(@agents, &(&1.status == "degraded")) %>
-          </dd>
-        </div>
-        <div class="overflow-hidden rounded-lg bg-white px-4 py-5 shadow sm:p-6">
-          <dt class="truncate text-sm font-medium text-gray-500">LLM Calls</dt>
-          <dd class="mt-1 text-3xl font-semibold tracking-tight text-indigo-600">
-            <%= @total_spend.llm_calls %>
-          </dd>
-        </div>
-        <div class="overflow-hidden rounded-lg bg-white px-4 py-5 shadow sm:p-6">
-          <dt class="truncate text-sm font-medium text-gray-500">Total Spend</dt>
-          <dd class="mt-1 text-3xl font-semibold tracking-tight text-amber-600">
-            $<%= Float.round(@total_spend.total_cost, 4) %>
-          </dd>
-        </div>
-        <div class="overflow-hidden rounded-lg bg-white px-4 py-5 shadow sm:p-6">
-          <dt class="truncate text-sm font-medium text-gray-500">Pending Effects</dt>
-          <dd class="mt-1 text-3xl font-semibold tracking-tight text-gray-900">
-            <%= @queue_metrics.effects.pending %>
-          </dd>
-        </div>
+        <.stat_card title="Total Agents" value={length(@agents)} />
+        <.stat_card
+          title="Running"
+          value={Enum.count(@agents, &(&1.status == "running"))}
+          value_class="text-green-600"
+        />
+        <.stat_card
+          title="Degraded"
+          value={Enum.count(@agents, &(&1.status == "degraded"))}
+          value_class="text-amber-600"
+        />
+        <.stat_card title="LLM Calls" value={@total_spend.llm_calls} value_class="text-indigo-600" />
+        <.stat_card
+          title="Total Spend"
+          value={"$#{Float.round(@total_spend.total_cost, 4)}"}
+          value_class="text-amber-600"
+        />
+        <.stat_card title="Pending Effects" value={@queue_metrics.effects.pending} />
       </section>
 
       <section class="grid grid-cols-1 gap-6 xl:grid-cols-5">
@@ -353,45 +337,39 @@ defmodule MaraithonWeb.DashboardLive do
             </div>
 
             <dl class="space-y-2 text-sm">
-              <div class="flex items-center justify-between">
-                <dt class="text-gray-500">Database</dt>
-                <dd class={if @health.checks.database == :ok, do: "text-green-600 font-medium", else: "text-red-600 font-medium"}>
-                  <%= @health.checks.database %>
-                </dd>
-              </div>
-              <div class="flex items-center justify-between">
-                <dt class="text-gray-500">Memory</dt>
-                <dd class="font-medium text-gray-900"><%= @health.checks.memory_mb %> MB</dd>
-              </div>
-              <div class="flex items-center justify-between">
-                <dt class="text-gray-500">Uptime</dt>
-                <dd class="font-medium text-gray-900"><%= format_uptime(@health.checks.uptime_seconds) %></dd>
-              </div>
-              <div class="flex items-center justify-between">
-                <dt class="text-gray-500">Version</dt>
-                <dd class="font-mono text-xs text-gray-900"><%= @health.version %></dd>
-              </div>
+              <.health_row
+                label="Database"
+                value={to_string(@health.checks.database)}
+                value_class={
+                  if @health.checks.database == :ok,
+                    do: "text-green-600 font-medium",
+                    else: "text-red-600 font-medium"
+                }
+              />
+              <.health_row label="Memory" value={"#{@health.checks.memory_mb} MB"} />
+              <.health_row label="Uptime" value={format_uptime(@health.checks.uptime_seconds)} />
+              <.health_row
+                label="Version"
+                value={@health.version || "n/a"}
+                value_class="font-mono text-xs text-gray-900"
+              />
             </dl>
 
             <div>
               <h3 class="text-sm font-medium text-gray-700">Queue Metrics</h3>
               <div class="mt-2 grid grid-cols-2 gap-2 text-xs">
-                <div class="rounded bg-gray-50 p-2">
-                  <div class="text-gray-500">Effects Pending</div>
-                  <div class="text-sm font-semibold text-gray-900"><%= @queue_metrics.effects.pending %></div>
-                </div>
-                <div class="rounded bg-gray-50 p-2">
-                  <div class="text-gray-500">Effects Failed</div>
-                  <div class="text-sm font-semibold text-red-600"><%= @queue_metrics.effects.failed %></div>
-                </div>
-                <div class="rounded bg-gray-50 p-2">
-                  <div class="text-gray-500">Jobs Pending</div>
-                  <div class="text-sm font-semibold text-gray-900"><%= @queue_metrics.jobs.pending %></div>
-                </div>
-                <div class="rounded bg-gray-50 p-2">
-                  <div class="text-gray-500">Jobs Dispatched</div>
-                  <div class="text-sm font-semibold text-amber-600"><%= @queue_metrics.jobs.dispatched %></div>
-                </div>
+                <.queue_metric title="Effects Pending" value={@queue_metrics.effects.pending} />
+                <.queue_metric
+                  title="Effects Failed"
+                  value={@queue_metrics.effects.failed}
+                  value_class="text-red-600"
+                />
+                <.queue_metric title="Jobs Pending" value={@queue_metrics.jobs.pending} />
+                <.queue_metric
+                  title="Jobs Dispatched"
+                  value={@queue_metrics.jobs.dispatched}
+                  value_class="text-amber-600"
+                />
               </div>
             </div>
           </div>
@@ -785,6 +763,45 @@ defmodule MaraithonWeb.DashboardLive do
   defp health_badge_class(:healthy), do: "bg-green-100 text-green-800"
   defp health_badge_class(:unhealthy), do: "bg-red-100 text-red-800"
   defp health_badge_class(_), do: "bg-gray-100 text-gray-700"
+
+  attr :title, :string, required: true
+  attr :value, :any, required: true
+  attr :value_class, :string, default: "text-gray-900"
+
+  defp stat_card(assigns) do
+    ~H"""
+    <div class="overflow-hidden rounded-lg bg-white px-4 py-5 shadow sm:p-6">
+      <dt class="truncate text-sm font-medium text-gray-500"><%= @title %></dt>
+      <dd class={"mt-1 text-3xl font-semibold tracking-tight #{@value_class}"}><%= @value %></dd>
+    </div>
+    """
+  end
+
+  attr :title, :string, required: true
+  attr :value, :any, required: true
+  attr :value_class, :string, default: "text-gray-900"
+
+  defp queue_metric(assigns) do
+    ~H"""
+    <div class="rounded bg-gray-50 p-2">
+      <div class="text-gray-500"><%= @title %></div>
+      <div class={"text-sm font-semibold #{@value_class}"}><%= @value %></div>
+    </div>
+    """
+  end
+
+  attr :label, :string, required: true
+  attr :value, :string, required: true
+  attr :value_class, :string, default: "font-medium text-gray-900"
+
+  defp health_row(assigns) do
+    ~H"""
+    <div class="flex items-center justify-between">
+      <dt class="text-gray-500"><%= @label %></dt>
+      <dd class={@value_class}><%= @value %></dd>
+    </div>
+    """
+  end
 
   defp payload_preview(payload) when is_map(payload) do
     payload
