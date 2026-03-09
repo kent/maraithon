@@ -1,6 +1,9 @@
 defmodule MaraithonWeb.NavigationControllerTest do
   use MaraithonWeb.ConnCase, async: true
 
+  alias Maraithon.Accounts
+  alias Maraithon.ConnectedAccounts
+
   describe "tab pages" do
     test "GET /connectors renders the connectors page", %{conn: conn} do
       conn = conn |> log_in_test_user() |> get("/connectors")
@@ -19,6 +22,26 @@ defmodule MaraithonWeb.NavigationControllerTest do
       assert html =~ "Connector Detail"
       assert html =~ "GitHub"
       assert html =~ "OAuth Setup"
+    end
+
+    test "GET /connectors/telegram shows connected chat details without linked copy", %{
+      conn: conn
+    } do
+      user_id = "telegram-user@example.com"
+      {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+      {:ok, _account} =
+        ConnectedAccounts.upsert_manual(user_id, "telegram", %{
+          external_account_id: "6114124042",
+          metadata: %{"username" => "kentfenwick"}
+        })
+
+      conn = conn |> log_in_test_user(user_id) |> get("/connectors/telegram")
+      html = html_response(conn, 200)
+
+      assert html =~ "Chat ID 6114124042"
+      assert html =~ "@kentfenwick"
+      refute html =~ "Linked chat"
     end
 
     test "GET /how-it-works renders the guide page", %{conn: conn} do

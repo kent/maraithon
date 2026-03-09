@@ -264,7 +264,7 @@ defmodule Maraithon.Connections do
       details:
         if account && account.status == "connected" do
           [
-            "Linked chat #{chat_id}",
+            telegram_chat_detail(chat_id),
             if(is_binary(username) and username != "", do: "@#{username}"),
             "Last updated #{format_datetime(account.updated_at)}"
           ]
@@ -350,6 +350,11 @@ defmodule Maraithon.Connections do
     |> Enum.reject(&is_nil/1)
     |> Enum.reject(&(&1 == "Scopes: "))
   end
+
+  defp telegram_chat_detail(chat_id) when is_binary(chat_id) and chat_id != "",
+    do: "Chat ID #{chat_id}"
+
+  defp telegram_chat_detail(_chat_id), do: "Chat connected"
 
   defp serialize_token(%Token{} = token) do
     %{

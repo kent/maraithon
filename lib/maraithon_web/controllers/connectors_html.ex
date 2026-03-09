@@ -21,6 +21,10 @@ defmodule MaraithonWeb.ConnectorsHTML do
     do: "Update Google Access"
 
   def connection_primary_action(%{provider: "google"}), do: "Connect Google"
+
+  def connection_primary_action(%{provider: "telegram", status: :connected}),
+    do: "Reconnect Telegram"
+
   def connection_primary_action(%{provider: "telegram"}), do: "Link Telegram"
   def connection_primary_action(%{status: :connected}), do: "Reconnect"
   def connection_primary_action(_provider), do: "Connect"
