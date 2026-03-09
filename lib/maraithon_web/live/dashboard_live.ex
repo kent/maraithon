@@ -4,6 +4,7 @@ defmodule MaraithonWeb.DashboardLive do
   alias Maraithon.Admin
   alias Maraithon.Agents
   alias Maraithon.Behaviors
+  alias Maraithon.Connections
   alias Maraithon.Runtime
 
   @refresh_interval 5_000
@@ -50,6 +51,11 @@ defmodule MaraithonWeb.DashboardLive do
         recent_failures: [],
         recent_logs: [],
         fly_logs: empty_fly_logs(),
+        connection_user_id: Connections.default_user_id(),
+        connection_return_to: "/",
+        connections: [],
+        raw_connections: [],
+        connection_errors: [],
         dashboard_errors: [],
         inspection_errors: []
       )
@@ -67,35 +73,39 @@ defmodule MaraithonWeb.DashboardLive do
   end
 
   @impl true
-  def handle_params(%{"id" => id}, _uri, socket) do
-    case refresh_selected_agent(socket, id) do
-      {:ok, socket} ->
-        {:noreply, assign(socket, page_title: "Agent #{String.slice(id, 0, 8)}")}
+  def handle_params(params, uri, socket) do
+    socket = apply_dashboard_params(socket, params, uri)
 
-      {:not_found, socket} ->
+    case Map.get(params, "id") do
+      id when is_binary(id) ->
+        case refresh_selected_agent(socket, id) do
+          {:ok, socket} ->
+            {:noreply, assign(socket, page_title: "Agent #{String.slice(id, 0, 8)}")}
+
+          {:not_found, socket} ->
+            {:noreply,
+             socket
+             |> assign(
+               selected_agent: nil,
+               events: [],
+               agent_spend: nil,
+               inspection: empty_inspection(),
+               inspection_errors: []
+             )
+             |> push_navigate(to: connection_home_path(socket, socket.assigns.connection_user_id))}
+        end
+
+      _ ->
         {:noreply,
-         socket
-         |> assign(
+         assign(socket,
            selected_agent: nil,
            events: [],
            agent_spend: nil,
            inspection: empty_inspection(),
-           inspection_errors: []
-         )
-         |> push_navigate(to: "/")}
+           inspection_errors: [],
+           page_title: "Control Center"
+         )}
     end
-  end
-
-  def handle_params(_params, _uri, socket) do
-    {:noreply,
-     assign(socket,
-       selected_agent: nil,
-       events: [],
-       agent_spend: nil,
-       inspection: empty_inspection(),
-       inspection_errors: [],
-       page_title: "Control Center"
-     )}
   end
 
   @impl true
@@ -120,6 +130,44 @@ defmodule MaraithonWeb.DashboardLive do
   def handle_event("refresh_fly_logs", _params, socket) do
     send(self(), :load_fly_logs)
     {:noreply, put_flash(socket, :info, "Fly logs refresh started")}
+  end
+
+  def handle_event("set_connection_user", %{"connection" => %{"user_id" => raw_user_id}}, socket) do
+    user_id = String.trim(raw_user_id || "")
+
+    if user_id == "" do
+      {:noreply, put_flash(socket, :error, "Connection user ID is required")}
+    else
+      {:noreply, push_patch(socket, to: connection_return_to(socket, user_id))}
+    end
+  end
+
+  def handle_event("disconnect_connection", %{"provider" => provider}, socket) do
+    case Connections.disconnect(socket.assigns.connection_user_id, provider) do
+      {:ok, _deleted} ->
+        {:noreply,
+         socket
+         |> refresh_connections()
+         |> put_flash(:info, "#{provider_label(provider)} disconnected")}
+
+      {:error, :no_token} ->
+        {:noreply,
+         socket
+         |> refresh_connections()
+         |> put_flash(:error, "#{provider_label(provider)} is not connected")}
+
+      {:error, :unsupported_provider} ->
+        {:noreply, put_flash(socket, :error, "Unsupported provider")}
+
+      {:error, reason} ->
+        {:noreply,
+         socket
+         |> refresh_connections()
+         |> put_flash(
+           :error,
+           "Failed to disconnect #{provider_label(provider)}: #{inspect(reason)}"
+         )}
+    end
   end
 
   def handle_event("new_agent", _params, socket) do
@@ -328,6 +376,303 @@ defmodule MaraithonWeb.DashboardLive do
           value_class="text-amber-600"
         />
         <.stat_card title="Pending Effects" value={@queue_metrics.effects.pending} />
+      </section>
+
+      <section class="grid grid-cols-1 gap-6 xl:grid-cols-5">
+        <div class="overflow-hidden rounded-xl bg-white shadow xl:col-span-2">
+          <div class="border-b border-gray-200 px-4 py-4 sm:px-6">
+            <h2 class="text-lg font-medium text-gray-900">Connections</h2>
+            <p class="mt-1 text-sm text-gray-500">
+              Manage server-stored OAuth grants for the control-center user your agents should act on.
+            </p>
+          </div>
+          <div class="space-y-4 px-4 py-5 sm:px-6">
+            <%= if @connection_errors != [] do %>
+              <div class="rounded-md border border-amber-200 bg-amber-50 px-3 py-3">
+                <%= for error <- @connection_errors do %>
+                  <div class="text-sm text-amber-900">
+                    <p class="font-medium"><%= error.message %></p>
+                    <p class="mt-1 text-xs text-amber-800"><%= error.details %></p>
+                  </div>
+                <% end %>
+              </div>
+            <% end %>
+
+            <form phx-submit="set_connection_user" class="space-y-3">
+              <div>
+                <label for="connection_user_id" class="block text-sm font-medium text-gray-700">
+                  Control-Center User ID
+                </label>
+                <input
+                  id="connection_user_id"
+                  type="text"
+                  name="connection[user_id]"
+                  value={@connection_user_id}
+                  placeholder="kent"
+                  class="mt-1 block w-full rounded-md border-gray-300 text-sm shadow-sm"
+                />
+                <p class="mt-2 text-xs text-gray-500">
+                  This user ID is the server-side identity tied to GitHub, Google, Linear, and Notion tokens.
+                </p>
+              </div>
+              <div class="flex justify-end">
+                <button
+                  type="submit"
+                  class="inline-flex items-center rounded-md border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                >
+                  Load User
+                </button>
+              </div>
+            </form>
+
+            <div class="rounded-lg bg-slate-50 p-3">
+              <div class="text-xs font-medium uppercase tracking-wide text-slate-500">
+                Stored Grants
+              </div>
+              <div class="mt-3 space-y-2">
+                <%= for token <- @raw_connections do %>
+                  <div class="rounded-md border border-slate-200 bg-white px-3 py-2">
+                    <div class="flex items-center justify-between gap-3">
+                      <span class="text-sm font-medium text-slate-900"><%= token.provider %></span>
+                      <span class="text-xs text-slate-500"><%= format_datetime(token.updated_at) %></span>
+                    </div>
+                    <div class="mt-1 text-xs text-slate-600">
+                      <%= connection_token_summary(token) %>
+                    </div>
+                  </div>
+                <% end %>
+                <%= if @raw_connections == [] do %>
+                  <p class="text-sm text-slate-500">No OAuth grants stored for this user yet.</p>
+                <% end %>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="overflow-hidden rounded-xl bg-white shadow xl:col-span-3">
+          <div class="border-b border-gray-200 px-4 py-4 sm:px-6">
+            <div class="flex items-center justify-between gap-3">
+              <div>
+                <h2 class="text-lg font-medium text-gray-900">Connected Accounts</h2>
+                <p class="mt-1 text-sm text-gray-500">
+                  Launch OAuth, inspect granted scopes, and revoke server-side credentials without leaving the control center.
+                </p>
+              </div>
+              <span class="rounded-full bg-indigo-50 px-2.5 py-1 text-xs font-medium text-indigo-700">
+                <%= @connection_user_id %>
+              </span>
+            </div>
+          </div>
+          <div class="grid grid-cols-1 gap-4 px-4 py-5 sm:px-6 lg:grid-cols-2">
+            <%= for provider <- @connections do %>
+              <div class="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+                <div class="flex items-start justify-between gap-3">
+                  <div class="flex items-start gap-3">
+                    <.oauth_logo provider={provider.logo} />
+                    <div>
+                      <h3 class="text-base font-medium text-gray-900"><%= provider.label %></h3>
+                      <p class="mt-1 text-sm text-gray-500"><%= provider.description %></p>
+                    </div>
+                  </div>
+                  <span class={connection_status_badge_class(provider.status)}>
+                    <%= connection_status_label(provider.status) %>
+                  </span>
+                </div>
+
+                <div class="mt-4 space-y-2 text-sm text-gray-600">
+                  <%= for detail <- provider.details do %>
+                    <p><%= detail %></p>
+                  <% end %>
+                </div>
+
+                <%= if provider.services != [] do %>
+                  <div class="mt-4 space-y-2 rounded-lg bg-slate-50 p-3">
+                    <%= for service <- provider.services do %>
+                      <div class="flex items-start justify-between gap-3">
+                        <div>
+                          <div class="text-sm font-medium text-slate-900"><%= service.label %></div>
+                          <div class="text-xs text-slate-500"><%= service.description %></div>
+                        </div>
+                        <div class="flex items-center gap-2">
+                          <span class={connection_status_badge_class(service.status)}>
+                            <%= connection_status_label(service.status) %>
+                          </span>
+                          <%= if provider.configured? do %>
+                            <a
+                              href={service.connect_url}
+                              class="inline-flex items-center rounded-md border border-gray-300 px-2.5 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
+                            >
+                              Connect
+                            </a>
+                          <% else %>
+                            <button
+                              type="button"
+                              disabled
+                              class="inline-flex items-center rounded-md border border-gray-200 bg-gray-50 px-2.5 py-1.5 text-xs font-medium text-gray-400"
+                            >
+                              Setup Required
+                            </button>
+                          <% end %>
+                        </div>
+                      </div>
+                    <% end %>
+                  </div>
+                <% end %>
+
+                <div class="mt-4 flex flex-wrap gap-2">
+                  <%= if provider.configured? do %>
+                    <a
+                      href={provider.connect_url}
+                      class="inline-flex items-center rounded-md bg-indigo-600 px-3 py-2 text-sm font-medium text-white hover:bg-indigo-500"
+                    >
+                      <%= connection_primary_action(provider) %>
+                    </a>
+                  <% else %>
+                    <button
+                      type="button"
+                      disabled
+                      class="inline-flex items-center rounded-md border border-slate-200 bg-slate-100 px-3 py-2 text-sm font-medium text-slate-500"
+                    >
+                      Configure OAuth First
+                    </button>
+                  <% end %>
+                  <%= if provider[:disconnectable?] do %>
+                    <button
+                      type="button"
+                      phx-click="disconnect_connection"
+                      phx-value-provider={provider.provider}
+                      data-confirm={"Disconnect #{provider.label} for #{@connection_user_id}?"}
+                      class="inline-flex items-center rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-700 hover:bg-red-100"
+                    >
+                      <%= provider.disconnect_label %>
+                    </button>
+                  <% else %>
+                    <button
+                      type="button"
+                      disabled
+                      class="inline-flex items-center rounded-md border border-gray-200 bg-gray-50 px-3 py-2 text-sm font-medium text-gray-400"
+                    >
+                      Not Connected
+                    </button>
+                  <% end %>
+                </div>
+
+                <%= if not provider.configured? do %>
+                  <p class="mt-3 text-xs text-slate-500">
+                    Register the callback URL and required environment variables in the OAuth Configuration section below before connecting this provider.
+                  </p>
+                <% end %>
+              </div>
+            <% end %>
+          </div>
+        </div>
+      </section>
+
+      <section class="overflow-hidden rounded-xl bg-white shadow">
+        <div class="border-b border-gray-200 px-4 py-4 sm:px-6">
+          <div class="flex items-center justify-between gap-3">
+            <div>
+              <h2 class="text-lg font-medium text-gray-900">OAuth Configuration</h2>
+              <p class="mt-1 text-sm text-gray-500">
+                Provider setup checklist with callback URLs, required environment variables, and the permissions each integration expects.
+              </p>
+            </div>
+            <span class="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700">
+              <%= endpoint_url() %>
+            </span>
+          </div>
+        </div>
+        <div class="grid grid-cols-1 gap-4 px-4 py-5 sm:px-6 xl:grid-cols-2">
+          <%= for provider <- @connections do %>
+            <div class="rounded-2xl border border-slate-200 bg-slate-50/60 p-5 shadow-sm">
+              <div class="flex items-start justify-between gap-4">
+                <div class="flex items-start gap-3">
+                  <.oauth_logo provider={provider.logo} />
+                  <div>
+                    <h3 class="text-base font-semibold text-slate-900"><%= provider.label %></h3>
+                    <p class="mt-1 text-sm text-gray-500"><%= provider.description %></p>
+                  </div>
+                </div>
+                <span class={setup_status_badge_class(provider.setup_status)}>
+                  <%= setup_status_label(provider.setup_status) %>
+                </span>
+              </div>
+
+              <div class="mt-5 grid grid-cols-1 gap-4 lg:grid-cols-2">
+                <div class="rounded-xl bg-white p-4 shadow-sm ring-1 ring-slate-200/70">
+                  <div class="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
+                    Callback URLs
+                  </div>
+                  <div class="mt-3 space-y-3">
+                    <%= for callback <- provider.callback_urls do %>
+                      <div>
+                        <div class="flex items-center gap-2">
+                          <div class="text-sm font-medium text-slate-900"><%= callback.label %></div>
+                          <span class={callback_badge_class(callback.required?)}>
+                            <%= if callback.required?, do: "required", else: "optional" %>
+                          </span>
+                        </div>
+                        <div class="mt-2 overflow-x-auto rounded-lg bg-slate-950 px-3 py-2 font-mono text-[11px] text-slate-100">
+                          <%= callback.url %>
+                        </div>
+                      </div>
+                    <% end %>
+                  </div>
+                </div>
+
+                <div class="rounded-xl bg-white p-4 shadow-sm ring-1 ring-slate-200/70">
+                  <div class="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
+                    Environment
+                  </div>
+                  <div class="mt-3 space-y-3">
+                    <%= for env <- provider.env_requirements do %>
+                      <div class="rounded-lg border border-slate-200 px-3 py-3">
+                        <div class="flex items-center justify-between gap-3">
+                          <div class="font-mono text-xs text-slate-900"><%= env.name %></div>
+                          <span class={env_status_badge_class(env.present?, env.required?)}>
+                            <%= env_status_label(env.present?, env.required?) %>
+                          </span>
+                        </div>
+                        <p class="mt-2 text-xs text-slate-600"><%= env.description %></p>
+                        <%= if env.recommended_value do %>
+                          <div class="mt-2 rounded-lg bg-slate-100 px-3 py-2 font-mono text-[11px] text-slate-700">
+                            <%= env.recommended_value %>
+                          </div>
+                        <% end %>
+                      </div>
+                    <% end %>
+                  </div>
+                </div>
+              </div>
+
+              <div class="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
+                <div class="rounded-xl bg-white p-4 shadow-sm ring-1 ring-slate-200/70">
+                  <div class="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
+                    Permissions
+                  </div>
+                  <div class="mt-3 flex flex-wrap gap-2">
+                    <%= for permission <- provider.permissions do %>
+                      <span class="rounded-full bg-indigo-50 px-2.5 py-1 text-xs font-medium text-indigo-700">
+                        <%= permission %>
+                      </span>
+                    <% end %>
+                  </div>
+                </div>
+
+                <div class="rounded-xl bg-white p-4 shadow-sm ring-1 ring-slate-200/70">
+                  <div class="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
+                    Setup Notes
+                  </div>
+                  <div class="mt-3 space-y-2 text-sm text-slate-600">
+                    <%= for note <- provider.setup_notes do %>
+                      <p><%= note %></p>
+                    <% end %>
+                  </div>
+                </div>
+              </div>
+            </div>
+          <% end %>
+        </div>
       </section>
 
       <section class="grid grid-cols-1 gap-6 xl:grid-cols-5">
@@ -1256,6 +1601,8 @@ defmodule MaraithonWeb.DashboardLive do
   end
 
   defp refresh_dashboard(socket, opts \\ []) do
+    socket = refresh_connections(socket)
+
     socket =
       case Admin.safe_control_center_snapshot(
              activity_limit: @activity_limit,
@@ -1583,6 +1930,171 @@ defmodule MaraithonWeb.DashboardLive do
     end
   end
 
+  defp refresh_connections(socket) do
+    case Connections.safe_dashboard_snapshot(
+           socket.assigns.connection_user_id,
+           return_to: connection_return_to(socket, socket.assigns.connection_user_id)
+         ) do
+      {:ok, snapshot} ->
+        assign(socket,
+          connections: snapshot.providers,
+          raw_connections: snapshot.raw_tokens,
+          connection_errors: snapshot.errors
+        )
+
+      {:degraded, snapshot} ->
+        assign(socket,
+          connections: snapshot.providers,
+          raw_connections: snapshot.raw_tokens,
+          connection_errors: snapshot.errors
+        )
+    end
+  end
+
+  defp apply_dashboard_params(socket, params, uri) do
+    user_id =
+      case params["user_id"] do
+        value when is_binary(value) ->
+          case String.trim(value) do
+            "" -> Connections.default_user_id()
+            trimmed -> trimmed
+          end
+
+        _ ->
+          Connections.default_user_id()
+      end
+
+    socket =
+      assign(socket,
+        connection_user_id: user_id,
+        connection_return_to: connection_return_to_from_uri(uri, user_id)
+      )
+
+    socket
+    |> refresh_connections()
+    |> maybe_put_oauth_flash(params)
+  end
+
+  defp maybe_put_oauth_flash(socket, %{"oauth_status" => "connected", "oauth_message" => message})
+       when is_binary(message) do
+    put_flash(socket, :info, message)
+  end
+
+  defp maybe_put_oauth_flash(socket, %{"oauth_status" => "error", "oauth_message" => message})
+       when is_binary(message) do
+    put_flash(socket, :error, message)
+  end
+
+  defp maybe_put_oauth_flash(socket, _params), do: socket
+
+  defp connection_return_to(socket, user_id) do
+    merge_return_to_user_id(socket.assigns.connection_return_to || "/", user_id)
+  end
+
+  defp connection_home_path(socket, user_id) do
+    socket.assigns.connection_return_to
+    |> URI.parse()
+    |> then(fn uri -> %URI{uri | query: home_query(uri.query, user_id)} end)
+    |> URI.to_string()
+  rescue
+    _ -> "/?#{URI.encode_query(%{"user_id" => user_id})}"
+  end
+
+  defp connection_return_to_from_uri(uri, user_id) do
+    uri = URI.parse(uri)
+
+    query =
+      (uri.query || "")
+      |> URI.decode_query()
+      |> Map.drop(["oauth_message", "oauth_provider", "oauth_status"])
+      |> Map.put("user_id", user_id)
+      |> URI.encode_query()
+
+    %URI{path: uri.path || "/", query: query}
+    |> URI.to_string()
+  rescue
+    _ -> "/?#{URI.encode_query(%{"user_id" => user_id})}"
+  end
+
+  defp merge_return_to_user_id(path, user_id) do
+    uri = URI.parse(path)
+
+    query =
+      (uri.query || "")
+      |> URI.decode_query()
+      |> Map.put("user_id", user_id)
+      |> URI.encode_query()
+
+    %URI{uri | path: uri.path || "/", query: query}
+    |> URI.to_string()
+  rescue
+    _ -> "/?#{URI.encode_query(%{"user_id" => user_id})}"
+  end
+
+  defp home_query(query, user_id) do
+    (query || "")
+    |> URI.decode_query()
+    |> Map.drop(["id"])
+    |> Map.put("user_id", user_id)
+    |> URI.encode_query()
+  end
+
+  defp connection_primary_action(%{provider: "google", status: :connected}),
+    do: "Update Google Access"
+
+  defp connection_primary_action(%{provider: "google"}), do: "Connect Google"
+  defp connection_primary_action(%{status: :connected}), do: "Reconnect"
+  defp connection_primary_action(_provider), do: "Connect"
+
+  defp connection_status_label(:connected), do: "connected"
+  defp connection_status_label(:partial), do: "partial"
+  defp connection_status_label(:missing_scope), do: "needs scope"
+  defp connection_status_label(:not_configured), do: "not configured"
+  defp connection_status_label(:unknown), do: "unknown"
+  defp connection_status_label(_status), do: "disconnected"
+
+  defp connection_status_badge_class(:connected),
+    do:
+      "inline-flex items-center rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-medium text-emerald-800"
+
+  defp connection_status_badge_class(:partial),
+    do:
+      "inline-flex items-center rounded-full bg-amber-100 px-2.5 py-1 text-xs font-medium text-amber-800"
+
+  defp connection_status_badge_class(:missing_scope),
+    do:
+      "inline-flex items-center rounded-full bg-amber-100 px-2.5 py-1 text-xs font-medium text-amber-800"
+
+  defp connection_status_badge_class(:not_configured),
+    do:
+      "inline-flex items-center rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700"
+
+  defp connection_status_badge_class(:unknown),
+    do:
+      "inline-flex items-center rounded-full bg-gray-100 px-2.5 py-1 text-xs font-medium text-gray-700"
+
+  defp connection_status_badge_class(_status),
+    do:
+      "inline-flex items-center rounded-full bg-red-100 px-2.5 py-1 text-xs font-medium text-red-700"
+
+  defp connection_token_summary(token) when is_map(token) do
+    [
+      if(token[:expires_at], do: "expires #{format_datetime(token.expires_at)}"),
+      token[:scopes] && token[:scopes] != [] && "scopes #{Enum.join(token.scopes, ", ")}"
+    ]
+    |> Enum.reject(&is_nil/1)
+    |> case do
+      [] -> "encrypted token stored"
+      details -> Enum.join(details, " • ")
+    end
+  end
+
+  defp provider_label("google"), do: "Google"
+  defp provider_label("github"), do: "GitHub"
+  defp provider_label("linear"), do: "Linear"
+  defp provider_label("notion"), do: "Notion"
+  defp provider_label(provider), do: provider
+
   defp agent_name(config), do: config["name"] || "unnamed_agent"
   defp agent_prompt(config), do: config["prompt"] || @default_prompt
 
@@ -1648,6 +2160,99 @@ defmodule MaraithonWeb.DashboardLive do
   defp health_badge_class(:healthy), do: "bg-green-100 text-green-800"
   defp health_badge_class(:unhealthy), do: "bg-red-100 text-red-800"
   defp health_badge_class(_), do: "bg-gray-100 text-gray-700"
+
+  defp setup_status_label(:configured), do: "configured"
+  defp setup_status_label(:incomplete), do: "setup needed"
+  defp setup_status_label(_), do: "unknown"
+
+  defp setup_status_badge_class(:configured),
+    do:
+      "inline-flex items-center rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-medium text-emerald-800"
+
+  defp setup_status_badge_class(:incomplete),
+    do:
+      "inline-flex items-center rounded-full bg-amber-100 px-2.5 py-1 text-xs font-medium text-amber-800"
+
+  defp setup_status_badge_class(_),
+    do:
+      "inline-flex items-center rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700"
+
+  defp callback_badge_class(true),
+    do:
+      "inline-flex items-center rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-rose-700"
+
+  defp callback_badge_class(false),
+    do:
+      "inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-600"
+
+  defp env_status_label(true, _required?), do: "set"
+  defp env_status_label(false, true), do: "missing"
+  defp env_status_label(false, false), do: "optional"
+
+  defp env_status_badge_class(true, _required?),
+    do:
+      "inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-700"
+
+  defp env_status_badge_class(false, true),
+    do:
+      "inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-700"
+
+  defp env_status_badge_class(false, false),
+    do:
+      "inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-600"
+
+  defp endpoint_url do
+    MaraithonWeb.Endpoint.url()
+  end
+
+  attr :provider, :atom, required: true
+
+  defp oauth_logo(%{provider: :google} = assigns) do
+    ~H"""
+    <div class="relative flex h-11 w-11 items-center justify-center rounded-2xl bg-white shadow-sm ring-1 ring-slate-200">
+      <span class="absolute left-2 top-2 h-3 w-3 rounded-full bg-rose-500"></span>
+      <span class="absolute right-2 top-2 h-3 w-3 rounded-full bg-amber-400"></span>
+      <span class="absolute bottom-2 left-2 h-3 w-3 rounded-full bg-emerald-500"></span>
+      <span class="absolute bottom-2 right-2 h-3 w-3 rounded-full bg-sky-500"></span>
+      <span class="text-xs font-semibold tracking-[0.18em] text-slate-700">GO</span>
+    </div>
+    """
+  end
+
+  defp oauth_logo(%{provider: :github} = assigns) do
+    ~H"""
+    <div class="flex h-11 w-11 items-center justify-center rounded-2xl bg-slate-950 shadow-sm ring-1 ring-slate-800">
+      <span class="text-xs font-semibold tracking-[0.18em] text-white">GH</span>
+    </div>
+    """
+  end
+
+  defp oauth_logo(%{provider: :linear} = assigns) do
+    ~H"""
+    <div class="relative flex h-11 w-11 items-center justify-center overflow-hidden rounded-2xl bg-slate-950 shadow-sm ring-1 ring-slate-800">
+      <span class="absolute inset-y-0 left-2 w-1 rounded-full bg-violet-500"></span>
+      <span class="absolute inset-y-0 left-5 w-1 rounded-full bg-sky-400"></span>
+      <span class="absolute inset-y-0 left-8 w-1 rounded-full bg-emerald-400"></span>
+      <span class="sr-only">Linear</span>
+    </div>
+    """
+  end
+
+  defp oauth_logo(%{provider: :notion} = assigns) do
+    ~H"""
+    <div class="flex h-11 w-11 items-center justify-center rounded-2xl bg-white shadow-sm ring-1 ring-slate-300">
+      <span class="text-sm font-black text-slate-950">N</span>
+    </div>
+    """
+  end
+
+  defp oauth_logo(assigns) do
+    ~H"""
+    <div class="flex h-11 w-11 items-center justify-center rounded-2xl bg-slate-200 shadow-sm ring-1 ring-slate-300">
+      <span class="text-xs font-semibold tracking-[0.18em] text-slate-700">ID</span>
+    </div>
+    """
+  end
 
   attr :title, :string, required: true
   attr :value, :any, required: true

@@ -181,11 +181,26 @@ defmodule MaraithonWeb.DashboardLiveTest do
     test "renders health and logs sections", %{conn: conn} do
       {:ok, view, _html} = live(conn, "/")
 
+      assert has_element?(view, "h2", "Connections")
+      assert has_element?(view, "h2", "Connected Accounts")
+      assert has_element?(view, "h2", "OAuth Configuration")
       assert has_element?(view, "h2", "Health & Monitoring")
       assert has_element?(view, "h3", "Operational Logs")
       assert has_element?(view, "h3", "Failures & Stale Work")
       assert has_element?(view, "h3", "Raw Logs")
       assert has_element?(view, "h3", "Fly.io Platform Logs")
+    end
+
+    test "renders OAuth setup checklist content", %{conn: conn} do
+      {:ok, _view, html} = live(conn, "/")
+
+      assert html =~ "Google Workspace"
+      assert html =~ "GitHub"
+      assert html =~ "Notion"
+      assert html =~ "GOOGLE_REDIRECT_URI"
+      assert html =~ "GITHUB_CLIENT_ID"
+      assert html =~ "OAuth callback"
+      assert html =~ "Google Contacts read-only People API access"
     end
 
     test "renders recent raw logs", %{conn: conn} do
@@ -378,7 +393,7 @@ defmodule MaraithonWeb.DashboardLiveTest do
       result = live(conn, "/?id=#{Ecto.UUID.generate()}")
 
       # Should redirect back to root
-      assert {:error, {:live_redirect, %{to: "/"}}} = result
+      assert {:error, {:live_redirect, %{to: "/?user_id=operator"}}} = result
     end
 
     @doc """

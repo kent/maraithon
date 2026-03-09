@@ -33,6 +33,14 @@ config :maraithon, :admin_auth,
 
 config :maraithon, :api_auth, bearer_token: api_bearer_token
 
+admin_default_user_id =
+  case System.get_env("ADMIN_DEFAULT_USER_ID", admin_username) do
+    "" -> "operator"
+    value -> value
+  end
+
+config :maraithon, :admin_control, default_user_id: admin_default_user_id
+
 # =============================================================================
 # Server Configuration
 # =============================================================================
@@ -114,6 +122,9 @@ end
 # GitHub Connector
 config :maraithon, :github,
   webhook_secret: System.get_env("GITHUB_WEBHOOK_SECRET", ""),
+  client_id: System.get_env("GITHUB_CLIENT_ID", ""),
+  client_secret: System.get_env("GITHUB_CLIENT_SECRET", ""),
+  redirect_uri: System.get_env("GITHUB_REDIRECT_URI", ""),
   api_token: System.get_env("GITHUB_ACCESS_TOKEN", ""),
   api_base_url: System.get_env("GITHUB_API_BASE_URL", "https://api.github.com"),
   allow_unsigned: allow_unsigned
@@ -149,6 +160,14 @@ config :maraithon, :linear,
   redirect_uri: System.get_env("LINEAR_REDIRECT_URI", ""),
   webhook_secret: System.get_env("LINEAR_WEBHOOK_SECRET", ""),
   allow_unsigned: allow_unsigned
+
+# Notion Connector
+config :maraithon, :notion,
+  client_id: System.get_env("NOTION_CLIENT_ID", ""),
+  client_secret: System.get_env("NOTION_CLIENT_SECRET", ""),
+  redirect_uri: System.get_env("NOTION_REDIRECT_URI", ""),
+  api_base_url: System.get_env("NOTION_API_BASE_URL", "https://api.notion.com/v1"),
+  api_version: System.get_env("NOTION_API_VERSION", "2025-09-03")
 
 # Notaui MCP Connector
 config :maraithon, :notaui,

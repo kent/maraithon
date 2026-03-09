@@ -29,6 +29,14 @@ defmodule Maraithon.OAuth.Linear do
   def default_scopes, do: @default_scopes
 
   @doc """
+  Returns true when Linear OAuth is configured for interactive connects.
+  """
+  def configured? do
+    config = get_config()
+    config.client_id != "" and config.client_secret != "" and config.redirect_uri != ""
+  end
+
+  @doc """
   Generates the Linear OAuth authorization URL.
   """
   def authorize_url(scopes \\ @default_scopes, state) do

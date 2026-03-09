@@ -2,8 +2,8 @@ defmodule Maraithon.HTTP do
   @moduledoc """
   Shared HTTP client for external API requests.
 
-  Provides a consistent interface over `:httpc` with proper error handling,
-  JSON encoding/decoding, and charlist conversion.
+  Provides a consistent interface over `Req` with proper error handling and
+  JSON decoding.
 
   ## Usage
 
@@ -17,6 +17,8 @@ defmodule Maraithon.HTTP do
       HTTP.get("https://api.example.com/data", [{"Authorization", "Bearer token"}])
   """
 
+  alias Req.Response
+
   require Logger
 
   @type headers :: [{String.t(), String.t()}]
@@ -27,10 +29,7 @@ defmodule Maraithon.HTTP do
   """
   @spec post_form(String.t(), map(), headers()) :: response()
   def post_form(url, params, headers \\ []) when is_map(params) do
-    body = URI.encode_query(params)
-    headers = [{"Content-Type", "application/x-www-form-urlencoded"} | headers]
-
-    request(:post, url, headers, body, "application/x-www-form-urlencoded")
+    request(:post, url, headers, form: params)
   end
 
   @doc """
@@ -38,10 +37,7 @@ defmodule Maraithon.HTTP do
   """
   @spec post_json(String.t(), map(), headers()) :: response()
   def post_json(url, body, headers \\ []) when is_map(body) do
-    headers = [{"Content-Type", "application/json"} | headers]
-    encoded_body = Jason.encode!(body)
-
-    request(:post, url, headers, encoded_body, "application/json")
+    request(:post, url, headers, json: body)
   end
 
   @doc """
@@ -49,7 +45,7 @@ defmodule Maraithon.HTTP do
   """
   @spec get(String.t(), headers()) :: response()
   def get(url, headers \\ []) do
-    request(:get, url, headers, nil, nil)
+    request(:get, url, headers, [])
   end
 
   @doc """
@@ -57,7 +53,15 @@ defmodule Maraithon.HTTP do
   """
   @spec delete(String.t(), headers()) :: response()
   def delete(url, headers \\ []) do
-    request(:delete, url, headers, nil, nil)
+    request(:delete, url, headers, [])
+  end
+
+  @doc """
+  Makes a DELETE request with JSON body.
+  """
+  @spec delete_json(String.t(), map(), headers()) :: response()
+  def delete_json(url, body, headers \\ []) when is_map(body) do
+    request(:delete, url, headers, json: body)
   end
 
   @doc """
@@ -65,10 +69,7 @@ defmodule Maraithon.HTTP do
   """
   @spec put_json(String.t(), map(), headers()) :: response()
   def put_json(url, body, headers \\ []) when is_map(body) do
-    headers = [{"Content-Type", "application/json"} | headers]
-    encoded_body = Jason.encode!(body)
-
-    request(:put, url, headers, encoded_body, "application/json")
+    request(:put, url, headers, json: body)
   end
 
   @doc """
@@ -76,31 +77,26 @@ defmodule Maraithon.HTTP do
   """
   @spec patch_json(String.t(), map(), headers()) :: response()
   def patch_json(url, body, headers \\ []) when is_map(body) do
-    headers = [{"Content-Type", "application/json"} | headers]
-    encoded_body = Jason.encode!(body)
-
-    request(:patch, url, headers, encoded_body, "application/json")
+    request(:patch, url, headers, json: body)
   end
 
   # ===========================================================================
   # Private
   # ===========================================================================
 
-  defp request(method, url, headers, body, content_type) do
-    httpc_headers = Enum.map(headers, fn {k, v} -> {to_charlist(k), to_charlist(v)} end)
+  defp request(method, url, headers, req_opts) do
+    req =
+      Req.new(
+        method: method,
+        url: url,
+        headers: normalize_headers(headers),
+        retry: false,
+        receive_timeout: 15_000
+      )
 
-    httpc_request =
-      case method do
-        m when m in [:get, :delete] ->
-          {to_charlist(url), httpc_headers}
-
-        m when m in [:post, :put, :patch] ->
-          {to_charlist(url), httpc_headers, to_charlist(content_type), to_charlist(body || "")}
-      end
-
-    case :httpc.request(method, httpc_request, [], []) do
-      {:ok, {{_, status, _}, _resp_headers, resp_body}} ->
-        handle_response(status, resp_body, url)
+    case Req.request(req, req_opts) do
+      {:ok, %Response{status: status, body: body}} ->
+        handle_response(status, body, url)
 
       {:error, reason} ->
         Logger.warning("HTTP request failed", url: url, reason: inspect(reason))
@@ -108,30 +104,33 @@ defmodule Maraithon.HTTP do
     end
   end
 
-  defp handle_response(status, body, _url) when status in 200..299 do
-    body_string = List.to_string(body)
-
-    case Jason.decode(body_string) do
-      {:ok, decoded} ->
-        {:ok, decoded}
-
-      {:error, _} ->
-        # Return raw body if not JSON
-        {:ok, body_string}
-    end
-  end
+  defp handle_response(status, body, _url) when status in 200..299, do: {:ok, body}
 
   defp handle_response(401, _body, _url) do
     {:error, :unauthorized}
   end
 
   defp handle_response(429, body, _url) do
-    {:error, {:rate_limited, List.to_string(body)}}
+    {:error, {:rate_limited, response_body_to_string(body)}}
   end
 
   defp handle_response(status, body, url) do
-    body_string = List.to_string(body)
+    body_string = response_body_to_string(body)
     Logger.warning("HTTP request failed", url: url, status: status, body: body_string)
     {:error, {:http_status, status, body_string}}
   end
+
+  defp normalize_headers(headers) do
+    Enum.map(headers, fn
+      {key, value} when is_atom(key) ->
+        {Atom.to_string(key), value}
+
+      {key, value} ->
+        {key, value}
+    end)
+  end
+
+  defp response_body_to_string(body) when is_binary(body), do: body
+  defp response_body_to_string(body) when is_map(body) or is_list(body), do: inspect(body)
+  defp response_body_to_string(body), do: to_string(body)
 end

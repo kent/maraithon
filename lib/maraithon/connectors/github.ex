@@ -110,13 +110,14 @@ defmodule Maraithon.Connectors.GitHub do
   end
 
   @doc """
-  Creates a comment on an issue or pull request using the configured API token.
+  Creates a comment on an issue or pull request using either a caller-supplied
+  access token or the configured fallback API token.
   """
-  def create_issue_comment(owner, repo, issue_number, body)
+  def create_issue_comment(owner, repo, issue_number, body, opts \\ [])
       when is_binary(owner) and is_binary(repo) and is_integer(issue_number) and is_binary(body) do
-    token = get_api_token()
+    token = Keyword.get(opts, :access_token) || get_api_token()
 
-    if token == "" do
+    if token in [nil, ""] do
       {:error, :api_token_not_configured}
     else
       req =

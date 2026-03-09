@@ -98,13 +98,7 @@ defmodule Maraithon.OAuth do
 
       token ->
         # Try to revoke with the provider first
-        case provider do
-          "google" ->
-            Maraithon.OAuth.Google.revoke_token(token.access_token)
-
-          _ ->
-            :ok
-        end
+        revoke_provider_token(token)
 
         # Delete from database
         Repo.delete(token)
@@ -192,7 +186,59 @@ defmodule Maraithon.OAuth do
     end
   end
 
+  defp do_refresh(%Token{provider: "notion"} = token) do
+    case Maraithon.OAuth.Notion.refresh_token(token.refresh_token) do
+      {:ok, new_tokens} ->
+        store_tokens(token.user_id, "notion", %{
+          access_token: new_tokens.access_token,
+          refresh_token: new_tokens.refresh_token || token.refresh_token,
+          expires_in: new_tokens.expires_in,
+          scopes: token.scopes,
+          metadata:
+            token.metadata
+            |> Map.merge(%{
+              "workspace_id" => new_tokens.workspace_id || token.metadata["workspace_id"],
+              "workspace_name" => new_tokens.workspace_name || token.metadata["workspace_name"],
+              "workspace_icon" => new_tokens.workspace_icon || token.metadata["workspace_icon"],
+              "bot_id" => new_tokens.bot_id || token.metadata["bot_id"]
+            })
+        })
+
+      {:error, reason} ->
+        Logger.warning("Failed to refresh Notion token",
+          user_id: token.user_id,
+          reason: inspect(reason)
+        )
+
+        {:error, reason}
+    end
+  end
+
   defp do_refresh(%Token{provider: provider}) do
     {:error, {:unknown_provider, provider}}
+  end
+
+  defp revoke_provider_token(%Token{provider: "google", access_token: access_token}) do
+    Maraithon.OAuth.Google.revoke_token(access_token)
+  end
+
+  defp revoke_provider_token(%Token{provider: "github", access_token: access_token}) do
+    Maraithon.OAuth.GitHub.revoke_token(access_token)
+  end
+
+  defp revoke_provider_token(%Token{provider: "linear", access_token: access_token}) do
+    Maraithon.OAuth.Linear.revoke_token(access_token)
+  end
+
+  defp revoke_provider_token(%Token{provider: "notion", access_token: access_token}) do
+    Maraithon.OAuth.Notion.revoke_token(access_token)
+  end
+
+  defp revoke_provider_token(%Token{provider: provider, access_token: access_token}) do
+    if is_binary(provider) and String.starts_with?(provider, "slack:") do
+      Maraithon.OAuth.Slack.revoke_token(access_token)
+    else
+      :ok
+    end
   end
 end

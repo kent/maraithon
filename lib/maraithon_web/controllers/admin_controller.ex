@@ -2,6 +2,7 @@ defmodule MaraithonWeb.AdminController do
   use MaraithonWeb, :controller
 
   alias Maraithon.Admin
+  alias Maraithon.Connections
 
   def dashboard(conn, params) do
     with {:ok, activity_limit} <-
@@ -67,10 +68,12 @@ defmodule MaraithonWeb.AdminController do
          {:ok, next_token} <- parse_next_token_param(params["next_token"], apps),
          {:ok, snapshot} <-
            Admin.fly_logs(
-             apps: apps,
-             limit: limit,
-             region: blank_to_nil(params["region"]),
-             next_token: next_token
+             [
+               limit: limit,
+               region: blank_to_nil(params["region"]),
+               next_token: next_token
+             ]
+             |> maybe_put_apps(apps)
            ) do
       json(conn, snapshot)
     else
@@ -83,6 +86,42 @@ defmodule MaraithonWeb.AdminController do
         conn
         |> put_status(:bad_gateway)
         |> json(%{error: "fly_logs_unavailable", message: inspect(reason)})
+    end
+  end
+
+  def connections(conn, params) do
+    user_id = parse_user_id(params["user_id"])
+
+    snapshot =
+      case Connections.safe_dashboard_snapshot(user_id, return_to: "/?user_id=#{user_id}") do
+        {:ok, snapshot} -> snapshot
+        {:degraded, snapshot} -> snapshot
+      end
+
+    json(conn, serialize_connections_snapshot(snapshot))
+  end
+
+  def disconnect_connection(conn, %{"provider" => provider} = params) do
+    user_id = parse_user_id(params["user_id"])
+
+    case Connections.disconnect(user_id, provider) do
+      {:ok, _deleted} ->
+        json(conn, %{status: "disconnected", provider: provider, user_id: user_id})
+
+      {:error, :no_token} ->
+        conn
+        |> put_status(:not_found)
+        |> json(%{error: "not_found", message: "Connection not found"})
+
+      {:error, :unsupported_provider} ->
+        conn
+        |> put_status(:bad_request)
+        |> json(%{error: "invalid_params", message: "Unsupported provider"})
+
+      {:error, reason} ->
+        conn
+        |> put_status(:bad_gateway)
+        |> json(%{error: "disconnect_failed", message: inspect(reason)})
     end
   end
 
@@ -117,6 +156,19 @@ defmodule MaraithonWeb.AdminController do
   defp parse_next_token_param(_next_token, _apps),
     do: {:error, "next_token requires exactly one app"}
 
+  defp maybe_put_apps(opts, []), do: opts
+  defp maybe_put_apps(opts, apps), do: Keyword.put(opts, :apps, apps)
+
+  defp parse_user_id(nil), do: Connections.default_user_id()
+  defp parse_user_id(""), do: Connections.default_user_id()
+
+  defp parse_user_id(value) when is_binary(value) do
+    case String.trim(value) do
+      "" -> Connections.default_user_id()
+      trimmed -> trimmed
+    end
+  end
+
   defp blank_to_nil(nil), do: nil
 
   defp blank_to_nil(value) when is_binary(value) do
@@ -132,6 +184,10 @@ defmodule MaraithonWeb.AdminController do
     end)
   end
 
+  defp serialize_connections_snapshot(snapshot) do
+    normalize_json(snapshot)
+  end
+
   defp serialize_agent(agent) when is_map(agent) do
     %{
       id: agent.id,
@@ -144,4 +200,21 @@ defmodule MaraithonWeb.AdminController do
       updated_at: Map.get(agent, :updated_at)
     }
   end
+
+  defp normalize_json(%DateTime{} = value), do: DateTime.to_iso8601(value)
+  defp normalize_json(%NaiveDateTime{} = value), do: NaiveDateTime.to_iso8601(value)
+  defp normalize_json(value) when value in [nil, true, false], do: value
+  defp normalize_json(value) when is_atom(value), do: Atom.to_string(value)
+  defp normalize_json(value) when is_list(value), do: Enum.map(value, &normalize_json/1)
+
+  defp normalize_json(value) when is_map(value) do
+    value
+    |> Enum.map(fn {key, item} -> {normalize_json_key(key), normalize_json(item)} end)
+    |> Map.new()
+  end
+
+  defp normalize_json(value), do: value
+
+  defp normalize_json_key(key) when is_atom(key), do: Atom.to_string(key)
+  defp normalize_json_key(key), do: key
 end

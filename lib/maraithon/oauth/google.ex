@@ -15,6 +15,7 @@ defmodule Maraithon.OAuth.Google do
 
   - Calendar: `https://www.googleapis.com/auth/calendar.readonly`
   - Gmail: `https://www.googleapis.com/auth/gmail.readonly`
+  - Contacts: `https://www.googleapis.com/auth/contacts.readonly`
   """
 
   alias Maraithon.HTTP
@@ -25,6 +26,15 @@ defmodule Maraithon.OAuth.Google do
 
   @scope_calendar "https://www.googleapis.com/auth/calendar.readonly"
   @scope_gmail "https://www.googleapis.com/auth/gmail.readonly"
+  @scope_contacts "https://www.googleapis.com/auth/contacts.readonly"
+
+  @doc """
+  Returns true when Google OAuth is configured for interactive connects.
+  """
+  def configured? do
+    config = get_config()
+    config.client_id != "" and config.client_secret != "" and config.redirect_uri != ""
+  end
 
   @doc """
   Returns the Google OAuth scopes for the given service names.
@@ -38,6 +48,7 @@ defmodule Maraithon.OAuth.Google do
 
   defp scope_for("calendar"), do: @scope_calendar
   defp scope_for("gmail"), do: @scope_gmail
+  defp scope_for("contacts"), do: @scope_contacts
   defp scope_for(_), do: nil
 
   @doc """

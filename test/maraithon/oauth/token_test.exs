@@ -112,6 +112,28 @@ defmodule Maraithon.OAuth.TokenTest do
       assert changeset.valid?
     end
 
+    test "validates provider - github" do
+      changeset =
+        Token.changeset(%Token{}, %{
+          user_id: "user_123",
+          provider: "github",
+          access_token: "token"
+        })
+
+      assert changeset.valid?
+    end
+
+    test "validates provider - notion" do
+      changeset =
+        Token.changeset(%Token{}, %{
+          user_id: "user_123",
+          provider: "notion",
+          access_token: "token"
+        })
+
+      assert changeset.valid?
+    end
+
     test "rejects invalid provider" do
       changeset =
         Token.changeset(%Token{}, %{

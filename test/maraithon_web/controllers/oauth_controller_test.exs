@@ -139,10 +139,27 @@ defmodule MaraithonWeb.OAuthControllerTest do
       redirect_uri: "http://localhost:4000/auth/linear/callback"
     )
 
+    Application.put_env(:maraithon, :github,
+      client_id: "test_github_client_id",
+      client_secret: "test_github_client_secret",
+      redirect_uri: "http://localhost:4000/auth/github/callback",
+      api_base_url: "https://api.github.com"
+    )
+
+    Application.put_env(:maraithon, :notion,
+      client_id: "test_notion_client_id",
+      client_secret: "test_notion_client_secret",
+      redirect_uri: "http://localhost:4000/auth/notion/callback",
+      api_base_url: "https://api.notion.com/v1",
+      api_version: "2025-09-03"
+    )
+
     on_exit(fn ->
       Application.put_env(:maraithon, :google, [])
       Application.put_env(:maraithon, :slack, [])
       Application.put_env(:maraithon, :linear, [])
+      Application.put_env(:maraithon, :github, [])
+      Application.put_env(:maraithon, :notion, [])
     end)
 
     :ok
@@ -482,6 +499,100 @@ defmodule MaraithonWeb.OAuthControllerTest do
   end
 
   # ============================================================================
+  # GITHUB OAUTH TESTS
+  # ============================================================================
+
+  describe "GET /auth/github" do
+    test "redirects to GitHub with PKCE challenge", %{conn: conn} do
+      conn = get(conn, "/auth/github", %{user_id: "user_123"})
+
+      redirect_url = redirected_to(conn)
+
+      assert redirect_url =~ "https://github.com/login/oauth/authorize"
+      assert redirect_url =~ "client_id=test_github_client_id"
+      assert redirect_url =~ "code_challenge="
+      assert redirect_url =~ "code_challenge_method=S256"
+      assert redirect_url =~ "state="
+    end
+  end
+
+  describe "GET /auth/github/callback" do
+    test "redirects back to the admin UI when return_to is provided", %{conn: conn} do
+      bypass = Bypass.open()
+
+      Application.put_env(:maraithon, :github,
+        client_id: "test_github_client_id",
+        client_secret: "test_github_client_secret",
+        redirect_uri: "http://localhost:4000/auth/github/callback",
+        token_url: "http://localhost:#{bypass.port}/login/oauth/access_token",
+        api_base_url: "http://localhost:#{bypass.port}"
+      )
+
+      Bypass.expect_once(bypass, "POST", "/login/oauth/access_token", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{
+            "access_token" => "github_access_token",
+            "scope" => "repo read:org notifications user:email",
+            "token_type" => "bearer"
+          })
+        )
+      end)
+
+      Bypass.expect_once(bypass, "GET", "/user", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{
+            "id" => 42,
+            "login" => "kent",
+            "name" => "Kent",
+            "email" => "kent@example.com",
+            "avatar_url" => "https://avatars.example.com/kent",
+            "html_url" => "https://github.com/kent"
+          })
+        )
+      end)
+
+      state =
+        signed_provider_state("github", "user_123", %{
+          "return_to" => "/?user_id=user_123",
+          "code_verifier" => "test-code-verifier"
+        })
+
+      conn = get(conn, "/auth/github/callback", %{code: "valid_code", state: state})
+
+      redirect_url = redirected_to(conn)
+
+      assert redirect_url =~ "/?oauth_message="
+      assert redirect_url =~ "oauth_provider=github"
+      assert redirect_url =~ "oauth_status=connected"
+      assert redirect_url =~ "user_id=user_123"
+    end
+  end
+
+  # ============================================================================
+  # NOTION OAUTH TESTS
+  # ============================================================================
+
+  describe "GET /auth/notion" do
+    test "redirects to Notion with the expected owner and client id", %{conn: conn} do
+      conn = get(conn, "/auth/notion", %{user_id: "user_123"})
+
+      redirect_url = redirected_to(conn)
+
+      assert redirect_url =~ "https://api.notion.com/v1/oauth/authorize"
+      assert redirect_url =~ "client_id=test_notion_client_id"
+      assert redirect_url =~ "owner=user"
+      assert redirect_url =~ "response_type=code"
+      assert redirect_url =~ "state="
+    end
+  end
+
+  # ============================================================================
   # GOOGLE SCOPE HANDLING TESTS
   # ============================================================================
   #
@@ -754,8 +865,10 @@ defmodule MaraithonWeb.OAuthControllerTest do
     signed_state(%{"provider" => "google", "user_id" => user_id, "services" => services})
   end
 
-  defp signed_provider_state(provider, user_id) do
-    signed_state(%{"provider" => provider, "user_id" => user_id})
+  defp signed_provider_state(provider, user_id, extra \\ %{}) do
+    %{"provider" => provider, "user_id" => user_id}
+    |> Map.merge(extra)
+    |> signed_state()
   end
 
   defp signed_state(payload) do

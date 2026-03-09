@@ -188,9 +188,12 @@ Connectors bridge external services to agents via webhooks.
 ### GitHub (Available)
 
 ```bash
-# Configure webhook secret
+# Configure webhook secret and optional admin OAuth app
 export GITHUB_WEBHOOK_SECRET="your_secret"
-export GITHUB_ACCESS_TOKEN="ghp_xxx" # required for outbound agent actions like issue comments
+export GITHUB_ACCESS_TOKEN="ghp_xxx" # optional fallback for outbound actions
+export GITHUB_CLIENT_ID="your_oauth_app_client_id"
+export GITHUB_CLIENT_SECRET="your_oauth_app_client_secret"
+export GITHUB_REDIRECT_URI="https://your-domain.com/auth/github/callback"
 
 # Create agent subscribed to a repo
 curl -X POST http://localhost:4000/api/v1/agents \
@@ -210,7 +213,7 @@ curl -X POST http://localhost:4000/api/v1/agents \
 
 **Supported events**: `issue_opened`, `issue_closed`, `pr_opened`, `pr_merged`, `push`, `comment_created`, and more.
 
-**Available tools**: `github_create_issue_comment`
+**Available tools**: `github_create_issue_comment` (prefers a stored user OAuth grant when `user_id` is provided)
 
 ### Google Calendar (Available)
 
@@ -259,6 +262,17 @@ curl -X POST http://localhost:4000/api/v1/agents \
 ```
 
 **Supported events**: `email_sync`, `email_received`, `email_changed`
+
+### Google Contacts (Available via OAuth)
+
+```bash
+# Google Contacts uses the same Google OAuth app as Gmail/Calendar
+# Visit: /auth/google?scopes=contacts&user_id=user_123
+# Or connect all Google services at once:
+# Visit: /auth/google?scopes=gmail,calendar,contacts&user_id=user_123
+```
+
+This stores an encrypted server-side Google grant with the `contacts.readonly` scope so future agent tools can read your contact graph without handling local tokens.
 
 ### Slack (Available)
 
@@ -367,6 +381,20 @@ curl -X POST http://localhost:4000/api/v1/agents \
 
 **Available tools**: `linear_create_comment`, `linear_create_issue`, `linear_update_issue_state`
 
+### Notion (OAuth Ready)
+
+```bash
+# Configure Notion public integration OAuth
+export NOTION_CLIENT_ID="your_client_id"
+export NOTION_CLIENT_SECRET="your_client_secret"
+export NOTION_REDIRECT_URI="https://your-domain.com/auth/notion/callback"
+
+# User authorizes via OAuth
+# Visit: /auth/notion?user_id=user_123
+```
+
+Maraithon stores the resulting workspace token encrypted on the server and exposes it in the admin control center, even before dedicated Notion agent tools are added.
+
 ### Telegram (Available)
 
 ```bash
@@ -444,6 +472,8 @@ When enabled, include: `Authorization: Bearer <API_BEARER_TOKEN>`.
 | `GET /api/v1/agents/:id/spend` | Get agent LLM spend |
 | `GET /api/v1/admin/agents/:id/inspection` | Deep agent inspection payload |
 | `GET /api/v1/admin/dashboard` | Fleet-wide health, queue, activity, and raw logs |
+| `GET /api/v1/admin/connections` | Server-side OAuth grants plus provider setup metadata |
+| `DELETE /api/v1/admin/connections/:provider` | Revoke and remove a stored provider grant |
 | `GET /api/v1/admin/fly/logs` | Fly app and machine logs for platform troubleshooting |
 
 ### Events
@@ -472,10 +502,14 @@ When enabled, include: `Authorization: Bearer <API_BEARER_TOKEN>`.
 |----------|-------------|
 | `GET /auth/google` | Initiate Google OAuth flow |
 | `GET /auth/google/callback` | Google OAuth callback |
+| `GET /auth/github` | Initiate GitHub OAuth flow |
+| `GET /auth/github/callback` | GitHub OAuth callback |
 | `GET /auth/slack` | Initiate Slack OAuth flow |
 | `GET /auth/slack/callback` | Slack OAuth callback |
 | `GET /auth/linear` | Initiate Linear OAuth flow |
 | `GET /auth/linear/callback` | Linear OAuth callback |
+| `GET /auth/notion` | Initiate Notion OAuth flow |
+| `GET /auth/notion/callback` | Notion OAuth callback |
 
 ## Admin Control Center
 
@@ -488,7 +522,16 @@ High-value workflows:
 - **Inspect an agent** from the registry table. The selected agent panel shows status, spend, prompt, config snapshot, recent events, queued effects, scheduled jobs, and agent-scoped raw logs.
 - **Operate a running agent** from the operator console. Use it to send direct instructions into the agent runtime without opening another tool surface.
 - **Monitor the fleet** from the lower panels. Health, queue depth, failures, operational activity, and raw runtime logs are all visible from the same page.
+- **Manage server-side OAuth grants** from the `Connections` and `Connected Accounts` panels. Pick the control-center `user_id`, launch OAuth for Google, GitHub, Linear, or Notion, inspect stored grants, and disconnect them without leaving the dashboard.
+- **Configure providers from the `OAuth Configuration` panel.** Each provider card shows callback URLs, webhook endpoints, required and optional environment variables, setup status, permissions, and the exact values you should register in the provider console before clicking connect.
 - **Troubleshoot Fly deployment issues** from the Fly.io Platform Logs panel. This surfaces runner, machine, and app logs from Fly itself, including machine stops, restarts, and DB machine problems when configured.
+
+Recommended flow for personal production use:
+
+1. Set `ADMIN_DEFAULT_USER_ID` to your stable operator identity, for example `kent`.
+2. Open the admin dashboard and use the `Connections` panel to connect Google, GitHub, Linear, and Notion for that user.
+3. Build agents that subscribe to topics like `email:kent`, `calendar:kent`, `github:owner/repo`, or `linear:eng`.
+4. Pass that same `user_id` into action tools like `github_create_issue_comment` or `linear_create_issue` so agents use the stored server-side grant.
 
 Recommended first workflow:
 
@@ -678,6 +721,7 @@ export ANTHROPIC_API_KEY="sk-..."
 # Required for production security
 export ADMIN_USERNAME="admin"
 export ADMIN_PASSWORD="replace-with-long-random-password"
+export ADMIN_DEFAULT_USER_ID="kent"
 export API_BEARER_TOKEN="replace-with-long-random-token"
 export SECRET_KEY_BASE="$(mix phx.gen.secret)"
 export CLOAK_KEY="$(openssl rand -base64 32)"
@@ -692,10 +736,13 @@ export DB_QUEUE_INTERVAL_MS="2000"
 export ANTHROPIC_MODEL="claude-sonnet-4-20250514"
 export GITHUB_WEBHOOK_SECRET="your_secret"
 export GITHUB_ACCESS_TOKEN="ghp_xxx"
+export GITHUB_CLIENT_ID="your_oauth_app_client_id"
+export GITHUB_CLIENT_SECRET="your_oauth_app_client_secret"
+export GITHUB_REDIRECT_URI="https://your-domain.com/auth/github/callback"
 export DATABASE_URL="postgres://..." # pooled runtime URL
 export DIRECT_DATABASE_URL="postgres://..." # direct URL for migrations
 
-# Google OAuth (required for Calendar/Gmail)
+# Google OAuth (required for Calendar/Gmail/Contacts)
 export GOOGLE_CLIENT_ID="your_client_id"
 export GOOGLE_CLIENT_SECRET="your_client_secret"
 export GOOGLE_REDIRECT_URI="https://your-domain.com/auth/google/callback"
@@ -726,6 +773,11 @@ export LINEAR_CLIENT_ID="your_client_id"
 export LINEAR_CLIENT_SECRET="your_client_secret"
 export LINEAR_REDIRECT_URI="https://your-domain.com/auth/linear/callback"
 export LINEAR_WEBHOOK_SECRET="your_webhook_secret"
+
+# Notion (required for Notion OAuth in the admin control center)
+export NOTION_CLIENT_ID="your_client_id"
+export NOTION_CLIENT_SECRET="your_client_secret"
+export NOTION_REDIRECT_URI="https://your-domain.com/auth/notion/callback"
 
 # Telegram (required for Telegram connector)
 export TELEGRAM_BOT_TOKEN="123456789:ABC..."

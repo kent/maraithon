@@ -33,10 +33,14 @@ defmodule MaraithonWeb.Router do
 
     get "/google", OAuthController, :google
     get "/google/callback", OAuthController, :google_callback
+    get "/github", OAuthController, :github
+    get "/github/callback", OAuthController, :github_callback
     get "/slack", OAuthController, :slack
     get "/slack/callback", OAuthController, :slack_callback
     get "/linear", OAuthController, :linear
     get "/linear/callback", OAuthController, :linear_callback
+    get "/notion", OAuthController, :notion
+    get "/notion/callback", OAuthController, :notion_callback
   end
 
   # Web UI - Dashboard
@@ -65,6 +69,8 @@ defmodule MaraithonWeb.Router do
     get "/admin/dashboard", AdminController, :dashboard
     get "/admin/agents/:id/inspection", AdminController, :agent_inspection
     get "/admin/fly/logs", AdminController, :fly_logs
+    get "/admin/connections", AdminController, :connections
+    delete "/admin/connections/:provider", AdminController, :disconnect_connection
 
     # Spend tracking
     get "/spend", AgentController, :total_spend

@@ -31,12 +31,19 @@ defmodule Maraithon.OAuth.GoogleTest do
       assert scopes == ["https://www.googleapis.com/auth/gmail.readonly"]
     end
 
+    test "returns contacts scope" do
+      scopes = Google.scopes_for(["contacts"])
+
+      assert scopes == ["https://www.googleapis.com/auth/contacts.readonly"]
+    end
+
     test "returns multiple scopes" do
-      scopes = Google.scopes_for(["calendar", "gmail"])
+      scopes = Google.scopes_for(["calendar", "gmail", "contacts"])
 
       assert "https://www.googleapis.com/auth/calendar.readonly" in scopes
       assert "https://www.googleapis.com/auth/gmail.readonly" in scopes
-      assert length(scopes) == 2
+      assert "https://www.googleapis.com/auth/contacts.readonly" in scopes
+      assert length(scopes) == 3
     end
 
     test "ignores unknown services" do
