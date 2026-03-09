@@ -6,6 +6,7 @@ defmodule MaraithonWeb.DashboardLive do
   alias Maraithon.Agents
   alias Maraithon.Behaviors
   alias Maraithon.Connections
+  alias Maraithon.Insights
   alias Maraithon.Runtime
 
   @refresh_interval 5_000
@@ -61,7 +62,8 @@ defmodule MaraithonWeb.DashboardLive do
         raw_connections: [],
         connection_errors: [],
         dashboard_errors: [],
-        inspection_errors: []
+        inspection_errors: [],
+        insights: []
       )
 
     socket =
@@ -173,6 +175,50 @@ defmodule MaraithonWeb.DashboardLive do
            :error,
            "Failed to disconnect #{provider_label(provider)}: #{inspect(reason)}"
          )}
+    end
+  end
+
+  def handle_event("ack_insight", %{"id" => insight_id}, socket) do
+    case Insights.acknowledge(current_user_id(socket), insight_id) do
+      {:ok, _insight} ->
+        {:noreply, socket |> refresh_insights() |> put_flash(:info, "Insight acknowledged")}
+
+      {:error, :not_found} ->
+        {:noreply, socket |> refresh_insights() |> put_flash(:error, "Insight not found")}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Failed to acknowledge insight: #{inspect(reason)}")}
+    end
+  end
+
+  def handle_event("dismiss_insight", %{"id" => insight_id}, socket) do
+    case Insights.dismiss(current_user_id(socket), insight_id) do
+      {:ok, _insight} ->
+        {:noreply, socket |> refresh_insights() |> put_flash(:info, "Insight dismissed")}
+
+      {:error, :not_found} ->
+        {:noreply, socket |> refresh_insights() |> put_flash(:error, "Insight not found")}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Failed to dismiss insight: #{inspect(reason)}")}
+    end
+  end
+
+  def handle_event("snooze_insight", %{"id" => insight_id}, socket) do
+    snooze_until = DateTime.add(DateTime.utc_now(), 4, :hour)
+
+    case Insights.snooze(current_user_id(socket), insight_id, snooze_until) do
+      {:ok, _insight} ->
+        {:noreply,
+         socket
+         |> refresh_insights()
+         |> put_flash(:info, "Insight snoozed for 4 hours")}
+
+      {:error, :not_found} ->
+        {:noreply, socket |> refresh_insights() |> put_flash(:error, "Insight not found")}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Failed to snooze insight: #{inspect(reason)}")}
     end
   end
 
@@ -414,6 +460,84 @@ defmodule MaraithonWeb.DashboardLive do
           >
             Open Connectors
           </.link>
+        </div>
+      </section>
+
+      <section class="overflow-hidden rounded-xl bg-white shadow">
+        <div class="border-b border-gray-200 px-4 py-4 sm:px-6">
+          <div class="flex items-center justify-between gap-3">
+            <div>
+              <h2 class="text-lg font-medium text-gray-900">Actionable Insights</h2>
+              <p class="mt-1 text-sm text-gray-500">
+                Email and calendar recommendations from long-running advisor agents.
+              </p>
+            </div>
+            <span class="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700">
+              <%= length(@insights) %> open
+            </span>
+          </div>
+        </div>
+
+        <div class="divide-y divide-slate-200">
+          <%= for insight <- @insights do %>
+            <div class="px-4 py-4 sm:px-6">
+              <div class="flex flex-wrap items-start justify-between gap-3">
+                <div class="min-w-0 flex-1">
+                  <div class="flex flex-wrap items-center gap-2">
+                    <span class={insight_category_class(insight.category)}>
+                      <%= insight_category_label(insight.category) %>
+                    </span>
+                    <span class={insight_priority_class(insight.priority)}>
+                      P<%= insight.priority %>
+                    </span>
+                    <span class="text-xs text-slate-500">
+                      confidence <%= format_confidence(insight.confidence) %>
+                    </span>
+                    <span :if={insight.due_at} class="text-xs text-amber-700">
+                      due <%= format_datetime(insight.due_at) %>
+                    </span>
+                  </div>
+                  <p class="mt-2 text-sm font-semibold text-slate-900"><%= insight.title %></p>
+                  <p class="mt-1 text-sm text-slate-600"><%= insight.summary %></p>
+                  <p class="mt-2 text-sm text-indigo-700">
+                    <span class="font-medium">Action:</span> <%= insight.recommended_action %>
+                  </p>
+                </div>
+                <div class="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    phx-click="ack_insight"
+                    phx-value-id={insight.id}
+                    class="inline-flex items-center rounded-md border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-xs font-medium text-emerald-800 hover:bg-emerald-100"
+                  >
+                    Acknowledge
+                  </button>
+                  <button
+                    type="button"
+                    phx-click="snooze_insight"
+                    phx-value-id={insight.id}
+                    class="inline-flex items-center rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-xs font-medium text-amber-800 hover:bg-amber-100"
+                  >
+                    Snooze 4h
+                  </button>
+                  <button
+                    type="button"
+                    phx-click="dismiss_insight"
+                    phx-value-id={insight.id}
+                    class="inline-flex items-center rounded-md border border-rose-200 bg-rose-50 px-2.5 py-1.5 text-xs font-medium text-rose-700 hover:bg-rose-100"
+                  >
+                    Dismiss
+                  </button>
+                </div>
+              </div>
+            </div>
+          <% end %>
+
+          <%= if @insights == [] do %>
+            <div class="px-4 py-10 text-center text-sm text-slate-500 sm:px-6">
+              No actionable insights yet. Start an <span class="font-medium">inbox_calendar_advisor</span> agent and connect Google services.
+            </div>
+          <% end %>
         </div>
       </section>
 
@@ -1343,7 +1467,11 @@ defmodule MaraithonWeb.DashboardLive do
   end
 
   defp refresh_dashboard(socket, opts \\ []) do
-    socket = refresh_connections(socket)
+    socket =
+      socket
+      |> refresh_connections()
+      |> refresh_insights()
+
     user_id = current_user_id(socket)
 
     socket =
@@ -1389,6 +1517,10 @@ defmodule MaraithonWeb.DashboardLive do
     else
       socket
     end
+  end
+
+  defp refresh_insights(socket) do
+    assign(socket, :insights, Insights.list_open_for_user(current_user_id(socket), limit: 20))
   end
 
   defp refresh_selected_agent(socket, id, opts \\ []) do
@@ -1781,9 +1913,44 @@ defmodule MaraithonWeb.DashboardLive do
 
   defp provider_label("google"), do: "Google"
   defp provider_label("github"), do: "GitHub"
+  defp provider_label("telegram"), do: "Telegram"
   defp provider_label("linear"), do: "Linear"
   defp provider_label("notion"), do: "Notion"
   defp provider_label(provider), do: provider
+
+  defp insight_category_label("reply_urgent"), do: "Reply Needed"
+  defp insight_category_label("tone_risk"), do: "Tone Risk"
+  defp insight_category_label("event_important"), do: "Important Event"
+  defp insight_category_label("event_prep_needed"), do: "Prep Needed"
+  defp insight_category_label(_), do: "Insight"
+
+  defp insight_category_class("reply_urgent"),
+    do: "rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800"
+
+  defp insight_category_class("tone_risk"),
+    do: "rounded-full bg-rose-100 px-2 py-0.5 text-xs font-medium text-rose-700"
+
+  defp insight_category_class("event_important"),
+    do: "rounded-full bg-indigo-100 px-2 py-0.5 text-xs font-medium text-indigo-700"
+
+  defp insight_category_class("event_prep_needed"),
+    do: "rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700"
+
+  defp insight_category_class(_),
+    do: "rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700"
+
+  defp insight_priority_class(priority) when is_integer(priority) and priority >= 80,
+    do: "rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700"
+
+  defp insight_priority_class(priority) when is_integer(priority) and priority >= 60,
+    do: "rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700"
+
+  defp insight_priority_class(_),
+    do: "rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700"
+
+  defp format_confidence(value) when is_float(value), do: "#{Float.round(value * 100, 0)}%"
+  defp format_confidence(value) when is_integer(value), do: "#{value}%"
+  defp format_confidence(_), do: "n/a"
 
   defp agent_name(config), do: config["name"] || "unnamed_agent"
   defp agent_prompt(config), do: config["prompt"] || @default_prompt

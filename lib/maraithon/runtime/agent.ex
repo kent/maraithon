@@ -15,6 +15,7 @@ defmodule Maraithon.Runtime.Agent do
 
   defstruct [
     :agent_id,
+    :user_id,
     :behavior_module,
     :behavior_state,
     :config,
@@ -114,6 +115,7 @@ defmodule Maraithon.Runtime.Agent do
     data = %{
       data
       | behavior_module: behavior_module,
+        user_id: agent.user_id,
         behavior_state: behavior_state,
         budget: budget,
         sequence_num: Events.latest_sequence_num(agent.id),
@@ -471,6 +473,7 @@ defmodule Maraithon.Runtime.Agent do
   defp build_context(data) do
     %{
       agent_id: data.agent_id,
+      user_id: data.user_id,
       timestamp: DateTime.utc_now(),
       budget: data.budget,
       # TODO: Load recent events

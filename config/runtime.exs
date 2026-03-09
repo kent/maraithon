@@ -97,6 +97,9 @@ config :maraithon, Maraithon.Runtime,
     String.to_integer(System.get_env("SCHEDULER_POLL_INTERVAL_MS", "5000")),
   scheduler_dispatch_timeout_ms:
     String.to_integer(System.get_env("SCHEDULER_DISPATCH_TIMEOUT_MS", "60000")),
+  insight_notify_interval_ms:
+    String.to_integer(System.get_env("INSIGHT_NOTIFY_INTERVAL_MS", "60000")),
+  insight_notify_batch_size: String.to_integer(System.get_env("INSIGHT_NOTIFY_BATCH_SIZE", "20")),
   bootstrap_retry_interval_ms:
     String.to_integer(System.get_env("BOOTSTRAP_RETRY_INTERVAL_MS", "5000")),
   health_report_interval_ms:

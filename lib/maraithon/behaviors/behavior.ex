@@ -6,6 +6,7 @@ defmodule Maraithon.Behaviors.Behavior do
   @type state :: any()
   @type context :: %{
           agent_id: String.t(),
+          user_id: String.t() | nil,
           timestamp: DateTime.t(),
           budget: map(),
           recent_events: [map()],

@@ -12,6 +12,8 @@ defmodule MaraithonWeb.WebhookController do
     Telegram
   }
 
+  alias Maraithon.InsightNotifications
+
   require Logger
 
   @doc """
@@ -120,7 +122,8 @@ defmodule MaraithonWeb.WebhookController do
       connector_module: Telegram,
       signature_log: "Telegram verification failed",
       signature_error: "Invalid request",
-      failure_log: "Telegram webhook failed"
+      failure_log: "Telegram webhook failed",
+      on_event: &handle_telegram_event/1
     )
   end
 
@@ -145,6 +148,7 @@ defmodule MaraithonWeb.WebhookController do
   defp handle_connector_result(conn, result, opts) do
     case result do
       {:ok, topic, event} ->
+        maybe_handle_event(event, opts)
         Connector.publish(topic, event)
 
         conn
@@ -168,6 +172,24 @@ defmodule MaraithonWeb.WebhookController do
         Logger.warning(failure_log, reason: inspect(reason))
         bad_request(conn, error_message)
     end
+  end
+
+  defp maybe_handle_event(event, opts) do
+    case Keyword.get(opts, :on_event) do
+      callback when is_function(callback, 1) ->
+        callback.(event)
+
+      _ ->
+        :ok
+    end
+  rescue
+    error ->
+      Logger.warning("Connector side-effect handler failed", reason: Exception.message(error))
+      :ok
+  end
+
+  defp handle_telegram_event(event) do
+    InsightNotifications.handle_telegram_event(event)
   end
 
   defp handle_signed_connector(conn, params, opts) do

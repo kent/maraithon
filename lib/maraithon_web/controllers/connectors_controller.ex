@@ -118,6 +118,7 @@ defmodule MaraithonWeb.ConnectorsController do
 
   defp provider_label("google"), do: "Google"
   defp provider_label("github"), do: "GitHub"
+  defp provider_label("telegram"), do: "Telegram"
   defp provider_label("linear"), do: "Linear"
   defp provider_label("notion"), do: "Notion"
   defp provider_label(provider), do: provider

@@ -17,6 +17,13 @@ defmodule Maraithon.ConnectedAccounts do
     |> Repo.all()
   end
 
+  def list_connected_provider(provider) when is_binary(provider) do
+    ConnectedAccount
+    |> where([account], account.provider == ^provider and account.status == "connected")
+    |> order_by([account], asc: account.user_id)
+    |> Repo.all()
+  end
+
   def has_any?(user_id) when is_binary(user_id) do
     ConnectedAccount
     |> where([account], account.user_id == ^user_id)
@@ -27,6 +34,15 @@ defmodule Maraithon.ConnectedAccounts do
 
   def get(user_id, provider) when is_binary(user_id) and is_binary(provider) do
     Repo.get_by(ConnectedAccount, user_id: user_id, provider: provider)
+  end
+
+  def get_connected_by_external_account(provider, external_account_id)
+      when is_binary(provider) and is_binary(external_account_id) do
+    Repo.get_by(ConnectedAccount,
+      provider: provider,
+      external_account_id: external_account_id,
+      status: "connected"
+    )
   end
 
   def upsert_from_oauth(user_id, provider, token_data)
@@ -58,6 +74,42 @@ defmodule Maraithon.ConnectedAccounts do
       account ->
         account
         |> ConnectedAccount.changeset(attrs)
+        |> Repo.update()
+    end
+  end
+
+  def upsert_manual(user_id, provider, attrs \\ %{})
+      when is_binary(user_id) and is_binary(provider) and is_map(attrs) do
+    now = DateTime.utc_now()
+
+    merged_attrs =
+      attrs
+      |> Map.take([
+        :external_account_id,
+        "external_account_id",
+        :metadata,
+        "metadata",
+        :scopes,
+        "scopes"
+      ])
+      |> normalize_attrs()
+      |> Map.merge(%{
+        user_id: user_id,
+        provider: provider,
+        status: "connected",
+        connected_at: now,
+        last_refreshed_at: now
+      })
+
+    case get(user_id, provider) do
+      nil ->
+        %ConnectedAccount{}
+        |> ConnectedAccount.changeset(merged_attrs)
+        |> Repo.insert()
+
+      account ->
+        account
+        |> ConnectedAccount.changeset(merged_attrs)
         |> Repo.update()
     end
   end
@@ -109,4 +161,12 @@ defmodule Maraithon.ConnectedAccounts do
   end
 
   defp metadata_external_account_id(_), do: nil
+
+  defp normalize_attrs(attrs) do
+    %{
+      external_account_id: attrs[:external_account_id] || attrs["external_account_id"],
+      metadata: normalize_metadata(attrs[:metadata] || attrs["metadata"]),
+      scopes: normalize_scopes(attrs[:scopes] || attrs["scopes"])
+    }
+  end
 end

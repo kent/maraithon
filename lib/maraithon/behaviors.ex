@@ -7,7 +7,8 @@ defmodule Maraithon.Behaviors do
     "codebase_advisor" => Maraithon.Behaviors.CodebaseAdvisor,
     "watchdog_summarizer" => Maraithon.Behaviors.WatchdogSummarizer,
     "repo_planner" => Maraithon.Behaviors.RepoPlanner,
-    "prompt_agent" => Maraithon.Behaviors.PromptAgent
+    "prompt_agent" => Maraithon.Behaviors.PromptAgent,
+    "inbox_calendar_advisor" => Maraithon.Behaviors.InboxCalendarAdvisor
   }
 
   @doc """

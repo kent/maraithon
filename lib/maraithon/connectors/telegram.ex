@@ -328,6 +328,14 @@ defmodule Maraithon.Connectors.Telegram do
   end
 
   @doc """
+  Returns true when a bot token is configured.
+  """
+  def configured? do
+    bot_token = get_bot_token()
+    is_binary(bot_token) and String.trim(bot_token) != ""
+  end
+
+  @doc """
   Sends a text message.
   """
   def send_message(chat_id, text, opts \\ []) do

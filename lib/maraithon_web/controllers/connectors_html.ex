@@ -14,13 +14,14 @@ defmodule MaraithonWeb.ConnectorsHTML do
 
   def provider_subtitle(_provider), do: "No details yet."
 
-  def setup_completion_text(%{setup_status: :configured}), do: "OAuth app configured"
-  def setup_completion_text(_provider), do: "OAuth app setup required"
+  def setup_completion_text(%{setup_status: :configured}), do: "Connector configured"
+  def setup_completion_text(_provider), do: "Connector setup required"
 
   def connection_primary_action(%{provider: "google", status: :connected}),
     do: "Update Google Access"
 
   def connection_primary_action(%{provider: "google"}), do: "Connect Google"
+  def connection_primary_action(%{provider: "telegram"}), do: "Link Telegram"
   def connection_primary_action(%{status: :connected}), do: "Reconnect"
   def connection_primary_action(_provider), do: "Connect"
 
@@ -160,6 +161,14 @@ defmodule MaraithonWeb.ConnectorsHTML do
     ~H"""
     <div class="flex h-10 w-10 items-center justify-center rounded-xl border border-slate-300 bg-white text-xs font-semibold text-slate-900 shadow-sm">
       N
+    </div>
+    """
+  end
+
+  def oauth_logo(%{provider: :telegram} = assigns) do
+    ~H"""
+    <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-sky-500 text-xs font-semibold text-white shadow-sm">
+      TG
     </div>
     """
   end

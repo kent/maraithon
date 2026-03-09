@@ -29,7 +29,8 @@ defmodule Maraithon.Runtime.Supervisor do
           Maraithon.Runtime.Bootstrap,
           Maraithon.Runtime.EffectRunner,
           Maraithon.Runtime.Scheduler,
-          Maraithon.Runtime.HealthReporter
+          Maraithon.Runtime.HealthReporter,
+          Maraithon.Runtime.InsightNotifier
         ]
       else
         []

@@ -264,7 +264,7 @@ defmodule MaraithonWeb.AdminControllerTest do
       response = json_response(conn, 200)
       assert response["user_id"] == "kent"
       assert response["connected_count"] >= 1
-      assert length(response["providers"]) == 4
+      assert length(response["providers"]) == 5
       assert Enum.any?(response["raw_tokens"], &(&1["provider"] == "github"))
 
       github =

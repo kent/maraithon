@@ -1,8 +1,10 @@
 defmodule Maraithon.Connections do
   @moduledoc """
-  Admin-facing connection inventory for OAuth-backed integrations.
+  Admin-facing connection inventory for integrations.
   """
 
+  alias Maraithon.ConnectedAccounts
+  alias Maraithon.Connectors.Telegram
   alias Maraithon.OAuth
   alias Maraithon.OAuth.{GitHub, Google, Linear, Notion, Token}
 
@@ -64,10 +66,12 @@ defmodule Maraithon.Connections do
       |> Enum.sort_by(&provider_sort_key/1)
 
     token_by_provider = Map.new(tokens, &{&1.provider, &1})
+    telegram_account = ConnectedAccounts.get(user_id, "telegram")
 
     providers = [
       google_card(user_id, token_by_provider["google"], return_to),
       github_card(user_id, token_by_provider["github"], return_to),
+      telegram_card(user_id, telegram_account, return_to),
       linear_card(user_id, token_by_provider["linear"], return_to),
       notion_card(user_id, token_by_provider["notion"], return_to)
     ]
@@ -89,6 +93,10 @@ defmodule Maraithon.Connections do
     OAuth.revoke(user_id, provider)
   end
 
+  def disconnect(user_id, "telegram") when is_binary(user_id) do
+    ConnectedAccounts.mark_disconnected(user_id, "telegram")
+  end
+
   def disconnect(_user_id, _provider), do: {:error, :unsupported_provider}
 
   defp fallback_snapshot(user_id, return_to, reason) do
@@ -96,6 +104,7 @@ defmodule Maraithon.Connections do
       [
         google_card(user_id, nil, return_to),
         github_card(user_id, nil, return_to),
+        telegram_card(user_id, nil, return_to),
         linear_card(user_id, nil, return_to),
         notion_card(user_id, nil, return_to)
       ]
@@ -223,6 +232,46 @@ defmodule Maraithon.Connections do
           if(team_names != [], do: "Teams: #{Enum.join(team_names, ", ")}"),
           "Scopes: #{Enum.join(token_scopes(token), ", ")}"
         ]),
+      services: []
+    }
+    |> enrich_provider_setup()
+  end
+
+  defp telegram_card(user_id, account, return_to) do
+    configured? = Telegram.configured?()
+    metadata = if account, do: account.metadata || %{}, else: %{}
+    chat_id = account && (account.external_account_id || metadata["chat_id"])
+    username = metadata["username"]
+
+    status =
+      cond do
+        not configured? -> :not_configured
+        account && account.status == "connected" -> :connected
+        true -> :disconnected
+      end
+
+    %{
+      id: "telegram",
+      provider: "telegram",
+      label: "Telegram Bot",
+      description: "Receive urgent Maraithon insights with inline helpful/not-helpful feedback.",
+      status: status,
+      configured?: configured?,
+      updated_at: account && account.updated_at,
+      disconnectable?: account && account.status == "connected",
+      connect_url: auth_url("/connectors/telegram", user_id, return_to),
+      disconnect_label: "Disconnect Telegram",
+      details:
+        if account && account.status == "connected" do
+          [
+            "Linked chat #{chat_id}",
+            if(is_binary(username) and username != "", do: "@#{username}"),
+            "Last updated #{format_datetime(account.updated_at)}"
+          ]
+          |> Enum.reject(&is_nil/1)
+        else
+          ["Not linked yet. Send /start #{user_id} to your bot chat."]
+        end,
       services: []
     }
     |> enrich_provider_setup()
@@ -574,6 +623,46 @@ defmodule Maraithon.Connections do
       setup_notes: [
         "Create a public Notion integration and register the callback URL.",
         "Workspace-level permissions are chosen in Notion, not in the query string."
+      ]
+    }
+  end
+
+  defp provider_setup("telegram") do
+    secret_path = config_value(:telegram, :webhook_secret_path)
+
+    webhook_path =
+      if present?(secret_path),
+        do: "/webhooks/telegram/#{secret_path}",
+        else: "/webhooks/telegram/{TELEGRAM_WEBHOOK_SECRET}"
+
+    %{
+      logo: :telegram,
+      permissions: [
+        "Read incoming bot messages for link commands",
+        "Send push notifications for high-priority insights",
+        "Read inline button feedback to tune thresholds"
+      ],
+      callback_urls: [
+        %{label: "Webhook callback", url: callback_url(webhook_path), required?: true}
+      ],
+      env_requirements: [
+        env_requirement(
+          "TELEGRAM_BOT_TOKEN",
+          config_value(:telegram, :bot_token),
+          "Telegram bot token from BotFather",
+          true
+        ),
+        env_requirement(
+          "TELEGRAM_WEBHOOK_SECRET",
+          config_value(:telegram, :webhook_secret_path),
+          "Secret path segment used by the webhook endpoint",
+          true
+        )
+      ],
+      setup_notes: [
+        "Set your webhook to the callback URL shown above.",
+        "Users link their chat with: /start their-email@example.com",
+        "Only insights above each user's threshold are pushed."
       ]
     }
   end
