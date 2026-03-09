@@ -10,7 +10,7 @@ primary_region = 'yyz'
   dockerfile = 'Dockerfile'
 
 [deploy]
-  release_command = '/app/bin/migrate-with-direct-url'
+  release_command = "/bin/sh -lc 'if [ -n \"$DIRECT_DATABASE_URL\" ]; then export DATABASE_URL=\"$DIRECT_DATABASE_URL\"; fi; exec /app/bin/maraithon eval \"Maraithon.Release.migrate\"'"
 
 [http_service]
   internal_port = 8080
