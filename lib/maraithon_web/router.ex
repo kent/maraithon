@@ -63,6 +63,7 @@ defmodule MaraithonWeb.Router do
     pipe_through [:browser, :require_authenticated_user]
 
     get "/connectors", ConnectorsController, :index
+    get "/connectors/:provider", ConnectorsController, :show
     post "/connectors/:provider/disconnect", ConnectorsController, :disconnect
     get "/conenctors", ConnectorsController, :legacy_redirect
     get "/how-it-works", HowItWorksController, :index

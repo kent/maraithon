@@ -3,6 +3,20 @@ defmodule MaraithonWeb.ConnectorsHTML do
 
   embed_templates "connectors_html/*"
 
+  def provider_detail_path(provider) when is_map(provider),
+    do: "/connectors/#{provider.provider}"
+
+  def provider_subtitle(%{details: details}) when is_list(details) do
+    details
+    |> Enum.take(2)
+    |> Enum.join(" ")
+  end
+
+  def provider_subtitle(_provider), do: "No details yet."
+
+  def setup_completion_text(%{setup_status: :configured}), do: "OAuth app configured"
+  def setup_completion_text(_provider), do: "OAuth app setup required"
+
   def connection_primary_action(%{provider: "google", status: :connected}),
     do: "Update Google Access"
 

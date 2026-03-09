@@ -7,10 +7,18 @@ defmodule MaraithonWeb.NavigationControllerTest do
       html = html_response(conn, 200)
 
       assert html =~ "Connectors"
-      assert html =~ "Connected Accounts"
-      assert html =~ "Connector"
-      assert html =~ "Actions"
-      assert html =~ "OAuth Configuration"
+      assert html =~ "Apps"
+      assert html =~ "Google Workspace"
+      assert html =~ "View"
+    end
+
+    test "GET /connectors/:provider renders provider details", %{conn: conn} do
+      conn = conn |> log_in_test_user() |> get("/connectors/github")
+      html = html_response(conn, 200)
+
+      assert html =~ "Connector Detail"
+      assert html =~ "GitHub"
+      assert html =~ "OAuth Setup"
     end
 
     test "GET /how-it-works renders the guide page", %{conn: conn} do
@@ -43,6 +51,13 @@ defmodule MaraithonWeb.NavigationControllerTest do
 
       assert redirected_to(conn) == "/connectors"
       assert Phoenix.Flash.get(conn.assigns.flash, :error) == "Unsupported provider"
+    end
+
+    test "GET /connectors/:provider redirects unknown provider", %{conn: conn} do
+      conn = conn |> log_in_test_user() |> get("/connectors/unknown")
+
+      assert redirected_to(conn) == "/connectors"
+      assert Phoenix.Flash.get(conn.assigns.flash, :error) == "Unknown connector: unknown"
     end
   end
 end

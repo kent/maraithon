@@ -1,0 +1,170 @@
+<Layouts.app flash={@flash} current_path={@current_path} current_user={@current_user}>
+  <div class="space-y-6">
+    <section class="rounded-2xl bg-gradient-to-r from-slate-900 via-slate-800 to-indigo-900 px-6 py-6 text-white shadow">
+      <div class="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <p class="text-xs font-semibold uppercase tracking-[0.28em] text-indigo-200">Connector Detail</p>
+          <h1 class="mt-2 text-3xl font-semibold tracking-tight"><%= @provider.label %></h1>
+          <p class="mt-2 text-sm text-slate-200"><%= @provider.description %></p>
+        </div>
+        <div class="flex items-center gap-2">
+          <span class={connection_status_badge_class(@provider.status)}>
+            <%= connection_status_label(@provider.status) %>
+          </span>
+          <a href={~p"/connectors"} class="rounded-md border border-white/20 px-3 py-2 text-xs font-medium text-white hover:bg-white/10">
+            Back to connectors
+          </a>
+        </div>
+      </div>
+    </section>
+
+    <%= if @connection_errors != [] do %>
+      <section class="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-amber-900 shadow-sm">
+        <%= for error <- @connection_errors do %>
+          <p class="text-sm font-medium"><%= error.message %></p>
+          <p class="mt-1 text-xs"><%= error.details %></p>
+        <% end %>
+      </section>
+    <% end %>
+
+    <section class="grid grid-cols-1 gap-6 xl:grid-cols-3">
+      <div class="rounded-xl bg-white p-5 shadow xl:col-span-2">
+        <h2 class="text-lg font-semibold text-slate-900">Connection Details</h2>
+        <div class="mt-4 space-y-2 text-sm text-slate-600">
+          <p :for={detail <- @provider.details}><%= detail %></p>
+        </div>
+
+        <div class="mt-5 rounded-lg border border-slate-200 bg-slate-50 p-4">
+          <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Stored Grant</p>
+          <%= if @token do %>
+            <p class="mt-2 text-sm text-slate-700"><%= connection_token_summary(@token) %></p>
+            <p class="mt-2 text-xs text-slate-500">Updated <%= format_datetime(@token.updated_at) %></p>
+          <% else %>
+            <p class="mt-2 text-sm text-slate-500">No token stored for this connector yet.</p>
+          <% end %>
+        </div>
+      </div>
+
+      <div class="rounded-xl bg-white p-5 shadow">
+        <h2 class="text-lg font-semibold text-slate-900">Actions</h2>
+        <div class="mt-4 space-y-3">
+          <%= if @provider.configured? do %>
+            <a
+              href={@provider.connect_url}
+              class="inline-flex w-full items-center justify-center rounded-md bg-indigo-600 px-3 py-2 text-sm font-medium text-white hover:bg-indigo-500"
+            >
+              <%= connection_primary_action(@provider) %>
+            </a>
+          <% else %>
+            <button
+              type="button"
+              disabled
+              class="inline-flex w-full items-center justify-center rounded-md border border-slate-200 bg-slate-100 px-3 py-2 text-sm font-medium text-slate-500"
+            >
+              Configure OAuth First
+            </button>
+          <% end %>
+
+          <%= if @provider[:disconnectable?] do %>
+            <form action={~p"/connectors/#{@provider.provider}/disconnect"} method="post">
+              <input type="hidden" name="_csrf_token" value={get_csrf_token()} />
+              <input type="hidden" name="return_to" value={~p"/connectors/#{@provider.provider}"} />
+              <button
+                type="submit"
+                onclick={"return confirm(\"Disconnect #{@provider.label}?\")"}
+                class="inline-flex w-full items-center justify-center rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-medium text-rose-700 hover:bg-rose-100"
+              >
+                <%= @provider.disconnect_label %>
+              </button>
+            </form>
+          <% end %>
+        </div>
+      </div>
+    </section>
+
+    <%= if @provider.services != [] do %>
+      <section class="rounded-xl bg-white p-5 shadow">
+        <h2 class="text-lg font-semibold text-slate-900">Service Access</h2>
+        <div class="mt-4 space-y-2">
+          <%= for service <- @provider.services do %>
+            <div class="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-200 px-3 py-3">
+              <div>
+                <p class="text-sm font-medium text-slate-900"><%= service.label %></p>
+                <p class="mt-1 text-xs text-slate-500"><%= service.description %></p>
+              </div>
+              <span class={connection_status_badge_class(service.status)}>
+                <%= connection_status_label(service.status) %>
+              </span>
+            </div>
+          <% end %>
+        </div>
+      </section>
+    <% end %>
+
+    <section class="rounded-xl bg-white p-5 shadow">
+      <h2 class="text-lg font-semibold text-slate-900">OAuth Setup</h2>
+      <div class="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-2">
+        <div class="rounded-lg border border-slate-200 p-4">
+          <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Callback URLs</p>
+          <div class="mt-3 space-y-3">
+            <%= for callback <- @provider.callback_urls do %>
+              <div>
+                <div class="flex items-center gap-2">
+                  <p class="text-sm font-medium text-slate-900"><%= callback.label %></p>
+                  <span class={callback_badge_class(callback.required?)}>
+                    <%= if callback.required?, do: "required", else: "optional" %>
+                  </span>
+                </div>
+                <p class="mt-2 overflow-x-auto rounded-md bg-slate-900 px-3 py-2 font-mono text-xs text-slate-100">
+                  <%= callback.url %>
+                </p>
+              </div>
+            <% end %>
+          </div>
+        </div>
+
+        <div class="rounded-lg border border-slate-200 p-4">
+          <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Environment</p>
+          <div class="mt-3 space-y-3">
+            <%= for env <- @provider.env_requirements do %>
+              <div class="rounded-md border border-slate-200 px-3 py-3">
+                <div class="flex items-center justify-between gap-2">
+                  <p class="font-mono text-xs text-slate-900"><%= env.name %></p>
+                  <span class={env_status_badge_class(env.present?, env.required?)}>
+                    <%= env_status_label(env.present?, env.required?) %>
+                  </span>
+                </div>
+                <p class="mt-2 text-xs text-slate-600"><%= env.description %></p>
+                <%= if env.recommended_value do %>
+                  <p class="mt-2 overflow-x-auto rounded-md bg-slate-100 px-3 py-2 font-mono text-[11px] text-slate-700">
+                    <%= env.recommended_value %>
+                  </p>
+                <% end %>
+              </div>
+            <% end %>
+          </div>
+        </div>
+      </div>
+
+      <div class="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-2">
+        <div class="rounded-lg border border-slate-200 p-4">
+          <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Permissions</p>
+          <div class="mt-3 flex flex-wrap gap-2">
+            <%= for permission <- @provider.permissions do %>
+              <span class="rounded-full bg-indigo-50 px-2.5 py-1 text-xs font-medium text-indigo-700">
+                <%= permission %>
+              </span>
+            <% end %>
+          </div>
+        </div>
+
+        <div class="rounded-lg border border-slate-200 p-4">
+          <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Setup Notes</p>
+          <div class="mt-3 space-y-2 text-sm text-slate-600">
+            <p :for={note <- @provider.setup_notes}><%= note %></p>
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+</Layouts.app>

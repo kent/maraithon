@@ -24,13 +24,47 @@ defmodule MaraithonWeb.ConnectorsController do
       current_user: conn.assigns.current_user,
       connection_user_id: user_id,
       providers: snapshot.providers,
-      raw_connections: snapshot.raw_tokens,
+      connected_count: snapshot.connected_count,
       connection_errors: snapshot.errors
     )
   end
 
+  def show(conn, %{"provider" => provider} = params) do
+    user_id = conn.assigns.current_user.id
+    return_to = ~p"/connectors/#{provider}"
+
+    {snapshot, degraded?} =
+      case Connections.safe_dashboard_snapshot(user_id, return_to: return_to) do
+        {:ok, snapshot} -> {snapshot, false}
+        {:degraded, snapshot} -> {snapshot, true}
+      end
+
+    case Enum.find(snapshot.providers, &(&1.provider == provider)) do
+      nil ->
+        conn
+        |> put_flash(:error, "Unknown connector: #{provider}")
+        |> redirect(to: ~p"/connectors")
+
+      provider_card ->
+        conn =
+          conn
+          |> maybe_put_oauth_flash(params)
+          |> maybe_put_degraded_flash(degraded?)
+
+        render(conn, :show,
+          page_title: "#{provider_card.label} Connector",
+          current_path: ~p"/connectors",
+          current_user: conn.assigns.current_user,
+          provider: provider_card,
+          token: Enum.find(snapshot.raw_tokens, &(&1.provider == provider)),
+          connection_errors: snapshot.errors
+        )
+    end
+  end
+
   def disconnect(conn, %{"provider" => provider}) do
     user_id = conn.assigns.current_user.id
+    return_to = parse_return_to(conn.params)
 
     conn =
       case Connections.disconnect(user_id, provider) do
@@ -51,7 +85,7 @@ defmodule MaraithonWeb.ConnectorsController do
           )
       end
 
-    redirect(conn, to: ~p"/connectors")
+    redirect(conn, to: return_to)
   end
 
   def legacy_redirect(conn, _params) do
@@ -75,6 +109,12 @@ defmodule MaraithonWeb.ConnectorsController do
   end
 
   defp maybe_put_degraded_flash(conn, false), do: conn
+
+  defp parse_return_to(%{"return_to" => return_to}) when is_binary(return_to) do
+    if String.starts_with?(return_to, "/connectors"), do: return_to, else: ~p"/connectors"
+  end
+
+  defp parse_return_to(_params), do: ~p"/connectors"
 
   defp provider_label("google"), do: "Google"
   defp provider_label("github"), do: "GitHub"
