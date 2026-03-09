@@ -267,6 +267,37 @@ curl -X POST http://localhost:4000/api/v1/agents \
 
 **Supported events**: `message`, `message_changed`, `message_deleted`, `reaction_added`, `reaction_removed`, `app_mention`, `member_joined`, `member_left`
 
+### Notaui MCP (Available)
+
+```bash
+# Configure Notaui OAuth client credentials
+export NOTAUI_BASE_URL="https://api.notaui.com"
+export NOTAUI_CLIENT_ID="your_notaui_client_id"
+export NOTAUI_CLIENT_SECRET="your_notaui_client_secret"
+export NOTAUI_SCOPE="tasks:read tasks:write projects:read projects:write tags:write"
+
+# Pull + publish a Notaui task snapshot to PubSub
+curl -X POST http://localhost:4000/api/v1/integrations/notaui/sync \
+  -H "Content-Type: application/json" \
+  -d '{
+    "topic": "notaui:tasks",
+    "filter": {"statuses": ["inbox", "available"], "limit": 50}
+  }'
+
+# Create an agent that reviews and acts on Notaui tasks
+curl -X POST http://localhost:4000/api/v1/agents \
+  -d '{
+    "behavior": "prompt_agent",
+    "config": {
+      "prompt": "Review Notaui tasks, prioritize important ones, and complete tasks when done.",
+      "subscribe": ["notaui:tasks"],
+      "tools": ["notaui_list_tasks", "notaui_update_task", "notaui_complete_task"]
+    }
+  }'
+```
+
+**Available tools**: `notaui_list_tasks`, `notaui_update_task`, `notaui_complete_task`
+
 ### WhatsApp (Available)
 
 ```bash
@@ -345,6 +376,7 @@ curl -X POST http://localhost:4000/api/v1/agents \
 | Google Calendar | Available | `calendar:{user_id}` |
 | Gmail | Available | `email:{user_id}` |
 | Slack | Available | `slack:{team_id}:{channel_id}` |
+| Notaui MCP | Available | `notaui:{stream}` (default `notaui:tasks`) |
 | WhatsApp | Available | `whatsapp:{phone_number_id}` |
 | Linear | Available | `linear:{team_key}` |
 | Telegram | Available | `telegram:{bot_id}:{chat_id}` |
@@ -391,6 +423,7 @@ When enabled, include: `Authorization: Bearer <API_BEARER_TOKEN>`.
 | Endpoint | Description |
 |----------|-------------|
 | `POST /api/v1/events` | Publish event to topic |
+| `POST /api/v1/integrations/notaui/sync` | Pull Notaui tasks and publish snapshot event |
 
 ### Webhooks
 
@@ -444,6 +477,13 @@ export SLACK_CLIENT_ID="your_client_id"
 export SLACK_CLIENT_SECRET="your_client_secret"
 export SLACK_REDIRECT_URI="https://your-domain.com/auth/slack/callback"
 export SLACK_SIGNING_SECRET="your_signing_secret"
+
+# Notaui MCP (required for Notaui integration)
+export NOTAUI_BASE_URL="https://api.notaui.com"
+export NOTAUI_CLIENT_ID="your_notaui_client_id"
+export NOTAUI_CLIENT_SECRET="your_notaui_client_secret"
+export NOTAUI_SCOPE="tasks:read tasks:write projects:read projects:write tags:write"
+export NOTAUI_TOPIC_PREFIX="notaui"
 
 # WhatsApp (required for WhatsApp connector)
 export WHATSAPP_VERIFY_TOKEN="your_verify_token"

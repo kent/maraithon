@@ -69,6 +69,9 @@ defmodule MaraithonWeb.Router do
     # Event ingress - external systems publish events here
     post "/events", EventController, :publish
     get "/events/topics", EventController, :topics
+
+    # Integration sync endpoints
+    post "/integrations/notaui/sync", NotauiController, :sync
   end
 
   # Webhooks from external services (connectors)

@@ -146,6 +146,19 @@ config :maraithon, :linear,
   webhook_secret: System.get_env("LINEAR_WEBHOOK_SECRET", ""),
   allow_unsigned: allow_unsigned
 
+# Notaui MCP Connector
+config :maraithon, :notaui,
+  base_url: System.get_env("NOTAUI_BASE_URL", "https://api.notaui.com"),
+  client_id: System.get_env("NOTAUI_CLIENT_ID", ""),
+  client_secret: System.get_env("NOTAUI_CLIENT_SECRET", ""),
+  scope:
+    System.get_env(
+      "NOTAUI_SCOPE",
+      "tasks:read tasks:write projects:read projects:write tags:write"
+    ),
+  timeout_ms: String.to_integer(System.get_env("NOTAUI_TIMEOUT_MS", "10000")),
+  topic_prefix: System.get_env("NOTAUI_TOPIC_PREFIX", "notaui")
+
 # Telegram Connector
 config :maraithon, :telegram,
   bot_token: System.get_env("TELEGRAM_BOT_TOKEN", ""),

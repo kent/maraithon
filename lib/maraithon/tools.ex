@@ -9,7 +9,10 @@ defmodule Maraithon.Tools do
     "read_file" => Maraithon.Tools.ReadFile,
     "list_files" => Maraithon.Tools.ListFiles,
     "file_tree" => Maraithon.Tools.FileTree,
-    "search_files" => Maraithon.Tools.SearchFiles
+    "search_files" => Maraithon.Tools.SearchFiles,
+    "notaui_list_tasks" => Maraithon.Tools.NotauiListTasks,
+    "notaui_complete_task" => Maraithon.Tools.NotauiCompleteTask,
+    "notaui_update_task" => Maraithon.Tools.NotauiUpdateTask
   }
 
   @doc """

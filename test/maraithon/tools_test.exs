@@ -28,6 +28,9 @@ defmodule Maraithon.ToolsTest do
       assert "list_files" in tools
       assert "file_tree" in tools
       assert "search_files" in tools
+      assert "notaui_list_tasks" in tools
+      assert "notaui_complete_task" in tools
+      assert "notaui_update_task" in tools
     end
   end
 
@@ -35,6 +38,7 @@ defmodule Maraithon.ToolsTest do
     test "returns true for existing tool" do
       assert Tools.exists?("time")
       assert Tools.exists?("read_file")
+      assert Tools.exists?("notaui_list_tasks")
     end
 
     test "returns false for non-existing tool" do
