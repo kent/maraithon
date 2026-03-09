@@ -343,7 +343,7 @@ defmodule Maraithon.FlyLogs do
       api_base_url: Keyword.get(raw, :api_base_url, "https://api.fly.io/api/v1"),
       apps: normalize_apps(Keyword.get(raw, :apps, [])),
       region: normalize_blank(Keyword.get(raw, :region)),
-      receive_timeout_ms: Keyword.get(raw, :receive_timeout_ms, 15_000)
+      receive_timeout_ms: Keyword.get(raw, :receive_timeout_ms, 3_000)
     }
   end
 end

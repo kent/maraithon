@@ -145,7 +145,10 @@ The current production shape is intentionally simple:
 - One always-on app machine in `yyz`
 - Phoenix, the admin control center, the API, and the OTP runtime all run in the same release
 - Database-backed runtime state in PostgreSQL
-- `POOL_SIZE=5` in production for the current Fly footprint
+- Fly Managed Postgres in the same region
+- `DATABASE_URL` should be the pooled runtime URL
+- `DIRECT_DATABASE_URL` should be the direct connection URL used only for migrations and admin tasks
+- `POOL_SIZE=8`, `DB_QUEUE_TARGET_MS=250`, and `DB_QUEUE_INTERVAL_MS=2000` for the current single-machine footprint
 
 This is the right shape for a single-user or small-team ambient agent deployment. Do not scale app machines horizontally until the database capacity and runtime polling strategy are adjusted to match.
 
@@ -542,7 +545,7 @@ Fleet inspection:
 mix maraithon.admin dashboard
 mix maraithon.admin dashboard --activity-limit 20 --log-limit 100
 mix maraithon.admin fly-logs
-mix maraithon.admin fly-logs --app maraithon-db --limit 50
+mix maraithon.admin fly-logs --app maraithon --limit 50
 ```
 
 The CLI is the terminal equivalent of the admin UI:
@@ -555,7 +558,7 @@ The CLI is the terminal equivalent of the admin UI:
 
 ## Fly.io Deployment
 
-Deploy the production app with Fly secrets and PostgreSQL. The app boots Phoenix, runs migrations from `entrypoint.sh`, and resumes persisted agents on startup.
+Deploy the production app with Fly secrets and PostgreSQL. The app boots Phoenix, runs one-off release migrations with `DIRECT_DATABASE_URL`, and resumes persisted agents on startup.
 
 Recommended shape:
 
@@ -563,13 +566,20 @@ Recommended shape:
 - Region `yyz`
 - One always-on `shared-cpu-1x` 1 GB machine
 - Fly Managed Postgres in the same region
-- `POOL_SIZE=5` unless you have measured reason to change it
+- Runtime traffic goes through the pooled `DATABASE_URL`
+- Migrations use `DIRECT_DATABASE_URL`
+- `POOL_SIZE=8`, `DB_QUEUE_TARGET_MS=250`, `DB_QUEUE_INTERVAL_MS=2000`
 
 ```bash
 flyctl auth login
 
-fly mpg create -r yyz
-fly mpg attach <postgres-app-name> -a maraithon
+fly mpg create --name maraithon-pg -r yyz
+fly mpg attach maraithon-pg -a maraithon
+
+# Set the direct connection string from the managed cluster in Fly secrets.
+# Keep DATABASE_URL as the pooled URL for runtime traffic.
+flyctl secrets set -a maraithon \
+  DIRECT_DATABASE_URL="postgres://..."
 
 flyctl secrets set -a maraithon \
   SECRET_KEY_BASE="$(mix phx.gen.secret)" \
@@ -579,12 +589,58 @@ flyctl secrets set -a maraithon \
   API_BEARER_TOKEN="replace-with-long-random-token" \
   ANTHROPIC_API_KEY="sk-ant-..." \
   FLY_API_TOKEN="replace-with-fly-token" \
-  FLY_LOG_APPS="maraithon,maraithon-db" \
+  FLY_LOG_APPS="maraithon" \
   FLY_LOG_REGION="yyz" \
-  POOL_SIZE="5"
+  POOL_SIZE="8" \
+  DB_QUEUE_TARGET_MS="250" \
+  DB_QUEUE_INTERVAL_MS="2000"
 
 flyctl deploy -a maraithon
 ```
+
+### Migrating from Legacy `maraithon-db`
+
+If you still have the old unmanaged Postgres app, migrate before changing production traffic:
+
+```bash
+# 1. Create and attach the managed cluster
+fly mpg create --name maraithon-pg -r yyz
+fly mpg attach maraithon-pg -a maraithon
+
+# 2. Capture the managed cluster's direct connection string
+flyctl secrets set -a maraithon DIRECT_DATABASE_URL="postgres://..."
+
+# 3. Proxy the managed cluster locally
+fly mpg proxy 15433 -a maraithon-pg
+```
+
+Then restore the legacy database into the managed cluster from another shell. Use the credentials from `DIRECT_DATABASE_URL`, but point the host to `127.0.0.1:15433` while the proxy is running:
+
+```bash
+pg_dump --no-owner --no-acl "$LEGACY_DATABASE_URL" | \
+  psql "postgres://USER:PASSWORD@127.0.0.1:15433/DATABASE?sslmode=disable"
+```
+
+After import:
+
+```bash
+# 4. Deploy once so release migrations run against DIRECT_DATABASE_URL
+flyctl deploy -a maraithon
+
+# 5. Verify app and DB health
+curl https://maraithon.fly.dev/health
+flyctl logs -a maraithon
+
+# 6. When you are satisfied with the cutover, destroy the old unmanaged DB app
+# only after taking a final backup.
+```
+
+Fly docs used for this repo shape:
+
+- `fly mpg create` / `fly mpg attach`
+- transaction pool mode for app traffic
+- direct connections for migrations and imports
+- Phoenix/Ecto with `prepare: :unnamed`
 
 After deploy:
 
@@ -602,13 +658,6 @@ flyctl logs -a maraithon
 curl https://maraithon.fly.dev/health
 ```
 
-If you are still using an unmanaged Fly Postgres app rather than Fly Managed Postgres, the database machine must be running or the admin UI and API will return `500`s:
-
-```bash
-flyctl machine list -a maraithon-db
-flyctl machine start <machine-id> -a maraithon-db
-```
-
 This repo currently runs well on one app machine. If you add more app machines before fixing the DB footprint and runtime polling load, you can starve the database and take the control plane down.
 
 ## Secrets Hygiene
@@ -618,7 +667,7 @@ Never commit deployment secrets.
 - Keep production secrets in Fly secrets
 - Keep local operator credentials in a file outside the repo, such as `~/.config/maraithon/fly-prod.env`
 - Do not commit `.env`, `.env.*`, service-account JSON, or copied API tokens
-- Treat `API_BEARER_TOKEN`, `ADMIN_PASSWORD`, `DATABASE_URL`, `CLOAK_KEY`, `FLY_API_TOKEN`, and third-party OAuth secrets as production credentials
+- Treat `API_BEARER_TOKEN`, `ADMIN_PASSWORD`, `DATABASE_URL`, `DIRECT_DATABASE_URL`, `CLOAK_KEY`, `FLY_API_TOKEN`, and third-party OAuth secrets as production credentials
 
 ## Configuration
 
@@ -633,15 +682,18 @@ export API_BEARER_TOKEN="replace-with-long-random-token"
 export SECRET_KEY_BASE="$(mix phx.gen.secret)"
 export CLOAK_KEY="$(openssl rand -base64 32)"
 export FLY_API_TOKEN="replace-with-fly-token"
-export FLY_LOG_APPS="maraithon,maraithon-db"
+export FLY_LOG_APPS="maraithon"
 export FLY_LOG_REGION="yyz"
-export POOL_SIZE="5"
+export POOL_SIZE="8"
+export DB_QUEUE_TARGET_MS="250"
+export DB_QUEUE_INTERVAL_MS="2000"
 
 # Optional
 export ANTHROPIC_MODEL="claude-sonnet-4-20250514"
 export GITHUB_WEBHOOK_SECRET="your_secret"
 export GITHUB_ACCESS_TOKEN="ghp_xxx"
-export DATABASE_URL="postgres://..."
+export DATABASE_URL="postgres://..." # pooled runtime URL
+export DIRECT_DATABASE_URL="postgres://..." # direct URL for migrations
 
 # Google OAuth (required for Calendar/Gmail)
 export GOOGLE_CLIENT_ID="your_client_id"

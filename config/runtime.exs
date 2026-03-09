@@ -201,8 +201,52 @@ if config_env() == :prod do
       For example: ecto://USER:PASS@HOST/DATABASE
       """
 
+  direct_database_url = System.get_env("DIRECT_DATABASE_URL") || database_url
+
+  database_pool_mode =
+    case System.get_env("DATABASE_POOL_MODE", "") |> String.trim() |> String.downcase() do
+      "" ->
+        if String.contains?(database_url, ".pooler.") or
+             String.contains?(database_url, "pgbouncer") do
+          :transaction
+        else
+          :session
+        end
+
+      "transaction" ->
+        :transaction
+
+      "session" ->
+        :session
+
+      value ->
+        raise "DATABASE_POOL_MODE must be \"transaction\" or \"session\", got: #{inspect(value)}"
+    end
+
   # For Cloud SQL connections via Unix socket
   socket_dir = System.get_env("CLOUD_SQL_SOCKET_DIR")
+  pool_size = String.to_integer(System.get_env("POOL_SIZE", "8"))
+  queue_target = String.to_integer(System.get_env("DB_QUEUE_TARGET_MS", "250"))
+  queue_interval = String.to_integer(System.get_env("DB_QUEUE_INTERVAL_MS", "2000"))
+  query_timeout = String.to_integer(System.get_env("DB_QUERY_TIMEOUT_MS", "15000"))
+  connect_timeout = String.to_integer(System.get_env("DB_CONNECT_TIMEOUT_MS", "30000"))
+
+  postgrex_pool_options =
+    if database_pool_mode == :transaction do
+      # Fly Managed Postgres attaches apps through PgBouncer. Transaction pooling
+      # requires unnamed prepared statements with Postgrex/Ecto.
+      [prepare: :unnamed]
+    else
+      []
+    end
+
+  common_repo_options = [
+    pool_size: pool_size,
+    queue_target: queue_target,
+    queue_interval: queue_interval,
+    timeout: query_timeout,
+    connect_timeout: connect_timeout
+  ]
 
   repo_config =
     if socket_dir do
@@ -216,30 +260,26 @@ if config_env() == :prod do
         username: username,
         password: password,
         database: database,
-        socket: socket_dir <> "/.s.PGSQL.5432",
-        pool_size: String.to_integer(System.get_env("POOL_SIZE", "5")),
-        queue_target: String.to_integer(System.get_env("DB_QUEUE_TARGET_MS", "5000")),
-        queue_interval: String.to_integer(System.get_env("DB_QUEUE_INTERVAL_MS", "10000")),
-        timeout: String.to_integer(System.get_env("DB_QUERY_TIMEOUT_MS", "15000")),
-        connect_timeout: String.to_integer(System.get_env("DB_CONNECT_TIMEOUT_MS", "30000"))
+        socket: socket_dir <> "/.s.PGSQL.5432"
       ]
+      |> Kernel.++(common_repo_options)
+      |> Kernel.++(postgrex_pool_options)
     else
       # Direct connection (local/testing)
       maybe_ipv6 = if System.get_env("ECTO_IPV6") in ~w(true 1), do: [:inet6], else: []
 
       [
         url: database_url,
-        pool_size: String.to_integer(System.get_env("POOL_SIZE", "10")),
         socket_options: maybe_ipv6,
-        ssl: System.get_env("DATABASE_SSL", "false") == "true",
-        queue_target: String.to_integer(System.get_env("DB_QUEUE_TARGET_MS", "5000")),
-        queue_interval: String.to_integer(System.get_env("DB_QUEUE_INTERVAL_MS", "10000")),
-        timeout: String.to_integer(System.get_env("DB_QUERY_TIMEOUT_MS", "15000")),
-        connect_timeout: String.to_integer(System.get_env("DB_CONNECT_TIMEOUT_MS", "30000"))
+        ssl: System.get_env("DATABASE_SSL", "false") == "true"
       ]
+      |> Kernel.++(common_repo_options)
+      |> Kernel.++(postgrex_pool_options)
     end
 
   config :maraithon, Maraithon.Repo, repo_config
+  config :maraithon, :direct_database_url, direct_database_url
+  config :maraithon, :database_pool_mode, database_pool_mode
 
   # Secret key base for sessions/signing
   secret_key_base =

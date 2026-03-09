@@ -9,6 +9,9 @@ primary_region = 'yyz'
 [build]
   dockerfile = 'Dockerfile'
 
+[deploy]
+  release_command = '/app/bin/migrate-with-direct-url'
+
 [http_service]
   internal_port = 8080
   force_https = true
@@ -23,6 +26,10 @@ primary_region = 'yyz'
   PORT = '8080'
   ECTO_IPV6 = 'true'
   DNS_CLUSTER_QUERY = 'maraithon.internal'
+  DATABASE_POOL_MODE = 'transaction'
+  POOL_SIZE = '8'
+  DB_QUEUE_TARGET_MS = '250'
+  DB_QUEUE_INTERVAL_MS = '2000'
 
 [[vm]]
   memory = '1gb'
