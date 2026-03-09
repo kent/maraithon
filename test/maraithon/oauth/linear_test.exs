@@ -83,19 +83,22 @@ defmodule Maraithon.OAuth.LinearTest do
 
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.resp(200, Jason.encode!(%{
-          "access_token" => "lin_api_test_token",
-          "token_type" => "Bearer",
-          "expires_in" => 315360000,
-          "scope" => "read,write"
-        }))
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{
+            "access_token" => "lin_api_test_token",
+            "token_type" => "Bearer",
+            "expires_in" => 315_360_000,
+            "scope" => "read,write"
+          })
+        )
       end)
 
       {:ok, tokens} = Linear.exchange_code("valid_auth_code")
 
       assert tokens.access_token == "lin_api_test_token"
       assert tokens.token_type == "Bearer"
-      assert tokens.expires_in == 315360000
+      assert tokens.expires_in == 315_360_000
     end
   end
 
@@ -132,8 +135,10 @@ defmodule Maraithon.OAuth.LinearTest do
     test "verifies valid signature" do
       # Create a valid signature
       raw_body = ~s({"action":"create","type":"Issue"})
-      signature = :crypto.mac(:hmac, :sha256, "test_webhook_secret", raw_body)
-                  |> Base.encode16(case: :lower)
+
+      signature =
+        :crypto.mac(:hmac, :sha256, "test_webhook_secret", raw_body)
+        |> Base.encode16(case: :lower)
 
       assert :ok = Linear.verify_signature(raw_body, signature)
     end
@@ -211,14 +216,17 @@ defmodule Maraithon.OAuth.LinearTest do
 
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.resp(200, Jason.encode!(%{
-          "data" => %{
-            "viewer" => %{
-              "id" => "user_123",
-              "name" => "Test User"
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{
+            "data" => %{
+              "viewer" => %{
+                "id" => "user_123",
+                "name" => "Test User"
+              }
             }
-          }
-        }))
+          })
+        )
       end)
 
       {:ok, data} = Linear.graphql("test_token", "query { viewer { id name } }")
@@ -243,18 +251,22 @@ defmodule Maraithon.OAuth.LinearTest do
 
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.resp(200, Jason.encode!(%{
-          "data" => %{
-            "issue" => %{"id" => "issue_123", "title" => "Test Issue"}
-          }
-        }))
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{
+            "data" => %{
+              "issue" => %{"id" => "issue_123", "title" => "Test Issue"}
+            }
+          })
+        )
       end)
 
-      {:ok, data} = Linear.graphql(
-        "test_token",
-        "query($issueId: String!) { issue(id: $issueId) { id title } }",
-        %{issueId: "issue_123"}
-      )
+      {:ok, data} =
+        Linear.graphql(
+          "test_token",
+          "query($issueId: String!) { issue(id: $issueId) { id title } }",
+          %{issueId: "issue_123"}
+        )
 
       assert data["issue"]["title"] == "Test Issue"
     end
@@ -271,9 +283,12 @@ defmodule Maraithon.OAuth.LinearTest do
       Bypass.expect_once(bypass, "POST", "/graphql", fn conn ->
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.resp(200, Jason.encode!(%{
-          "errors" => [%{"message" => "Field 'unknown' not found"}]
-        }))
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{
+            "errors" => [%{"message" => "Field 'unknown' not found"}]
+          })
+        )
       end)
 
       result = Linear.graphql("test_token", "query { unknown }")

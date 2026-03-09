@@ -566,7 +566,7 @@ defmodule Maraithon.Connectors.WhatsAppTest do
                     %{
                       "id" => "msg_123",
                       "from" => "15559876543",
-                      "timestamp" => 1609459200,
+                      "timestamp" => 1_609_459_200,
                       "type" => "text",
                       "text" => %{"body" => "Hello!"}
                     }
@@ -653,6 +653,7 @@ defmodule Maraithon.Connectors.WhatsAppTest do
 
       # Multiple headers result in invalid signature format
       result = WhatsApp.verify_signature(conn, "{}")
+
       # It may return :invalid_signature or :invalid_signature_format depending on how headers are handled
       assert match?({:error, _}, result)
     end

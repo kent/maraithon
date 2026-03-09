@@ -50,8 +50,14 @@ defmodule Maraithon.LLM.AnthropicProviderTest do
     test "successfully completes with Bypass" do
       bypass = Bypass.open()
 
-      Application.put_env(:maraithon, Maraithon.Runtime, anthropic_api_key: "test_api_key", anthropic_model: "claude-3-haiku-20240307")
-      Application.put_env(:maraithon, :anthropic, base_url: "http://localhost:#{bypass.port}/v1/messages")
+      Application.put_env(:maraithon, Maraithon.Runtime,
+        anthropic_api_key: "test_api_key",
+        anthropic_model: "claude-3-haiku-20240307"
+      )
+
+      Application.put_env(:maraithon, :anthropic,
+        base_url: "http://localhost:#{bypass.port}/v1/messages"
+      )
 
       Bypass.expect_once(bypass, "POST", "/v1/messages", fn conn ->
         {:ok, body, conn} = Plug.Conn.read_body(conn)
@@ -71,23 +77,27 @@ defmodule Maraithon.LLM.AnthropicProviderTest do
 
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.resp(200, Jason.encode!(%{
-          "id" => "msg_123",
-          "type" => "message",
-          "role" => "assistant",
-          "content" => [%{"type" => "text", "text" => "Hello! How can I help you?"}],
-          "model" => "claude-3-haiku-20240307",
-          "stop_reason" => "end_turn",
-          "usage" => %{
-            "input_tokens" => 10,
-            "output_tokens" => 15
-          }
-        }))
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{
+            "id" => "msg_123",
+            "type" => "message",
+            "role" => "assistant",
+            "content" => [%{"type" => "text", "text" => "Hello! How can I help you?"}],
+            "model" => "claude-3-haiku-20240307",
+            "stop_reason" => "end_turn",
+            "usage" => %{
+              "input_tokens" => 10,
+              "output_tokens" => 15
+            }
+          })
+        )
       end)
 
-      {:ok, result} = AnthropicProvider.complete(%{
-        "messages" => [%{"role" => "user", "content" => "Hello"}]
-      })
+      {:ok, result} =
+        AnthropicProvider.complete(%{
+          "messages" => [%{"role" => "user", "content" => "Hello"}]
+        })
 
       assert result.content == "Hello! How can I help you?"
       assert result.model == "claude-3-haiku-20240307"
@@ -102,23 +112,30 @@ defmodule Maraithon.LLM.AnthropicProviderTest do
       bypass = Bypass.open()
 
       Application.put_env(:maraithon, Maraithon.Runtime, anthropic_api_key: "test_api_key")
-      Application.put_env(:maraithon, :anthropic, base_url: "http://localhost:#{bypass.port}/v1/messages")
+
+      Application.put_env(:maraithon, :anthropic,
+        base_url: "http://localhost:#{bypass.port}/v1/messages"
+      )
 
       Bypass.expect_once(bypass, "POST", "/v1/messages", fn conn ->
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.resp(429, Jason.encode!(%{
-          "type" => "error",
-          "error" => %{
-            "type" => "rate_limit_error",
-            "message" => "Rate limited. Please retry after 30 seconds."
-          }
-        }))
+        |> Plug.Conn.resp(
+          429,
+          Jason.encode!(%{
+            "type" => "error",
+            "error" => %{
+              "type" => "rate_limit_error",
+              "message" => "Rate limited. Please retry after 30 seconds."
+            }
+          })
+        )
       end)
 
-      result = AnthropicProvider.complete(%{
-        "messages" => [%{"role" => "user", "content" => "Hello"}]
-      })
+      result =
+        AnthropicProvider.complete(%{
+          "messages" => [%{"role" => "user", "content" => "Hello"}]
+        })
 
       assert {:error, {:rate_limited, 30000}} = result
     end
@@ -127,23 +144,30 @@ defmodule Maraithon.LLM.AnthropicProviderTest do
       bypass = Bypass.open()
 
       Application.put_env(:maraithon, Maraithon.Runtime, anthropic_api_key: "test_api_key")
-      Application.put_env(:maraithon, :anthropic, base_url: "http://localhost:#{bypass.port}/v1/messages")
+
+      Application.put_env(:maraithon, :anthropic,
+        base_url: "http://localhost:#{bypass.port}/v1/messages"
+      )
 
       Bypass.expect_once(bypass, "POST", "/v1/messages", fn conn ->
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.resp(429, Jason.encode!(%{
-          "type" => "error",
-          "error" => %{
-            "type" => "rate_limit_error",
-            "message" => "Too many requests"
-          }
-        }))
+        |> Plug.Conn.resp(
+          429,
+          Jason.encode!(%{
+            "type" => "error",
+            "error" => %{
+              "type" => "rate_limit_error",
+              "message" => "Too many requests"
+            }
+          })
+        )
       end)
 
-      result = AnthropicProvider.complete(%{
-        "messages" => [%{"role" => "user", "content" => "Hello"}]
-      })
+      result =
+        AnthropicProvider.complete(%{
+          "messages" => [%{"role" => "user", "content" => "Hello"}]
+        })
 
       assert {:error, {:rate_limited, 60000}} = result
     end
@@ -152,23 +176,30 @@ defmodule Maraithon.LLM.AnthropicProviderTest do
       bypass = Bypass.open()
 
       Application.put_env(:maraithon, Maraithon.Runtime, anthropic_api_key: "test_api_key")
-      Application.put_env(:maraithon, :anthropic, base_url: "http://localhost:#{bypass.port}/v1/messages")
+
+      Application.put_env(:maraithon, :anthropic,
+        base_url: "http://localhost:#{bypass.port}/v1/messages"
+      )
 
       Bypass.expect_once(bypass, "POST", "/v1/messages", fn conn ->
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.resp(400, Jason.encode!(%{
-          "type" => "error",
-          "error" => %{
-            "type" => "invalid_request_error",
-            "message" => "Invalid message format"
-          }
-        }))
+        |> Plug.Conn.resp(
+          400,
+          Jason.encode!(%{
+            "type" => "error",
+            "error" => %{
+              "type" => "invalid_request_error",
+              "message" => "Invalid message format"
+            }
+          })
+        )
       end)
 
-      result = AnthropicProvider.complete(%{
-        "messages" => []
-      })
+      result =
+        AnthropicProvider.complete(%{
+          "messages" => []
+        })
 
       assert {:error, {:api_error, 400, _body}} = result
     end
@@ -178,11 +209,15 @@ defmodule Maraithon.LLM.AnthropicProviderTest do
       Bypass.down(bypass)
 
       Application.put_env(:maraithon, Maraithon.Runtime, anthropic_api_key: "test_api_key")
-      Application.put_env(:maraithon, :anthropic, base_url: "http://localhost:#{bypass.port}/v1/messages")
 
-      result = AnthropicProvider.complete(%{
-        "messages" => [%{"role" => "user", "content" => "Hello"}]
-      })
+      Application.put_env(:maraithon, :anthropic,
+        base_url: "http://localhost:#{bypass.port}/v1/messages"
+      )
+
+      result =
+        AnthropicProvider.complete(%{
+          "messages" => [%{"role" => "user", "content" => "Hello"}]
+        })
 
       assert {:error, {:network_error, _reason}} = result
     end
@@ -191,7 +226,10 @@ defmodule Maraithon.LLM.AnthropicProviderTest do
       bypass = Bypass.open()
 
       Application.put_env(:maraithon, Maraithon.Runtime, anthropic_api_key: "test_api_key")
-      Application.put_env(:maraithon, :anthropic, base_url: "http://localhost:#{bypass.port}/v1/messages")
+
+      Application.put_env(:maraithon, :anthropic,
+        base_url: "http://localhost:#{bypass.port}/v1/messages"
+      )
 
       Bypass.expect_once(bypass, "POST", "/v1/messages", fn conn ->
         {:ok, body, conn} = Plug.Conn.read_body(conn)
@@ -203,20 +241,24 @@ defmodule Maraithon.LLM.AnthropicProviderTest do
 
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.resp(200, Jason.encode!(%{
-          "content" => [%{"type" => "text", "text" => "Response"}],
-          "model" => "claude-3-opus-20240229",
-          "stop_reason" => "end_turn",
-          "usage" => %{"input_tokens" => 5, "output_tokens" => 10}
-        }))
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{
+            "content" => [%{"type" => "text", "text" => "Response"}],
+            "model" => "claude-3-opus-20240229",
+            "stop_reason" => "end_turn",
+            "usage" => %{"input_tokens" => 5, "output_tokens" => 10}
+          })
+        )
       end)
 
-      {:ok, result} = AnthropicProvider.complete(%{
-        "model" => "claude-3-opus-20240229",
-        "max_tokens" => 4096,
-        "temperature" => 0.5,
-        "messages" => [%{"role" => "user", "content" => "Test"}]
-      })
+      {:ok, result} =
+        AnthropicProvider.complete(%{
+          "model" => "claude-3-opus-20240229",
+          "max_tokens" => 4096,
+          "temperature" => 0.5,
+          "messages" => [%{"role" => "user", "content" => "Test"}]
+        })
 
       assert result.model == "claude-3-opus-20240229"
     end
@@ -225,22 +267,29 @@ defmodule Maraithon.LLM.AnthropicProviderTest do
       bypass = Bypass.open()
 
       Application.put_env(:maraithon, Maraithon.Runtime, anthropic_api_key: "test_api_key")
-      Application.put_env(:maraithon, :anthropic, base_url: "http://localhost:#{bypass.port}/v1/messages")
+
+      Application.put_env(:maraithon, :anthropic,
+        base_url: "http://localhost:#{bypass.port}/v1/messages"
+      )
 
       Bypass.expect_once(bypass, "POST", "/v1/messages", fn conn ->
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.resp(200, Jason.encode!(%{
-          "content" => [],
-          "model" => "claude-3-haiku-20240307",
-          "stop_reason" => "end_turn",
-          "usage" => %{"input_tokens" => 5, "output_tokens" => 0}
-        }))
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{
+            "content" => [],
+            "model" => "claude-3-haiku-20240307",
+            "stop_reason" => "end_turn",
+            "usage" => %{"input_tokens" => 5, "output_tokens" => 0}
+          })
+        )
       end)
 
-      {:ok, result} = AnthropicProvider.complete(%{
-        "messages" => [%{"role" => "user", "content" => "Test"}]
-      })
+      {:ok, result} =
+        AnthropicProvider.complete(%{
+          "messages" => [%{"role" => "user", "content" => "Test"}]
+        })
 
       assert result.content == ""
     end
@@ -249,21 +298,28 @@ defmodule Maraithon.LLM.AnthropicProviderTest do
       bypass = Bypass.open()
 
       Application.put_env(:maraithon, Maraithon.Runtime, anthropic_api_key: "test_api_key")
-      Application.put_env(:maraithon, :anthropic, base_url: "http://localhost:#{bypass.port}/v1/messages")
+
+      Application.put_env(:maraithon, :anthropic,
+        base_url: "http://localhost:#{bypass.port}/v1/messages"
+      )
 
       Bypass.expect_once(bypass, "POST", "/v1/messages", fn conn ->
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.resp(200, Jason.encode!(%{
-          "content" => [%{"type" => "text", "text" => "Response"}],
-          "model" => "claude-3-haiku-20240307",
-          "stop_reason" => "end_turn"
-        }))
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{
+            "content" => [%{"type" => "text", "text" => "Response"}],
+            "model" => "claude-3-haiku-20240307",
+            "stop_reason" => "end_turn"
+          })
+        )
       end)
 
-      {:ok, result} = AnthropicProvider.complete(%{
-        "messages" => [%{"role" => "user", "content" => "Test"}]
-      })
+      {:ok, result} =
+        AnthropicProvider.complete(%{
+          "messages" => [%{"role" => "user", "content" => "Test"}]
+        })
 
       assert result.tokens_in == 0
       assert result.tokens_out == 0
@@ -273,7 +329,10 @@ defmodule Maraithon.LLM.AnthropicProviderTest do
       bypass = Bypass.open()
 
       Application.put_env(:maraithon, Maraithon.Runtime, anthropic_api_key: "test_api_key")
-      Application.put_env(:maraithon, :anthropic, base_url: "http://localhost:#{bypass.port}/v1/messages")
+
+      Application.put_env(:maraithon, :anthropic,
+        base_url: "http://localhost:#{bypass.port}/v1/messages"
+      )
 
       Bypass.expect_once(bypass, "POST", "/v1/messages", fn conn ->
         conn
@@ -281,9 +340,10 @@ defmodule Maraithon.LLM.AnthropicProviderTest do
         |> Plug.Conn.resp(429, Jason.encode!(%{"message" => "rate limited"}))
       end)
 
-      result = AnthropicProvider.complete(%{
-        "messages" => [%{"role" => "user", "content" => "Hello"}]
-      })
+      result =
+        AnthropicProvider.complete(%{
+          "messages" => [%{"role" => "user", "content" => "Hello"}]
+        })
 
       # Should use default 60000ms retry
       assert {:error, {:rate_limited, 60000}} = result
@@ -293,21 +353,28 @@ defmodule Maraithon.LLM.AnthropicProviderTest do
       bypass = Bypass.open()
 
       Application.put_env(:maraithon, Maraithon.Runtime, anthropic_api_key: "test_api_key")
-      Application.put_env(:maraithon, :anthropic, base_url: "http://localhost:#{bypass.port}/v1/messages")
+
+      Application.put_env(:maraithon, :anthropic,
+        base_url: "http://localhost:#{bypass.port}/v1/messages"
+      )
 
       Bypass.expect_once(bypass, "POST", "/v1/messages", fn conn ->
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.resp(200, Jason.encode!(%{
-          "content" => [%{"type" => "text", "text" => "Response"}],
-          "stop_reason" => "end_turn",
-          "usage" => %{"input_tokens" => 5, "output_tokens" => 10}
-        }))
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{
+            "content" => [%{"type" => "text", "text" => "Response"}],
+            "stop_reason" => "end_turn",
+            "usage" => %{"input_tokens" => 5, "output_tokens" => 10}
+          })
+        )
       end)
 
-      {:ok, result} = AnthropicProvider.complete(%{
-        "messages" => [%{"role" => "user", "content" => "Test"}]
-      })
+      {:ok, result} =
+        AnthropicProvider.complete(%{
+          "messages" => [%{"role" => "user", "content" => "Test"}]
+        })
 
       assert result.model == "unknown"
     end
@@ -316,21 +383,28 @@ defmodule Maraithon.LLM.AnthropicProviderTest do
       bypass = Bypass.open()
 
       Application.put_env(:maraithon, Maraithon.Runtime, anthropic_api_key: "test_api_key")
-      Application.put_env(:maraithon, :anthropic, base_url: "http://localhost:#{bypass.port}/v1/messages")
+
+      Application.put_env(:maraithon, :anthropic,
+        base_url: "http://localhost:#{bypass.port}/v1/messages"
+      )
 
       Bypass.expect_once(bypass, "POST", "/v1/messages", fn conn ->
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.resp(200, Jason.encode!(%{
-          "content" => [%{"type" => "text", "text" => "Response"}],
-          "model" => "claude-3-haiku-20240307",
-          "usage" => %{"input_tokens" => 5, "output_tokens" => 10}
-        }))
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{
+            "content" => [%{"type" => "text", "text" => "Response"}],
+            "model" => "claude-3-haiku-20240307",
+            "usage" => %{"input_tokens" => 5, "output_tokens" => 10}
+          })
+        )
       end)
 
-      {:ok, result} = AnthropicProvider.complete(%{
-        "messages" => [%{"role" => "user", "content" => "Test"}]
-      })
+      {:ok, result} =
+        AnthropicProvider.complete(%{
+          "messages" => [%{"role" => "user", "content" => "Test"}]
+        })
 
       assert result.finish_reason == "unknown"
     end

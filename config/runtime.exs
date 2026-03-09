@@ -37,6 +37,12 @@ heartbeat_interval_ms =
 checkpoint_interval_ms =
   System.get_env("CHECKPOINT_INTERVAL_MS", "600000") |> String.to_integer()
 
+tool_allowed_paths =
+  System.get_env("TOOL_ALLOWED_PATHS", "#{File.cwd!()},#{System.tmp_dir!()}")
+  |> String.split(",", trim: true)
+  |> Enum.map(&String.trim/1)
+  |> Enum.reject(&(&1 == ""))
+
 config :maraithon, Maraithon.Runtime,
   # LLM settings
   llm_provider: llm_provider,
@@ -46,8 +52,15 @@ config :maraithon, Maraithon.Runtime,
   heartbeat_interval_ms: heartbeat_interval_ms,
   checkpoint_interval_ms: checkpoint_interval_ms,
   effect_poll_interval_ms: String.to_integer(System.get_env("EFFECT_POLL_INTERVAL_MS", "1000")),
+  effect_claim_timeout_ms: String.to_integer(System.get_env("EFFECT_CLAIM_TIMEOUT_MS", "300000")),
+  effect_batch_size: String.to_integer(System.get_env("EFFECT_BATCH_SIZE", "10")),
   scheduler_poll_interval_ms:
     String.to_integer(System.get_env("SCHEDULER_POLL_INTERVAL_MS", "5000")),
+  scheduler_dispatch_timeout_ms:
+    String.to_integer(System.get_env("SCHEDULER_DISPATCH_TIMEOUT_MS", "60000")),
+  health_report_interval_ms:
+    String.to_integer(System.get_env("HEALTH_REPORT_INTERVAL_MS", "60000")),
+  tool_allowed_paths: tool_allowed_paths,
   # Timeouts
   llm_timeout_ms: String.to_integer(System.get_env("LLM_TIMEOUT_MS", "120000")),
   tool_timeout_ms: String.to_integer(System.get_env("TOOL_TIMEOUT_MS", "30000")),
@@ -61,6 +74,10 @@ config :maraithon, Maraithon.Runtime,
 # Security: Allow unsigned webhooks (DANGEROUS - only for local development)
 # Set to "true" to allow webhooks without signature verification
 allow_unsigned = System.get_env("ALLOW_UNSIGNED_WEBHOOKS", "false") == "true"
+
+if config_env() == :prod and allow_unsigned do
+  raise "ALLOW_UNSIGNED_WEBHOOKS=true is not allowed in production"
+end
 
 # GitHub Connector
 config :maraithon, :github,

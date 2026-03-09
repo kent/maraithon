@@ -280,10 +280,11 @@ defmodule MaraithonWeb.OAuthControllerTest do
     with error parameters instead of a code.
     """
     test "handles OAuth error from Google", %{conn: conn} do
-      conn = get(conn, "/auth/google/callback", %{
-        error: "access_denied",
-        error_description: "User denied access"
-      })
+      conn =
+        get(conn, "/auth/google/callback", %{
+          error: "access_denied",
+          error_description: "User denied access"
+        })
 
       response = json_response(conn, 400)
       assert response["error"] == "OAuth authorization failed"
@@ -556,6 +557,7 @@ defmodule MaraithonWeb.OAuthControllerTest do
       Application.put_env(:maraithon, :google_calendar,
         api_base_url: "http://localhost:#{bypass.port}/calendar"
       )
+
       Application.put_env(:maraithon, :gmail,
         api_base_url: "http://localhost:#{bypass.port}/gmail"
       )
@@ -564,12 +566,15 @@ defmodule MaraithonWeb.OAuthControllerTest do
       Bypass.expect_once(bypass, "POST", "/token", fn conn ->
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.resp(200, Jason.encode!(%{
-          "access_token" => "google_access_token",
-          "refresh_token" => "google_refresh_token",
-          "expires_in" => 3600,
-          "token_type" => "Bearer"
-        }))
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{
+            "access_token" => "google_access_token",
+            "refresh_token" => "google_refresh_token",
+            "expires_in" => 3600,
+            "token_type" => "Bearer"
+          })
+        )
       end)
 
       # Create a valid state
@@ -604,15 +609,18 @@ defmodule MaraithonWeb.OAuthControllerTest do
       Bypass.expect_once(bypass, "POST", "/api/oauth.v2.access", fn conn ->
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.resp(200, Jason.encode!(%{
-          "ok" => true,
-          "access_token" => "xoxb-slack-access-token",
-          "token_type" => "bot",
-          "scope" => "chat:write,users:read",
-          "team" => %{"id" => "T12345", "name" => "Test Team"},
-          "bot_user_id" => "U12345",
-          "app_id" => "A12345"
-        }))
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{
+            "ok" => true,
+            "access_token" => "xoxb-slack-access-token",
+            "token_type" => "bot",
+            "scope" => "chat:write,users:read",
+            "team" => %{"id" => "T12345", "name" => "Test Team"},
+            "bot_user_id" => "U12345",
+            "app_id" => "A12345"
+          })
+        )
       end)
 
       # Create a valid state
@@ -649,27 +657,33 @@ defmodule MaraithonWeb.OAuthControllerTest do
       Bypass.expect_once(bypass, "POST", "/oauth/token", fn conn ->
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.resp(200, Jason.encode!(%{
-          "access_token" => "linear_access_token",
-          "token_type" => "Bearer",
-          "expires_in" => 315360000,
-          "scope" => "read,write"
-        }))
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{
+            "access_token" => "linear_access_token",
+            "token_type" => "Bearer",
+            "expires_in" => 315_360_000,
+            "scope" => "read,write"
+          })
+        )
       end)
 
       # Mock get teams GraphQL call
       Bypass.expect_once(bypass, "POST", "/graphql", fn conn ->
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.resp(200, Jason.encode!(%{
-          "data" => %{
-            "teams" => %{
-              "nodes" => [
-                %{"id" => "team1", "key" => "ENG", "name" => "Engineering"}
-              ]
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{
+            "data" => %{
+              "teams" => %{
+                "nodes" => [
+                  %{"id" => "team1", "key" => "ENG", "name" => "Engineering"}
+                ]
+              }
             }
-          }
-        }))
+          })
+        )
       end)
 
       # Create a valid state
@@ -704,19 +718,25 @@ defmodule MaraithonWeb.OAuthControllerTest do
       Bypass.expect_once(bypass, "POST", "/oauth/token", fn conn ->
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.resp(200, Jason.encode!(%{
-          "access_token" => nil,
-          "token_type" => "Bearer"
-        }))
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{
+            "access_token" => nil,
+            "token_type" => "Bearer"
+          })
+        )
       end)
 
       # Mock get teams GraphQL call
       Bypass.expect_once(bypass, "POST", "/graphql", fn conn ->
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.resp(200, Jason.encode!(%{
-          "data" => %{"teams" => %{"nodes" => []}}
-        }))
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{
+            "data" => %{"teams" => %{"nodes" => []}}
+          })
+        )
       end)
 
       # Create a valid state

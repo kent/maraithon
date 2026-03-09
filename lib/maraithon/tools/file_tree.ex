@@ -3,6 +3,8 @@ defmodule Maraithon.Tools.FileTree do
   Tool for getting a directory tree visualization.
   """
 
+  alias Maraithon.Tools.PathPolicy
+
   @max_depth 4
   @max_entries 200
 
@@ -10,7 +12,9 @@ defmodule Maraithon.Tools.FileTree do
     path = args["path"] || "."
     depth = min(args["depth"] || @max_depth, @max_depth)
 
-    build_tree(path, depth)
+    with {:ok, resolved_path} <- PathPolicy.resolve_allowed_path(path) do
+      build_tree(resolved_path, depth)
+    end
   end
 
   defp build_tree(path, max_depth) do

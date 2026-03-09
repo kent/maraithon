@@ -15,7 +15,12 @@ defmodule Maraithon.Behaviors.CodebaseAdvisorTest do
     # Create test directory with files
     File.rm_rf!(@test_dir)
     File.mkdir_p!(@test_dir)
-    File.write!(Path.join(@test_dir, "test.ex"), "defmodule Test do\n  def hello, do: :world\nend")
+
+    File.write!(
+      Path.join(@test_dir, "test.ex"),
+      "defmodule Test do\n  def hello, do: :world\nend"
+    )
+
     File.write!(Path.join(@test_dir, "other.txt"), "not elixir")
 
     on_exit(fn -> File.rm_rf!(@test_dir) end)
@@ -68,7 +73,8 @@ defmodule Maraithon.Behaviors.CodebaseAdvisorTest do
 
   describe "handle_wakeup/2" do
     test "requests LLM review for pending file" do
-      state = CodebaseAdvisor.init(%{"codebase_path" => @test_dir, "file_patterns" => ["**/*.ex"]})
+      state =
+        CodebaseAdvisor.init(%{"codebase_path" => @test_dir, "file_patterns" => ["**/*.ex"]})
 
       {:effect, {:llm_call, params}, new_state} = CodebaseAdvisor.handle_wakeup(state, @context)
 

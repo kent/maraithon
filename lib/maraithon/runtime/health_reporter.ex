@@ -6,8 +6,10 @@ defmodule Maraithon.Runtime.HealthReporter do
   use GenServer
   require Logger
 
+  alias Maraithon.Runtime.Config, as: RuntimeConfig
+
   # Every minute
-  @report_interval_ms 60_000
+  @default_report_interval_ms 60_000
 
   def start_link(opts) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
@@ -15,14 +17,17 @@ defmodule Maraithon.Runtime.HealthReporter do
 
   @impl true
   def init(_opts) do
-    schedule_report()
-    {:ok, %{}}
+    report_interval_ms =
+      RuntimeConfig.positive_integer(:health_report_interval_ms, @default_report_interval_ms)
+
+    schedule_report(report_interval_ms)
+    {:ok, %{report_interval_ms: report_interval_ms}}
   end
 
   @impl true
   def handle_info(:report, state) do
     report_health()
-    schedule_report()
+    schedule_report(state.report_interval_ms)
     {:noreply, state}
   end
 
@@ -38,7 +43,7 @@ defmodule Maraithon.Runtime.HealthReporter do
     )
   end
 
-  defp schedule_report do
-    Process.send_after(self(), :report, @report_interval_ms)
+  defp schedule_report(interval_ms) do
+    Process.send_after(self(), :report, interval_ms)
   end
 end

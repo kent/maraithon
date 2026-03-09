@@ -380,7 +380,10 @@ defmodule Maraithon.Connectors.SlackTest do
       raw_body = ~s({"type":"event_callback"})
       timestamp = "#{System.system_time(:second)}"
       basestring = "v0:#{timestamp}:#{raw_body}"
-      signature = :crypto.mac(:hmac, :sha256, signing_secret, basestring) |> Base.encode16(case: :lower)
+
+      signature =
+        :crypto.mac(:hmac, :sha256, signing_secret, basestring) |> Base.encode16(case: :lower)
+
       signature_header = "v0=#{signature}"
 
       conn =

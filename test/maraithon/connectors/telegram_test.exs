@@ -370,7 +370,7 @@ defmodule Maraithon.Connectors.TelegramTest do
         "update_id" => 123_456_789,
         "channel_post" => %{
           "message_id" => 100,
-          "chat" => %{"id" => -100123, "type" => "channel", "title" => "My Channel"},
+          "chat" => %{"id" => -100_123, "type" => "channel", "title" => "My Channel"},
           "text" => "Channel announcement",
           "date" => 1_609_459_200
         }
@@ -387,7 +387,7 @@ defmodule Maraithon.Connectors.TelegramTest do
       params = %{
         "update_id" => 123_456_789,
         "my_chat_member" => %{
-          "chat" => %{"id" => -100123, "type" => "group", "title" => "Test Group"},
+          "chat" => %{"id" => -100_123, "type" => "group", "title" => "Test Group"},
           "from" => %{"id" => 12345},
           "old_chat_member" => %{"status" => "member"},
           "new_chat_member" => %{"status" => "administrator", "user" => %{"id" => 54321}}
@@ -406,7 +406,7 @@ defmodule Maraithon.Connectors.TelegramTest do
         "update_id" => 123_456_789,
         "message" => %{
           "message_id" => 100,
-          "chat" => %{"id" => -100123, "type" => "group", "title" => "Test Group"},
+          "chat" => %{"id" => -100_123, "type" => "group", "title" => "Test Group"},
           "from" => %{"id" => 12345},
           "new_chat_members" => [
             %{"id" => 54321, "first_name" => "New User"}
@@ -427,7 +427,7 @@ defmodule Maraithon.Connectors.TelegramTest do
         "update_id" => 123_456_789,
         "message" => %{
           "message_id" => 100,
-          "chat" => %{"id" => -100123, "type" => "group", "title" => "Test Group"},
+          "chat" => %{"id" => -100_123, "type" => "group", "title" => "Test Group"},
           "from" => %{"id" => 12345},
           "left_chat_member" => %{"id" => 54321, "first_name" => "Leaving User"},
           "date" => 1_609_459_200
@@ -456,33 +456,53 @@ defmodule Maraithon.Connectors.TelegramTest do
 
   describe "verify_signature/2" do
     test "returns error when webhook secret not configured and unsigned not allowed" do
-      Application.put_env(:maraithon, :telegram, bot_token: "12345:ABC", allow_unsigned: false, webhook_secret_path: "")
+      Application.put_env(:maraithon, :telegram,
+        bot_token: "12345:ABC",
+        allow_unsigned: false,
+        webhook_secret_path: ""
+      )
 
-      conn = conn(:post, "/webhooks/telegram", %{}) |> Map.put(:request_path, "/webhooks/telegram")
+      conn =
+        conn(:post, "/webhooks/telegram", %{}) |> Map.put(:request_path, "/webhooks/telegram")
 
       assert {:error, :webhook_secret_path_not_configured} = Telegram.verify_signature(conn, "{}")
     end
 
     test "returns ok when path contains secret" do
-      Application.put_env(:maraithon, :telegram, bot_token: "12345:ABC", webhook_secret_path: "secret123")
+      Application.put_env(:maraithon, :telegram,
+        bot_token: "12345:ABC",
+        webhook_secret_path: "secret123"
+      )
 
-      conn = conn(:post, "/webhooks/telegram/secret123", %{}) |> Map.put(:request_path, "/webhooks/telegram/secret123")
+      conn =
+        conn(:post, "/webhooks/telegram/secret123", %{})
+        |> Map.put(:request_path, "/webhooks/telegram/secret123")
 
       assert :ok = Telegram.verify_signature(conn, "{}")
     end
 
     test "returns error when path doesn't contain secret" do
-      Application.put_env(:maraithon, :telegram, bot_token: "12345:ABC", webhook_secret_path: "secret123")
+      Application.put_env(:maraithon, :telegram,
+        bot_token: "12345:ABC",
+        webhook_secret_path: "secret123"
+      )
 
-      conn = conn(:post, "/webhooks/telegram", %{}) |> Map.put(:request_path, "/webhooks/telegram/wrong")
+      conn =
+        conn(:post, "/webhooks/telegram", %{})
+        |> Map.put(:request_path, "/webhooks/telegram/wrong")
 
       assert {:error, :invalid_path} = Telegram.verify_signature(conn, "{}")
     end
 
     test "returns ok when allow_unsigned and no secret configured" do
-      Application.put_env(:maraithon, :telegram, bot_token: "12345:ABC", allow_unsigned: true, webhook_secret_path: "")
+      Application.put_env(:maraithon, :telegram,
+        bot_token: "12345:ABC",
+        allow_unsigned: true,
+        webhook_secret_path: ""
+      )
 
-      conn = conn(:post, "/webhooks/telegram", %{}) |> Map.put(:request_path, "/webhooks/telegram")
+      conn =
+        conn(:post, "/webhooks/telegram", %{}) |> Map.put(:request_path, "/webhooks/telegram")
 
       assert :ok = Telegram.verify_signature(conn, "{}")
     end
@@ -553,7 +573,7 @@ defmodule Maraithon.Connectors.TelegramTest do
           "text" => "Forwarded from channel",
           "date" => 1_609_459_200,
           "forward_from_chat" => %{
-            "id" => -100123,
+            "id" => -100_123,
             "title" => "News Channel"
           }
         }
@@ -620,7 +640,12 @@ defmodule Maraithon.Connectors.TelegramTest do
         "update_id" => 123_456_789,
         "channel_post" => %{
           "message_id" => 100,
-          "chat" => %{"id" => -100123, "type" => "channel", "title" => "My Channel", "username" => "mychannel"},
+          "chat" => %{
+            "id" => -100_123,
+            "type" => "channel",
+            "title" => "My Channel",
+            "username" => "mychannel"
+          },
           "photo" => [
             %{"file_id" => "photo-123", "width" => 800, "height" => 600}
           ],
@@ -663,7 +688,7 @@ defmodule Maraithon.Connectors.TelegramTest do
       params = %{
         "update_id" => 123_456_789,
         "chat_member" => %{
-          "chat" => %{"id" => -100123, "type" => "group", "title" => "Test Group"},
+          "chat" => %{"id" => -100_123, "type" => "group", "title" => "Test Group"},
           "from" => %{"id" => 12345},
           "old_chat_member" => %{"status" => "member", "user" => %{"id" => 54321}},
           "new_chat_member" => %{"status" => "left", "user" => %{"id" => 54321}}
@@ -745,7 +770,5 @@ defmodule Maraithon.Connectors.TelegramTest do
 
       assert event.type == "video"
     end
-
   end
-
 end

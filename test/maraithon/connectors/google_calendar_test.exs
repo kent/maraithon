@@ -39,23 +39,25 @@ defmodule Maraithon.Connectors.GoogleCalendarTest do
     end
 
     test "ignores sync confirmation" do
-      conn = build_conn_with_headers(%{
-        "x-goog-channel-id" => "channel123",
-        "x-goog-resource-id" => "resource123",
-        "x-goog-resource-state" => "sync",
-        "x-goog-channel-token" => "user_123"
-      })
+      conn =
+        build_conn_with_headers(%{
+          "x-goog-channel-id" => "channel123",
+          "x-goog-resource-id" => "resource123",
+          "x-goog-resource-state" => "sync",
+          "x-goog-channel-token" => "user_123"
+        })
 
       assert {:ignore, "sync confirmation"} = GoogleCalendar.handle_webhook(conn, %{})
     end
 
     test "returns event for not_exists state" do
-      conn = build_conn_with_headers(%{
-        "x-goog-channel-id" => "channel123",
-        "x-goog-resource-id" => "resource123",
-        "x-goog-resource-state" => "not_exists",
-        "x-goog-channel-token" => "user_123"
-      })
+      conn =
+        build_conn_with_headers(%{
+          "x-goog-channel-id" => "channel123",
+          "x-goog-resource-id" => "resource123",
+          "x-goog-resource-state" => "not_exists",
+          "x-goog-channel-token" => "user_123"
+        })
 
       {:ok, topic, event} = GoogleCalendar.handle_webhook(conn, %{})
 
@@ -68,23 +70,26 @@ defmodule Maraithon.Connectors.GoogleCalendarTest do
     end
 
     test "ignores unknown resource states" do
-      conn = build_conn_with_headers(%{
-        "x-goog-channel-id" => "channel123",
-        "x-goog-resource-id" => "resource123",
-        "x-goog-resource-state" => "unknown_state",
-        "x-goog-channel-token" => "user_123"
-      })
+      conn =
+        build_conn_with_headers(%{
+          "x-goog-channel-id" => "channel123",
+          "x-goog-resource-id" => "resource123",
+          "x-goog-resource-state" => "unknown_state",
+          "x-goog-channel-token" => "user_123"
+        })
 
-      assert {:ignore, "unknown resource state: unknown_state"} = GoogleCalendar.handle_webhook(conn, %{})
+      assert {:ignore, "unknown resource state: unknown_state"} =
+               GoogleCalendar.handle_webhook(conn, %{})
     end
 
     test "handles exists state (calendar changed)" do
-      conn = build_conn_with_headers(%{
-        "x-goog-channel-id" => "channel123",
-        "x-goog-resource-id" => "resource123",
-        "x-goog-resource-state" => "exists",
-        "x-goog-channel-token" => "user_123"
-      })
+      conn =
+        build_conn_with_headers(%{
+          "x-goog-channel-id" => "channel123",
+          "x-goog-resource-id" => "resource123",
+          "x-goog-resource-state" => "exists",
+          "x-goog-channel-token" => "user_123"
+        })
 
       # Will fail to sync because no OAuth token exists for user_123
       # but should still return a calendar_changed event
@@ -101,7 +106,8 @@ defmodule Maraithon.Connectors.GoogleCalendarTest do
     test "returns error when webhook URL not configured" do
       Application.put_env(:maraithon, :google, calendar_webhook_url: "")
 
-      assert {:error, :webhook_url_not_configured} = GoogleCalendar.setup_watch("user_123", "fake_token")
+      assert {:error, :webhook_url_not_configured} =
+               GoogleCalendar.setup_watch("user_123", "fake_token")
     end
 
     test "returns error when no valid token and user not found" do
@@ -123,7 +129,8 @@ defmodule Maraithon.Connectors.GoogleCalendarTest do
 
   describe "stop_watch/3" do
     test "returns error when token not found" do
-      assert {:error, :no_token} = GoogleCalendar.stop_watch("nonexistent_user", "channel_id", "resource_id")
+      assert {:error, :no_token} =
+               GoogleCalendar.stop_watch("nonexistent_user", "channel_id", "resource_id")
     end
   end
 
@@ -141,12 +148,13 @@ defmodule Maraithon.Connectors.GoogleCalendarTest do
 
   describe "stop_watch/3 with token" do
     setup do
-      {:ok, _token} = Maraithon.OAuth.store_tokens("cal_stop_user", "google", %{
-        access_token: "test_access_token",
-        refresh_token: "test_refresh_token",
-        expires_in: 3600,
-        scopes: ["calendar.readonly"]
-      })
+      {:ok, _token} =
+        Maraithon.OAuth.store_tokens("cal_stop_user", "google", %{
+          access_token: "test_access_token",
+          refresh_token: "test_refresh_token",
+          expires_in: 3600,
+          scopes: ["calendar.readonly"]
+        })
 
       on_exit(fn ->
         Maraithon.Repo.delete_all(Maraithon.OAuth.Token)
@@ -163,12 +171,13 @@ defmodule Maraithon.Connectors.GoogleCalendarTest do
 
   describe "sync_calendar_events/2 with token" do
     setup do
-      {:ok, _token} = Maraithon.OAuth.store_tokens("cal_sync_user", "google", %{
-        access_token: "test_access_token",
-        refresh_token: "test_refresh_token",
-        expires_in: 3600,
-        scopes: ["calendar.readonly"]
-      })
+      {:ok, _token} =
+        Maraithon.OAuth.store_tokens("cal_sync_user", "google", %{
+          access_token: "test_access_token",
+          refresh_token: "test_refresh_token",
+          expires_in: 3600,
+          scopes: ["calendar.readonly"]
+        })
 
       on_exit(fn ->
         Maraithon.Repo.delete_all(Maraithon.OAuth.Token)
@@ -190,12 +199,13 @@ defmodule Maraithon.Connectors.GoogleCalendarTest do
 
   describe "fetch_upcoming_events/2 with token" do
     setup do
-      {:ok, _token} = Maraithon.OAuth.store_tokens("cal_upcoming_user", "google", %{
-        access_token: "test_access_token",
-        refresh_token: "test_refresh_token",
-        expires_in: 3600,
-        scopes: ["calendar.readonly"]
-      })
+      {:ok, _token} =
+        Maraithon.OAuth.store_tokens("cal_upcoming_user", "google", %{
+          access_token: "test_access_token",
+          refresh_token: "test_refresh_token",
+          expires_in: 3600,
+          scopes: ["calendar.readonly"]
+        })
 
       on_exit(fn ->
         Maraithon.Repo.delete_all(Maraithon.OAuth.Token)
@@ -212,12 +222,13 @@ defmodule Maraithon.Connectors.GoogleCalendarTest do
 
   describe "handle_webhook/2 - exists state with token" do
     setup do
-      {:ok, _token} = Maraithon.OAuth.store_tokens("webhook_user", "google", %{
-        access_token: "test_access_token",
-        refresh_token: "test_refresh_token",
-        expires_in: 3600,
-        scopes: ["calendar.readonly"]
-      })
+      {:ok, _token} =
+        Maraithon.OAuth.store_tokens("webhook_user", "google", %{
+          access_token: "test_access_token",
+          refresh_token: "test_refresh_token",
+          expires_in: 3600,
+          scopes: ["calendar.readonly"]
+        })
 
       on_exit(fn ->
         Maraithon.Repo.delete_all(Maraithon.OAuth.Token)
@@ -227,12 +238,13 @@ defmodule Maraithon.Connectors.GoogleCalendarTest do
     end
 
     test "returns calendar_changed event when sync fails" do
-      conn = build_conn_with_headers(%{
-        "x-goog-channel-id" => "channel123",
-        "x-goog-resource-id" => "resource123",
-        "x-goog-resource-state" => "exists",
-        "x-goog-channel-token" => "webhook_user"
-      })
+      conn =
+        build_conn_with_headers(%{
+          "x-goog-channel-id" => "channel123",
+          "x-goog-resource-id" => "resource123",
+          "x-goog-resource-state" => "exists",
+          "x-goog-channel-token" => "webhook_user"
+        })
 
       {:ok, topic, event} = GoogleCalendar.handle_webhook(conn, %{})
 
@@ -250,6 +262,7 @@ defmodule Maraithon.Connectors.GoogleCalendarTest do
       Application.put_env(:maraithon, :google,
         calendar_webhook_url: "https://example.com/webhooks/gcal"
       )
+
       Application.put_env(:maraithon, :google_calendar,
         api_base_url: "http://localhost:#{bypass.port}/calendar/v3"
       )
@@ -263,11 +276,14 @@ defmodule Maraithon.Connectors.GoogleCalendarTest do
 
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.resp(200, Jason.encode!(%{
-          "id" => "channel-123",
-          "resourceId" => "resource-456",
-          "expiration" => "#{System.system_time(:millisecond) + 86400000}"
-        }))
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{
+            "id" => "channel-123",
+            "resourceId" => "resource-456",
+            "expiration" => "#{System.system_time(:millisecond) + 86_400_000}"
+          })
+        )
       end)
 
       {:ok, watch} = GoogleCalendar.setup_watch("user_123", "test_access_token")
@@ -286,36 +302,44 @@ defmodule Maraithon.Connectors.GoogleCalendarTest do
         api_base_url: "http://localhost:#{bypass.port}/calendar/v3"
       )
 
-      {:ok, _token} = Maraithon.OAuth.store_tokens("cal_fetch_user", "google", %{
-        access_token: "test_access_token",
-        refresh_token: "test_refresh_token",
-        expires_in: 3600,
-        scopes: ["calendar.readonly"]
-      })
+      {:ok, _token} =
+        Maraithon.OAuth.store_tokens("cal_fetch_user", "google", %{
+          access_token: "test_access_token",
+          refresh_token: "test_refresh_token",
+          expires_in: 3600,
+          scopes: ["calendar.readonly"]
+        })
 
       Bypass.expect_once(bypass, "GET", "/calendar/v3/calendars/primary/events", fn conn ->
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.resp(200, Jason.encode!(%{
-          "items" => [
-            %{
-              "id" => "event1",
-              "summary" => "Meeting with Bob",
-              "description" => "Discuss project",
-              "location" => "Conference Room A",
-              "status" => "confirmed",
-              "start" => %{"dateTime" => "2024-01-15T10:00:00Z"},
-              "end" => %{"dateTime" => "2024-01-15T11:00:00Z"},
-              "attendees" => [
-                %{"email" => "bob@test.com", "displayName" => "Bob", "responseStatus" => "accepted"}
-              ],
-              "organizer" => %{"email" => "me@test.com"},
-              "htmlLink" => "https://calendar.google.com/event/event1",
-              "created" => "2024-01-01T00:00:00Z",
-              "updated" => "2024-01-02T00:00:00Z"
-            }
-          ]
-        }))
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{
+            "items" => [
+              %{
+                "id" => "event1",
+                "summary" => "Meeting with Bob",
+                "description" => "Discuss project",
+                "location" => "Conference Room A",
+                "status" => "confirmed",
+                "start" => %{"dateTime" => "2024-01-15T10:00:00Z"},
+                "end" => %{"dateTime" => "2024-01-15T11:00:00Z"},
+                "attendees" => [
+                  %{
+                    "email" => "bob@test.com",
+                    "displayName" => "Bob",
+                    "responseStatus" => "accepted"
+                  }
+                ],
+                "organizer" => %{"email" => "me@test.com"},
+                "htmlLink" => "https://calendar.google.com/event/event1",
+                "created" => "2024-01-01T00:00:00Z",
+                "updated" => "2024-01-02T00:00:00Z"
+              }
+            ]
+          })
+        )
       end)
 
       {:ok, events} = GoogleCalendar.fetch_upcoming_events("cal_fetch_user", 10)
@@ -337,28 +361,32 @@ defmodule Maraithon.Connectors.GoogleCalendarTest do
         api_base_url: "http://localhost:#{bypass.port}/calendar/v3"
       )
 
-      {:ok, _token} = Maraithon.OAuth.store_tokens("cal_sync_bypass_user", "google", %{
-        access_token: "test_access_token",
-        refresh_token: "test_refresh_token",
-        expires_in: 3600,
-        scopes: ["calendar.readonly"]
-      })
+      {:ok, _token} =
+        Maraithon.OAuth.store_tokens("cal_sync_bypass_user", "google", %{
+          access_token: "test_access_token",
+          refresh_token: "test_refresh_token",
+          expires_in: 3600,
+          scopes: ["calendar.readonly"]
+        })
 
       Bypass.expect_once(bypass, "GET", "/calendar/v3/calendars/primary/events", fn conn ->
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.resp(200, Jason.encode!(%{
-          "items" => [
-            %{
-              "id" => "event2",
-              "summary" => "Team Standup",
-              "start" => %{"dateTime" => "2024-01-15T09:00:00Z"},
-              "end" => %{"dateTime" => "2024-01-15T09:15:00Z"},
-              "organizer" => %{"email" => "team@test.com"}
-            }
-          ],
-          "nextSyncToken" => "sync_token_123"
-        }))
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{
+            "items" => [
+              %{
+                "id" => "event2",
+                "summary" => "Team Standup",
+                "start" => %{"dateTime" => "2024-01-15T09:00:00Z"},
+                "end" => %{"dateTime" => "2024-01-15T09:15:00Z"},
+                "organizer" => %{"email" => "team@test.com"}
+              }
+            ],
+            "nextSyncToken" => "sync_token_123"
+          })
+        )
       end)
 
       {:ok, events} = GoogleCalendar.sync_calendar_events("cal_sync_bypass_user")
@@ -374,12 +402,13 @@ defmodule Maraithon.Connectors.GoogleCalendarTest do
         api_base_url: "http://localhost:#{bypass.port}/calendar/v3"
       )
 
-      {:ok, _token} = Maraithon.OAuth.store_tokens("cal_incremental_user", "google", %{
-        access_token: "test_access_token",
-        refresh_token: "test_refresh_token",
-        expires_in: 3600,
-        scopes: ["calendar.readonly"]
-      })
+      {:ok, _token} =
+        Maraithon.OAuth.store_tokens("cal_incremental_user", "google", %{
+          access_token: "test_access_token",
+          refresh_token: "test_refresh_token",
+          expires_in: 3600,
+          scopes: ["calendar.readonly"]
+        })
 
       Bypass.expect_once(bypass, "GET", "/calendar/v3/calendars/primary/events", fn conn ->
         # Verify sync token is passed
@@ -387,13 +416,17 @@ defmodule Maraithon.Connectors.GoogleCalendarTest do
 
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.resp(200, Jason.encode!(%{
-          "items" => [],
-          "nextSyncToken" => "new_sync_token"
-        }))
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{
+            "items" => [],
+            "nextSyncToken" => "new_sync_token"
+          })
+        )
       end)
 
-      {:ok, events} = GoogleCalendar.sync_calendar_events("cal_incremental_user", sync_token: "old_token")
+      {:ok, events} =
+        GoogleCalendar.sync_calendar_events("cal_incremental_user", sync_token: "old_token")
 
       assert events == []
     end
@@ -405,12 +438,13 @@ defmodule Maraithon.Connectors.GoogleCalendarTest do
         api_base_url: "http://localhost:#{bypass.port}/calendar/v3"
       )
 
-      {:ok, _token} = Maraithon.OAuth.store_tokens("cal_410_user", "google", %{
-        access_token: "test_access_token",
-        refresh_token: "test_refresh_token",
-        expires_in: 3600,
-        scopes: ["calendar.readonly"]
-      })
+      {:ok, _token} =
+        Maraithon.OAuth.store_tokens("cal_410_user", "google", %{
+          access_token: "test_access_token",
+          refresh_token: "test_refresh_token",
+          expires_in: 3600,
+          scopes: ["calendar.readonly"]
+        })
 
       call_count = :counters.new(1, [:atomics])
 
@@ -427,19 +461,25 @@ defmodule Maraithon.Connectors.GoogleCalendarTest do
           # Second call (full sync) succeeds
           conn
           |> Plug.Conn.put_resp_content_type("application/json")
-          |> Plug.Conn.resp(200, Jason.encode!(%{
-            "items" => [%{
-              "id" => "event3",
-              "summary" => "Recovered Event",
-              "start" => %{"date" => "2024-01-16"},
-              "end" => %{"date" => "2024-01-17"},
-              "organizer" => %{"email" => "org@test.com"}
-            }]
-          }))
+          |> Plug.Conn.resp(
+            200,
+            Jason.encode!(%{
+              "items" => [
+                %{
+                  "id" => "event3",
+                  "summary" => "Recovered Event",
+                  "start" => %{"date" => "2024-01-16"},
+                  "end" => %{"date" => "2024-01-17"},
+                  "organizer" => %{"email" => "org@test.com"}
+                }
+              ]
+            })
+          )
         end
       end)
 
-      {:ok, events} = GoogleCalendar.sync_calendar_events("cal_410_user", sync_token: "expired_token")
+      {:ok, events} =
+        GoogleCalendar.sync_calendar_events("cal_410_user", sync_token: "expired_token")
 
       assert length(events) == 1
       assert hd(events).event_id == "event3"
@@ -454,12 +494,13 @@ defmodule Maraithon.Connectors.GoogleCalendarTest do
         api_base_url: "http://localhost:#{bypass.port}/calendar/v3"
       )
 
-      {:ok, _token} = Maraithon.OAuth.store_tokens("cal_stop_bypass_user", "google", %{
-        access_token: "test_access_token",
-        refresh_token: "test_refresh_token",
-        expires_in: 3600,
-        scopes: ["calendar.readonly"]
-      })
+      {:ok, _token} =
+        Maraithon.OAuth.store_tokens("cal_stop_bypass_user", "google", %{
+          access_token: "test_access_token",
+          refresh_token: "test_refresh_token",
+          expires_in: 3600,
+          scopes: ["calendar.readonly"]
+        })
 
       Bypass.expect_once(bypass, "POST", "/calendar/v3/channels/stop", fn conn ->
         {:ok, body, conn} = Plug.Conn.read_body(conn)
@@ -472,7 +513,8 @@ defmodule Maraithon.Connectors.GoogleCalendarTest do
         |> Plug.Conn.resp(200, "{}")
       end)
 
-      assert :ok = GoogleCalendar.stop_watch("cal_stop_bypass_user", "channel_123", "resource_456")
+      assert :ok =
+               GoogleCalendar.stop_watch("cal_stop_bypass_user", "channel_123", "resource_456")
     end
   end
 
@@ -484,35 +526,40 @@ defmodule Maraithon.Connectors.GoogleCalendarTest do
         api_base_url: "http://localhost:#{bypass.port}/calendar/v3"
       )
 
-      {:ok, _token} = Maraithon.OAuth.store_tokens("webhook_bypass_user", "google", %{
-        access_token: "test_access_token",
-        refresh_token: "test_refresh_token",
-        expires_in: 3600,
-        scopes: ["calendar.readonly"]
-      })
+      {:ok, _token} =
+        Maraithon.OAuth.store_tokens("webhook_bypass_user", "google", %{
+          access_token: "test_access_token",
+          refresh_token: "test_refresh_token",
+          expires_in: 3600,
+          scopes: ["calendar.readonly"]
+        })
 
       Bypass.expect_once(bypass, "GET", "/calendar/v3/calendars/primary/events", fn conn ->
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.resp(200, Jason.encode!(%{
-          "items" => [
-            %{
-              "id" => "updated_event",
-              "summary" => "Updated Meeting",
-              "start" => %{"dateTime" => "2024-01-15T14:00:00Z"},
-              "end" => %{"dateTime" => "2024-01-15T15:00:00Z"},
-              "organizer" => %{"email" => "me@test.com"}
-            }
-          ]
-        }))
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{
+            "items" => [
+              %{
+                "id" => "updated_event",
+                "summary" => "Updated Meeting",
+                "start" => %{"dateTime" => "2024-01-15T14:00:00Z"},
+                "end" => %{"dateTime" => "2024-01-15T15:00:00Z"},
+                "organizer" => %{"email" => "me@test.com"}
+              }
+            ]
+          })
+        )
       end)
 
-      conn = build_conn_with_headers(%{
-        "x-goog-channel-id" => "channel123",
-        "x-goog-resource-id" => "resource123",
-        "x-goog-resource-state" => "exists",
-        "x-goog-channel-token" => "webhook_bypass_user"
-      })
+      conn =
+        build_conn_with_headers(%{
+          "x-goog-channel-id" => "channel123",
+          "x-goog-resource-id" => "resource123",
+          "x-goog-resource-state" => "exists",
+          "x-goog-channel-token" => "webhook_bypass_user"
+        })
 
       {:ok, topic, event} = GoogleCalendar.handle_webhook(conn, %{})
 

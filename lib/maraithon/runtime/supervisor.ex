@@ -26,6 +26,7 @@ defmodule Maraithon.Runtime.Supervisor do
     background_workers =
       if Application.get_env(:maraithon, :start_background_workers, true) do
         [
+          Maraithon.Runtime.Bootstrap,
           Maraithon.Runtime.EffectRunner,
           Maraithon.Runtime.Scheduler,
           Maraithon.Runtime.HealthReporter

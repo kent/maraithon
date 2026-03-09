@@ -81,16 +81,19 @@ defmodule Maraithon.OAuth.SlackTest do
 
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.resp(200, Jason.encode!(%{
-          "ok" => true,
-          "access_token" => "xoxb-test-token",
-          "token_type" => "bot",
-          "scope" => "channels:history,chat:write",
-          "team" => %{"id" => "T123", "name" => "Test Team"},
-          "bot_user_id" => "U123",
-          "app_id" => "A123",
-          "authed_user" => %{"id" => "U456"}
-        }))
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{
+            "ok" => true,
+            "access_token" => "xoxb-test-token",
+            "token_type" => "bot",
+            "scope" => "channels:history,chat:write",
+            "team" => %{"id" => "T123", "name" => "Test Team"},
+            "bot_user_id" => "U123",
+            "app_id" => "A123",
+            "authed_user" => %{"id" => "U456"}
+          })
+        )
       end)
 
       {:ok, tokens} = Slack.exchange_code("valid_auth_code")
@@ -113,10 +116,13 @@ defmodule Maraithon.OAuth.SlackTest do
       Bypass.expect_once(bypass, "POST", "/api/oauth.v2.access", fn conn ->
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.resp(200, Jason.encode!(%{
-          "ok" => false,
-          "error" => "invalid_code"
-        }))
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{
+            "ok" => false,
+            "error" => "invalid_code"
+          })
+        )
       end)
 
       result = Slack.exchange_code("bad_code")
@@ -183,8 +189,11 @@ defmodule Maraithon.OAuth.SlackTest do
 
       # Create the basestring and signature
       basestring = "v0:#{timestamp}:#{raw_body}"
-      signature = :crypto.mac(:hmac, :sha256, signing_secret, basestring)
-                  |> Base.encode16(case: :lower)
+
+      signature =
+        :crypto.mac(:hmac, :sha256, signing_secret, basestring)
+        |> Base.encode16(case: :lower)
+
       signature_header = "v0=#{signature}"
 
       assert :ok = Slack.verify_signature(raw_body, timestamp, signature_header)
@@ -196,7 +205,8 @@ defmodule Maraithon.OAuth.SlackTest do
       timestamp = "#{System.system_time(:second)}"
       invalid_signature = "v0=invalid_signature"
 
-      assert {:error, :invalid_signature} = Slack.verify_signature(raw_body, timestamp, invalid_signature)
+      assert {:error, :invalid_signature} =
+               Slack.verify_signature(raw_body, timestamp, invalid_signature)
     end
 
     test "allows unsigned when configured" do
@@ -228,7 +238,8 @@ defmodule Maraithon.OAuth.SlackTest do
       raw_body = ~s({"type":"event_callback"})
       timestamp = "1234567890"
 
-      assert {:error, :signing_secret_not_configured} = Slack.verify_signature(raw_body, timestamp, "sig")
+      assert {:error, :signing_secret_not_configured} =
+               Slack.verify_signature(raw_body, timestamp, "sig")
 
       # Restore config
       Application.put_env(:maraithon, :slack,
@@ -270,10 +281,13 @@ defmodule Maraithon.OAuth.SlackTest do
 
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.resp(200, Jason.encode!(%{
-          "ok" => true,
-          "channels" => [%{"id" => "C123", "name" => "general"}]
-        }))
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{
+            "ok" => true,
+            "channels" => [%{"id" => "C123", "name" => "general"}]
+          })
+        )
       end)
 
       {:ok, response} = Slack.api_request(:get, "conversations.list", "test_token")
@@ -298,13 +312,20 @@ defmodule Maraithon.OAuth.SlackTest do
 
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.resp(200, Jason.encode!(%{
-          "ok" => true,
-          "ts" => "1234567890.123456"
-        }))
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{
+            "ok" => true,
+            "ts" => "1234567890.123456"
+          })
+        )
       end)
 
-      {:ok, response} = Slack.api_request(:post, "chat.postMessage", "test_token", %{channel: "C123", text: "Hello"})
+      {:ok, response} =
+        Slack.api_request(:post, "chat.postMessage", "test_token", %{
+          channel: "C123",
+          text: "Hello"
+        })
 
       assert response["ts"] == "1234567890.123456"
     end
@@ -321,10 +342,13 @@ defmodule Maraithon.OAuth.SlackTest do
       Bypass.expect_once(bypass, "GET", "/api/conversations.list", fn conn ->
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.resp(200, Jason.encode!(%{
-          "ok" => false,
-          "error" => "invalid_auth"
-        }))
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{
+            "ok" => false,
+            "error" => "invalid_auth"
+          })
+        )
       end)
 
       result = Slack.api_request(:get, "conversations.list", "bad_token")

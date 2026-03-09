@@ -3,6 +3,8 @@ defmodule Maraithon.Tools.SearchFiles do
   Tool for searching file contents with regex patterns.
   """
 
+  alias Maraithon.Tools.PathPolicy
+
   @max_results 50
   @max_context_lines 2
   @max_file_size 1_000_000
@@ -12,14 +14,19 @@ defmodule Maraithon.Tools.SearchFiles do
     pattern = args["pattern"]
     file_pattern = args["file_pattern"] || "**/*"
 
-    if is_nil(pattern) or pattern == "" do
-      {:error, "pattern is required"}
-    else
-      search_files(path, pattern, file_pattern)
+    cond do
+      is_nil(pattern) or pattern == "" ->
+        {:error, "pattern is required"}
+
+      true ->
+        with :ok <- validate_file_pattern(file_pattern),
+             {:ok, resolved_path} <- PathPolicy.resolve_allowed_path(path) do
+          search_files(resolved_path, pattern, file_pattern, path)
+        end
     end
   end
 
-  defp search_files(base_path, pattern, file_pattern) do
+  defp search_files(base_path, pattern, file_pattern, original_path) do
     case Regex.compile(pattern) do
       {:ok, regex} ->
         full_pattern = Path.join(base_path, file_pattern)
@@ -27,13 +34,14 @@ defmodule Maraithon.Tools.SearchFiles do
         matches =
           Path.wildcard(full_pattern)
           |> Enum.filter(&File.regular?/1)
+          |> Enum.filter(&PathPolicy.allowed_path?/1)
           |> Enum.filter(&searchable_file?/1)
           |> Enum.flat_map(&search_file(&1, regex))
           |> Enum.take(@max_results)
 
         {:ok,
          %{
-           base_path: base_path,
+           base_path: original_path,
            pattern: pattern,
            file_pattern: file_pattern,
            matches: matches,
@@ -46,6 +54,19 @@ defmodule Maraithon.Tools.SearchFiles do
     end
   rescue
     e -> {:error, Exception.message(e)}
+  end
+
+  defp validate_file_pattern(file_pattern) do
+    cond do
+      Path.type(file_pattern) == :absolute ->
+        {:error, "file_pattern must be relative"}
+
+      String.contains?(file_pattern, "..") ->
+        {:error, "file_pattern must not contain '..'"}
+
+      true ->
+        :ok
+    end
   end
 
   defp searchable_file?(path) do

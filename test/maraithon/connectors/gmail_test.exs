@@ -43,6 +43,7 @@ defmodule Maraithon.Connectors.GmailTest do
           "messageId" => "msg123"
         }
       }
+
       conn = conn(:post, "/webhooks/google/gmail", params)
 
       assert {:error, :invalid_pubsub_message} = Gmail.handle_webhook(conn, params)
@@ -51,12 +52,14 @@ defmodule Maraithon.Connectors.GmailTest do
     test "returns error for invalid json in data" do
       # Valid base64 but not valid JSON
       encoded_data = Base.encode64("not json")
+
       params = %{
         "message" => %{
           "data" => encoded_data,
           "messageId" => "msg123"
         }
       }
+
       conn = conn(:post, "/webhooks/google/gmail", params)
 
       assert {:error, :invalid_pubsub_message} = Gmail.handle_webhook(conn, params)
@@ -148,9 +151,7 @@ defmodule Maraithon.Connectors.GmailTest do
     end
 
     test "attempts API call when pubsub topic is configured" do
-      Application.put_env(:maraithon, :google,
-        pubsub_topic: "projects/test/topics/gmail"
-      )
+      Application.put_env(:maraithon, :google, pubsub_topic: "projects/test/topics/gmail")
 
       # Will fail on actual API call but tests the token path
       result = Gmail.setup_watch("test_user", "valid_token")
@@ -162,12 +163,13 @@ defmodule Maraithon.Connectors.GmailTest do
   describe "stop_watch/1 with token" do
     setup do
       # Create an OAuth token for testing
-      {:ok, token} = Maraithon.OAuth.store_tokens("gmail_test_user", "google", %{
-        access_token: "test_access_token",
-        refresh_token: "test_refresh_token",
-        expires_in: 3600,
-        scopes: ["gmail.readonly"]
-      })
+      {:ok, token} =
+        Maraithon.OAuth.store_tokens("gmail_test_user", "google", %{
+          access_token: "test_access_token",
+          refresh_token: "test_refresh_token",
+          expires_in: 3600,
+          scopes: ["gmail.readonly"]
+        })
 
       on_exit(fn ->
         Maraithon.Repo.delete_all(Maraithon.OAuth.Token)
@@ -185,12 +187,13 @@ defmodule Maraithon.Connectors.GmailTest do
 
   describe "sync_mail_changes/2 with token" do
     setup do
-      {:ok, _token} = Maraithon.OAuth.store_tokens("sync_test_user", "google", %{
-        access_token: "test_access_token",
-        refresh_token: "test_refresh_token",
-        expires_in: 3600,
-        scopes: ["gmail.readonly"]
-      })
+      {:ok, _token} =
+        Maraithon.OAuth.store_tokens("sync_test_user", "google", %{
+          access_token: "test_access_token",
+          refresh_token: "test_refresh_token",
+          expires_in: 3600,
+          scopes: ["gmail.readonly"]
+        })
 
       on_exit(fn ->
         Maraithon.Repo.delete_all(Maraithon.OAuth.Token)
@@ -208,12 +211,13 @@ defmodule Maraithon.Connectors.GmailTest do
 
   describe "fetch_recent_emails/2 with token" do
     setup do
-      {:ok, _token} = Maraithon.OAuth.store_tokens("email_test_user", "google", %{
-        access_token: "test_access_token",
-        refresh_token: "test_refresh_token",
-        expires_in: 3600,
-        scopes: ["gmail.readonly"]
-      })
+      {:ok, _token} =
+        Maraithon.OAuth.store_tokens("email_test_user", "google", %{
+          access_token: "test_access_token",
+          refresh_token: "test_refresh_token",
+          expires_in: 3600,
+          scopes: ["gmail.readonly"]
+        })
 
       on_exit(fn ->
         Maraithon.Repo.delete_all(Maraithon.OAuth.Token)
@@ -231,12 +235,13 @@ defmodule Maraithon.Connectors.GmailTest do
   describe "handle_webhook/2 - successful sync" do
     setup do
       # Create token for user that will be used in webhook
-      {:ok, _token} = Maraithon.OAuth.store_tokens("user@test.com", "google", %{
-        access_token: "test_access_token",
-        refresh_token: "test_refresh_token",
-        expires_in: 3600,
-        scopes: ["gmail.readonly"]
-      })
+      {:ok, _token} =
+        Maraithon.OAuth.store_tokens("user@test.com", "google", %{
+          access_token: "test_access_token",
+          refresh_token: "test_refresh_token",
+          expires_in: 3600,
+          scopes: ["gmail.readonly"]
+        })
 
       on_exit(fn ->
         Maraithon.Repo.delete_all(Maraithon.OAuth.Token)
@@ -271,9 +276,8 @@ defmodule Maraithon.Connectors.GmailTest do
     test "successfully creates watch" do
       bypass = Bypass.open()
 
-      Application.put_env(:maraithon, :google,
-        pubsub_topic: "projects/test/topics/gmail"
-      )
+      Application.put_env(:maraithon, :google, pubsub_topic: "projects/test/topics/gmail")
+
       Application.put_env(:maraithon, :gmail,
         api_base_url: "http://localhost:#{bypass.port}/gmail/v1"
       )
@@ -286,10 +290,13 @@ defmodule Maraithon.Connectors.GmailTest do
 
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.resp(200, Jason.encode!(%{
-          "historyId" => "12345",
-          "expiration" => "#{System.system_time(:millisecond) + 86400000}"
-        }))
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{
+            "historyId" => "12345",
+            "expiration" => "#{System.system_time(:millisecond) + 86_400_000}"
+          })
+        )
       end)
 
       {:ok, watch} = Gmail.setup_watch("user_123", "test_access_token")
@@ -307,56 +314,66 @@ defmodule Maraithon.Connectors.GmailTest do
         api_base_url: "http://localhost:#{bypass.port}/gmail/v1"
       )
 
-      {:ok, _token} = Maraithon.OAuth.store_tokens("fetch_emails_user", "google", %{
-        access_token: "ya29.test_access_token",
-        refresh_token: "1//test_refresh_token",
-        expires_in: 3600,
-        scopes: ["gmail.readonly"]
-      })
+      {:ok, _token} =
+        Maraithon.OAuth.store_tokens("fetch_emails_user", "google", %{
+          access_token: "ya29.test_access_token",
+          refresh_token: "1//test_refresh_token",
+          expires_in: 3600,
+          scopes: ["gmail.readonly"]
+        })
 
       # Mock messages list endpoint
       Bypass.expect(bypass, "GET", "/gmail/v1/users/me/messages", fn conn ->
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.resp(200, Jason.encode!(%{
-          "messages" => [
-            %{"id" => "msg1", "threadId" => "thread1"},
-            %{"id" => "msg2", "threadId" => "thread2"}
-          ]
-        }))
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{
+            "messages" => [
+              %{"id" => "msg1", "threadId" => "thread1"},
+              %{"id" => "msg2", "threadId" => "thread2"}
+            ]
+          })
+        )
       end)
 
       # Mock individual message fetch
       Bypass.expect(bypass, "GET", "/gmail/v1/users/me/messages/msg1", fn conn ->
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.resp(200, Jason.encode!(%{
-          "id" => "msg1",
-          "threadId" => "thread1",
-          "snippet" => "Test email snippet",
-          "labelIds" => ["INBOX", "UNREAD"],
-          "internalDate" => "#{System.system_time(:millisecond)}",
-          "payload" => %{
-            "headers" => [
-              %{"name" => "From", "value" => "sender@test.com"},
-              %{"name" => "To", "value" => "me@test.com"},
-              %{"name" => "Subject", "value" => "Test Subject"},
-              %{"name" => "Date", "value" => "Mon, 1 Jan 2024 00:00:00 +0000"}
-            ]
-          }
-        }))
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{
+            "id" => "msg1",
+            "threadId" => "thread1",
+            "snippet" => "Test email snippet",
+            "labelIds" => ["INBOX", "UNREAD"],
+            "internalDate" => "#{System.system_time(:millisecond)}",
+            "payload" => %{
+              "headers" => [
+                %{"name" => "From", "value" => "sender@test.com"},
+                %{"name" => "To", "value" => "me@test.com"},
+                %{"name" => "Subject", "value" => "Test Subject"},
+                %{"name" => "Date", "value" => "Mon, 1 Jan 2024 00:00:00 +0000"}
+              ]
+            }
+          })
+        )
       end)
 
       Bypass.expect(bypass, "GET", "/gmail/v1/users/me/messages/msg2", fn conn ->
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.resp(200, Jason.encode!(%{
-          "id" => "msg2",
-          "threadId" => "thread2",
-          "snippet" => "Another email",
-          "labelIds" => ["INBOX"],
-          "payload" => %{"headers" => []}
-        }))
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{
+            "id" => "msg2",
+            "threadId" => "thread2",
+            "snippet" => "Another email",
+            "labelIds" => ["INBOX"],
+            "payload" => %{"headers" => []}
+          })
+        )
       end)
 
       {:ok, emails} = Gmail.fetch_recent_emails("fetch_emails_user", 2)
@@ -374,12 +391,13 @@ defmodule Maraithon.Connectors.GmailTest do
         api_base_url: "http://localhost:#{bypass.port}/gmail/v1"
       )
 
-      {:ok, _token} = Maraithon.OAuth.store_tokens("fetch_no_emails_user", "google", %{
-        access_token: "test_access_token",
-        refresh_token: "test_refresh_token",
-        expires_in: 3600,
-        scopes: ["gmail.readonly"]
-      })
+      {:ok, _token} =
+        Maraithon.OAuth.store_tokens("fetch_no_emails_user", "google", %{
+          access_token: "test_access_token",
+          refresh_token: "test_refresh_token",
+          expires_in: 3600,
+          scopes: ["gmail.readonly"]
+        })
 
       Bypass.expect_once(bypass, "GET", "/gmail/v1/users/me/messages", fn conn ->
         conn
@@ -401,44 +419,51 @@ defmodule Maraithon.Connectors.GmailTest do
         api_base_url: "http://localhost:#{bypass.port}/gmail/v1"
       )
 
-      {:ok, _token} = Maraithon.OAuth.store_tokens("sync_bypass_user", "google", %{
-        access_token: "test_access_token",
-        refresh_token: "test_refresh_token",
-        expires_in: 3600,
-        scopes: ["gmail.readonly"]
-      })
+      {:ok, _token} =
+        Maraithon.OAuth.store_tokens("sync_bypass_user", "google", %{
+          access_token: "test_access_token",
+          refresh_token: "test_refresh_token",
+          expires_in: 3600,
+          scopes: ["gmail.readonly"]
+        })
 
       # Mock history endpoint
       Bypass.expect(bypass, "GET", "/gmail/v1/users/me/history", fn conn ->
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.resp(200, Jason.encode!(%{
-          "history" => [
-            %{
-              "messagesAdded" => [
-                %{"message" => %{"id" => "new_msg1"}}
-              ]
-            }
-          ],
-          "historyId" => "12346"
-        }))
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{
+            "history" => [
+              %{
+                "messagesAdded" => [
+                  %{"message" => %{"id" => "new_msg1"}}
+                ]
+              }
+            ],
+            "historyId" => "12346"
+          })
+        )
       end)
 
       # Mock message fetch
       Bypass.expect(bypass, "GET", "/gmail/v1/users/me/messages/new_msg1", fn conn ->
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.resp(200, Jason.encode!(%{
-          "id" => "new_msg1",
-          "threadId" => "thread1",
-          "snippet" => "New email",
-          "labelIds" => ["INBOX"],
-          "payload" => %{
-            "headers" => [
-              %{"name" => "Subject", "value" => "New Message"}
-            ]
-          }
-        }))
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{
+            "id" => "new_msg1",
+            "threadId" => "thread1",
+            "snippet" => "New email",
+            "labelIds" => ["INBOX"],
+            "payload" => %{
+              "headers" => [
+                %{"name" => "Subject", "value" => "New Message"}
+              ]
+            }
+          })
+        )
       end)
 
       {:ok, messages} = Gmail.sync_mail_changes("sync_bypass_user", "12345")
@@ -454,12 +479,13 @@ defmodule Maraithon.Connectors.GmailTest do
         api_base_url: "http://localhost:#{bypass.port}/gmail/v1"
       )
 
-      {:ok, _token} = Maraithon.OAuth.store_tokens("sync_empty_user", "google", %{
-        access_token: "test_access_token",
-        refresh_token: "test_refresh_token",
-        expires_in: 3600,
-        scopes: ["gmail.readonly"]
-      })
+      {:ok, _token} =
+        Maraithon.OAuth.store_tokens("sync_empty_user", "google", %{
+          access_token: "test_access_token",
+          refresh_token: "test_refresh_token",
+          expires_in: 3600,
+          scopes: ["gmail.readonly"]
+        })
 
       Bypass.expect_once(bypass, "GET", "/gmail/v1/users/me/history", fn conn ->
         conn
@@ -479,12 +505,13 @@ defmodule Maraithon.Connectors.GmailTest do
         api_base_url: "http://localhost:#{bypass.port}/gmail/v1"
       )
 
-      {:ok, _token} = Maraithon.OAuth.store_tokens("sync_expired_user", "google", %{
-        access_token: "test_access_token",
-        refresh_token: "test_refresh_token",
-        expires_in: 3600,
-        scopes: ["gmail.readonly"]
-      })
+      {:ok, _token} =
+        Maraithon.OAuth.store_tokens("sync_expired_user", "google", %{
+          access_token: "test_access_token",
+          refresh_token: "test_refresh_token",
+          expires_in: 3600,
+          scopes: ["gmail.readonly"]
+        })
 
       Bypass.expect_once(bypass, "GET", "/gmail/v1/users/me/history", fn conn ->
         conn
@@ -506,12 +533,13 @@ defmodule Maraithon.Connectors.GmailTest do
         api_base_url: "http://localhost:#{bypass.port}/gmail/v1"
       )
 
-      {:ok, _token} = Maraithon.OAuth.store_tokens("stop_bypass_user", "google", %{
-        access_token: "test_access_token",
-        refresh_token: "test_refresh_token",
-        expires_in: 3600,
-        scopes: ["gmail.readonly"]
-      })
+      {:ok, _token} =
+        Maraithon.OAuth.store_tokens("stop_bypass_user", "google", %{
+          access_token: "test_access_token",
+          refresh_token: "test_refresh_token",
+          expires_in: 3600,
+          scopes: ["gmail.readonly"]
+        })
 
       Bypass.expect_once(bypass, "POST", "/gmail/v1/users/me/stop", fn conn ->
         conn
@@ -529,12 +557,13 @@ defmodule Maraithon.Connectors.GmailTest do
         api_base_url: "http://localhost:#{bypass.port}/gmail/v1"
       )
 
-      {:ok, _token} = Maraithon.OAuth.store_tokens("stop_404_user", "google", %{
-        access_token: "test_access_token",
-        refresh_token: "test_refresh_token",
-        expires_in: 3600,
-        scopes: ["gmail.readonly"]
-      })
+      {:ok, _token} =
+        Maraithon.OAuth.store_tokens("stop_404_user", "google", %{
+          access_token: "test_access_token",
+          refresh_token: "test_refresh_token",
+          expires_in: 3600,
+          scopes: ["gmail.readonly"]
+        })
 
       Bypass.expect_once(bypass, "POST", "/gmail/v1/users/me/stop", fn conn ->
         conn

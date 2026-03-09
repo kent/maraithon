@@ -508,26 +508,27 @@ defmodule Maraithon.Connectors.LinearTest do
     test "creates an issue successfully" do
       bypass = Bypass.open()
 
-      Application.put_env(:maraithon, :linear,
-        api_url: "http://localhost:#{bypass.port}/graphql"
-      )
+      Application.put_env(:maraithon, :linear, api_url: "http://localhost:#{bypass.port}/graphql")
 
       Bypass.expect_once(bypass, "POST", "/graphql", fn conn ->
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.resp(200, Jason.encode!(%{
-          "data" => %{
-            "issueCreate" => %{
-              "success" => true,
-              "issue" => %{
-                "id" => "issue-new-123",
-                "identifier" => "ENG-123",
-                "title" => "New Issue",
-                "url" => "https://linear.app/team/issue/ENG-123"
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{
+            "data" => %{
+              "issueCreate" => %{
+                "success" => true,
+                "issue" => %{
+                  "id" => "issue-new-123",
+                  "identifier" => "ENG-123",
+                  "title" => "New Issue",
+                  "url" => "https://linear.app/team/issue/ENG-123"
+                }
               }
             }
-          }
-        }))
+          })
+        )
       end)
 
       {:ok, issue} = Linear.create_issue("access_token", "team-123", "New Issue")
@@ -541,9 +542,7 @@ defmodule Maraithon.Connectors.LinearTest do
     test "creates an issue with options" do
       bypass = Bypass.open()
 
-      Application.put_env(:maraithon, :linear,
-        api_url: "http://localhost:#{bypass.port}/graphql"
-      )
+      Application.put_env(:maraithon, :linear, api_url: "http://localhost:#{bypass.port}/graphql")
 
       Bypass.expect_once(bypass, "POST", "/graphql", fn conn ->
         {:ok, body, conn} = Plug.Conn.read_body(conn)
@@ -555,25 +554,29 @@ defmodule Maraithon.Connectors.LinearTest do
 
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.resp(200, Jason.encode!(%{
-          "data" => %{
-            "issueCreate" => %{
-              "success" => true,
-              "issue" => %{
-                "id" => "issue-456",
-                "identifier" => "ENG-456",
-                "title" => "Issue with opts",
-                "url" => "https://linear.app/team/issue/ENG-456"
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{
+            "data" => %{
+              "issueCreate" => %{
+                "success" => true,
+                "issue" => %{
+                  "id" => "issue-456",
+                  "identifier" => "ENG-456",
+                  "title" => "Issue with opts",
+                  "url" => "https://linear.app/team/issue/ENG-456"
+                }
               }
             }
-          }
-        }))
+          })
+        )
       end)
 
-      {:ok, issue} = Linear.create_issue("token", "team-123", "Issue with opts",
-        description: "Test description",
-        priority: 1
-      )
+      {:ok, issue} =
+        Linear.create_issue("token", "team-123", "Issue with opts",
+          description: "Test description",
+          priority: 1
+        )
 
       assert issue["identifier"] == "ENG-456"
 
@@ -583,20 +586,21 @@ defmodule Maraithon.Connectors.LinearTest do
     test "returns error when create fails" do
       bypass = Bypass.open()
 
-      Application.put_env(:maraithon, :linear,
-        api_url: "http://localhost:#{bypass.port}/graphql"
-      )
+      Application.put_env(:maraithon, :linear, api_url: "http://localhost:#{bypass.port}/graphql")
 
       Bypass.expect_once(bypass, "POST", "/graphql", fn conn ->
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.resp(200, Jason.encode!(%{
-          "data" => %{
-            "issueCreate" => %{
-              "success" => false
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{
+            "data" => %{
+              "issueCreate" => %{
+                "success" => false
+              }
             }
-          }
-        }))
+          })
+        )
       end)
 
       assert {:error, :create_failed} = Linear.create_issue("token", "team-123", "Failing Issue")
@@ -609,25 +613,26 @@ defmodule Maraithon.Connectors.LinearTest do
     test "creates a comment successfully" do
       bypass = Bypass.open()
 
-      Application.put_env(:maraithon, :linear,
-        api_url: "http://localhost:#{bypass.port}/graphql"
-      )
+      Application.put_env(:maraithon, :linear, api_url: "http://localhost:#{bypass.port}/graphql")
 
       Bypass.expect_once(bypass, "POST", "/graphql", fn conn ->
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.resp(200, Jason.encode!(%{
-          "data" => %{
-            "commentCreate" => %{
-              "success" => true,
-              "comment" => %{
-                "id" => "comment-123",
-                "body" => "New comment",
-                "url" => "https://linear.app/issue/comment"
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{
+            "data" => %{
+              "commentCreate" => %{
+                "success" => true,
+                "comment" => %{
+                  "id" => "comment-123",
+                  "body" => "New comment",
+                  "url" => "https://linear.app/issue/comment"
+                }
               }
             }
-          }
-        }))
+          })
+        )
       end)
 
       {:ok, comment} = Linear.create_comment("token", "issue-123", "New comment")
@@ -641,20 +646,21 @@ defmodule Maraithon.Connectors.LinearTest do
     test "returns error when comment create fails" do
       bypass = Bypass.open()
 
-      Application.put_env(:maraithon, :linear,
-        api_url: "http://localhost:#{bypass.port}/graphql"
-      )
+      Application.put_env(:maraithon, :linear, api_url: "http://localhost:#{bypass.port}/graphql")
 
       Bypass.expect_once(bypass, "POST", "/graphql", fn conn ->
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.resp(200, Jason.encode!(%{
-          "data" => %{
-            "commentCreate" => %{
-              "success" => false
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{
+            "data" => %{
+              "commentCreate" => %{
+                "success" => false
+              }
             }
-          }
-        }))
+          })
+        )
       end)
 
       assert {:error, :create_failed} = Linear.create_comment("token", "issue-123", "Failing")
@@ -667,28 +673,29 @@ defmodule Maraithon.Connectors.LinearTest do
     test "updates issue state successfully" do
       bypass = Bypass.open()
 
-      Application.put_env(:maraithon, :linear,
-        api_url: "http://localhost:#{bypass.port}/graphql"
-      )
+      Application.put_env(:maraithon, :linear, api_url: "http://localhost:#{bypass.port}/graphql")
 
       Bypass.expect_once(bypass, "POST", "/graphql", fn conn ->
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.resp(200, Jason.encode!(%{
-          "data" => %{
-            "issueUpdate" => %{
-              "success" => true,
-              "issue" => %{
-                "id" => "issue-123",
-                "identifier" => "ENG-123",
-                "state" => %{
-                  "name" => "Done",
-                  "type" => "completed"
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{
+            "data" => %{
+              "issueUpdate" => %{
+                "success" => true,
+                "issue" => %{
+                  "id" => "issue-123",
+                  "identifier" => "ENG-123",
+                  "state" => %{
+                    "name" => "Done",
+                    "type" => "completed"
+                  }
                 }
               }
             }
-          }
-        }))
+          })
+        )
       end)
 
       {:ok, issue} = Linear.update_issue_state("token", "issue-123", "state-done")
@@ -701,23 +708,25 @@ defmodule Maraithon.Connectors.LinearTest do
     test "returns error when update fails" do
       bypass = Bypass.open()
 
-      Application.put_env(:maraithon, :linear,
-        api_url: "http://localhost:#{bypass.port}/graphql"
-      )
+      Application.put_env(:maraithon, :linear, api_url: "http://localhost:#{bypass.port}/graphql")
 
       Bypass.expect_once(bypass, "POST", "/graphql", fn conn ->
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.resp(200, Jason.encode!(%{
-          "data" => %{
-            "issueUpdate" => %{
-              "success" => false
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{
+            "data" => %{
+              "issueUpdate" => %{
+                "success" => false
+              }
             }
-          }
-        }))
+          })
+        )
       end)
 
-      assert {:error, :update_failed} = Linear.update_issue_state("token", "issue-123", "state-invalid")
+      assert {:error, :update_failed} =
+               Linear.update_issue_state("token", "issue-123", "state-invalid")
 
       Application.delete_env(:maraithon, :linear)
     end
@@ -727,23 +736,24 @@ defmodule Maraithon.Connectors.LinearTest do
     test "returns teams successfully" do
       bypass = Bypass.open()
 
-      Application.put_env(:maraithon, :linear,
-        api_url: "http://localhost:#{bypass.port}/graphql"
-      )
+      Application.put_env(:maraithon, :linear, api_url: "http://localhost:#{bypass.port}/graphql")
 
       Bypass.expect_once(bypass, "POST", "/graphql", fn conn ->
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.resp(200, Jason.encode!(%{
-          "data" => %{
-            "teams" => %{
-              "nodes" => [
-                %{"id" => "team1", "key" => "ENG", "name" => "Engineering"},
-                %{"id" => "team2", "key" => "DES", "name" => "Design"}
-              ]
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{
+            "data" => %{
+              "teams" => %{
+                "nodes" => [
+                  %{"id" => "team1", "key" => "ENG", "name" => "Engineering"},
+                  %{"id" => "team2", "key" => "DES", "name" => "Design"}
+                ]
+              }
             }
-          }
-        }))
+          })
+        )
       end)
 
       {:ok, teams} = Linear.get_teams("token")

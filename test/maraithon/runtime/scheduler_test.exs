@@ -139,12 +139,13 @@ defmodule Maraithon.Runtime.SchedulerTest do
   # ----------------------------------------------------------------------------
   setup do
     # Create an agent for testing
-    {:ok, agent} = Agents.create_agent(%{
-      behavior: "watchdog_summarizer",
-      config: %{},
-      status: "running",
-      started_at: DateTime.utc_now()
-    })
+    {:ok, agent} =
+      Agents.create_agent(%{
+        behavior: "watchdog_summarizer",
+        config: %{},
+        status: "running",
+        started_at: DateTime.utc_now()
+      })
 
     %{agent: agent}
   end
@@ -269,6 +270,7 @@ defmodule Maraithon.Runtime.SchedulerTest do
 
       # Mark job as delivered
       job = Repo.get(ScheduledJob, job_id)
+
       job
       |> ScheduledJob.changeset(%{status: "delivered"})
       |> Repo.update!()
@@ -372,7 +374,7 @@ defmodule Maraithon.Runtime.SchedulerTest do
 
     @doc """
     Verifies the Scheduler fires jobs when receiving {:fire, job_id}.
-    The job should transition from "pending" to "delivered".
+    The job should transition from "pending" to "dispatched".
     """
     test "handles {:fire, job_id} message", %{agent: agent} do
       # Stop existing scheduler if running
@@ -392,9 +394,9 @@ defmodule Maraithon.Runtime.SchedulerTest do
       send(pid, {:fire, job_id})
       Process.sleep(100)
 
-      # Job should be delivered
+      # Job should be dispatched and await ack
       job = Repo.get(ScheduledJob, job_id)
-      assert job.status == "delivered"
+      assert job.status == "dispatched"
 
       GenServer.stop(pid, :normal)
     end
@@ -484,6 +486,7 @@ defmodule Maraithon.Runtime.SchedulerTest do
 
       # Mark as delivered manually
       job = Repo.get(ScheduledJob, job_id)
+
       job
       |> ScheduledJob.changeset(%{status: "delivered", delivered_at: DateTime.utc_now()})
       |> Repo.update!()
@@ -509,9 +512,8 @@ defmodule Maraithon.Runtime.SchedulerTest do
 
   describe "job delivery to non-running agent" do
     @doc """
-    Verifies that jobs are marked as delivered even if agent isn't running.
-    The scheduler logs a warning but doesn't fail.
-    This prevents jobs from piling up for stopped agents.
+    Verifies that jobs remain dispatched until an agent acknowledges receipt.
+    This prevents marking jobs as delivered when no agent handled them.
     """
     test "logs warning when agent is not running", %{agent: agent} do
       # Stop existing scheduler if running
@@ -532,9 +534,34 @@ defmodule Maraithon.Runtime.SchedulerTest do
       send(pid, {:fire, job_id})
       Process.sleep(100)
 
-      # Job should still be marked as delivered
+      # Job should remain dispatched until ack
+      job = Repo.get(ScheduledJob, job_id)
+      assert job.status == "dispatched"
+
+      GenServer.stop(pid, :normal)
+    end
+  end
+
+  describe "ack_delivered/1" do
+    test "marks a dispatched job as delivered", %{agent: agent} do
+      case Process.whereis(Scheduler) do
+        nil -> :ok
+        pid -> GenServer.stop(pid, :normal)
+      end
+
+      {:ok, pid} = Scheduler.start_link([])
+      Ecto.Adapters.SQL.Sandbox.allow(Maraithon.Repo, self(), pid)
+
+      fire_at = DateTime.utc_now()
+      {:ok, job_id} = Scheduler.schedule_at(agent.id, "ack_test", fire_at)
+      send(pid, {:fire, job_id})
+      Process.sleep(100)
+
+      assert {:ok, :delivered} = Scheduler.ack_delivered(job_id)
+
       job = Repo.get(ScheduledJob, job_id)
       assert job.status == "delivered"
+      assert job.delivered_at != nil
 
       GenServer.stop(pid, :normal)
     end

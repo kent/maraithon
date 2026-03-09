@@ -69,28 +69,31 @@ defmodule Maraithon.Behaviors.RepoPlannerTest do
     end
 
     test "respects custom output path" do
-      state = RepoPlanner.init(%{
-        "codebase_path" => @test_dir,
-        "output_path" => "/tmp/custom_plans"
-      })
+      state =
+        RepoPlanner.init(%{
+          "codebase_path" => @test_dir,
+          "output_path" => "/tmp/custom_plans"
+        })
 
       assert state.output_path == "/tmp/custom_plans"
     end
 
     test "respects write_plan_files setting" do
-      state = RepoPlanner.init(%{
-        "codebase_path" => @test_dir,
-        "write_plan_files" => false
-      })
+      state =
+        RepoPlanner.init(%{
+          "codebase_path" => @test_dir,
+          "write_plan_files" => false
+        })
 
       assert state.write_plan_files == false
     end
 
     test "respects custom file patterns" do
-      state = RepoPlanner.init(%{
-        "codebase_path" => @test_dir,
-        "file_patterns" => ["**/*.md"]
-      })
+      state =
+        RepoPlanner.init(%{
+          "codebase_path" => @test_dir,
+          "file_patterns" => ["**/*.md"]
+        })
 
       # Should only find markdown files
       file_names = Enum.map(state.index.files, &Path.basename/1)
@@ -156,9 +159,16 @@ defmodule Maraithon.Behaviors.RepoPlannerTest do
 
     test "processes tasks from queue" do
       state = RepoPlanner.init(%{"codebase_path" => @test_dir})
-      state = %{state | phase: :ready, files_to_summarize: [], planning_queue: [%{task: "Queued task"}]}
 
-      {:emit, {:planning_started, payload}, new_state} = RepoPlanner.handle_wakeup(state, @context)
+      state = %{
+        state
+        | phase: :ready,
+          files_to_summarize: [],
+          planning_queue: [%{task: "Queued task"}]
+      }
+
+      {:emit, {:planning_started, payload}, new_state} =
+        RepoPlanner.handle_wakeup(state, @context)
 
       assert new_state.current_task.task == "Queued task"
       assert payload.task == "Queued task"
@@ -176,15 +186,20 @@ defmodule Maraithon.Behaviors.RepoPlannerTest do
   describe "handle_wakeup/2 - planning phase" do
     test "analyzing phase requests LLM analysis" do
       state = RepoPlanner.init(%{"codebase_path" => @test_dir})
-      state = %{state | phase: :planning, current_task: %{
-        id: "test-id",
-        task: "Add feature",
-        phase: :analyzing,
-        analysis: nil,
-        files_to_read: [],
-        gathered_files: %{},
-        started_at: DateTime.utc_now()
-      }}
+
+      state = %{
+        state
+        | phase: :planning,
+          current_task: %{
+            id: "test-id",
+            task: "Add feature",
+            phase: :analyzing,
+            analysis: nil,
+            files_to_read: [],
+            gathered_files: %{},
+            started_at: DateTime.utc_now()
+          }
+      }
 
       {:effect, {:llm_call, params}, _new_state} = RepoPlanner.handle_wakeup(state, @context)
 
@@ -193,15 +208,20 @@ defmodule Maraithon.Behaviors.RepoPlannerTest do
 
     test "gathering phase reads files" do
       state = RepoPlanner.init(%{"codebase_path" => @test_dir})
-      state = %{state | phase: :planning, current_task: %{
-        id: "test-id",
-        task: "Add feature",
-        phase: :gathering,
-        analysis: %{},
-        files_to_read: ["/path/to/file.ex"],
-        gathered_files: %{},
-        started_at: DateTime.utc_now()
-      }}
+
+      state = %{
+        state
+        | phase: :planning,
+          current_task: %{
+            id: "test-id",
+            task: "Add feature",
+            phase: :gathering,
+            analysis: %{},
+            files_to_read: ["/path/to/file.ex"],
+            gathered_files: %{},
+            started_at: DateTime.utc_now()
+          }
+      }
 
       {:effect, {:tool_call, tool, args}, new_state} = RepoPlanner.handle_wakeup(state, @context)
 
@@ -212,15 +232,20 @@ defmodule Maraithon.Behaviors.RepoPlannerTest do
 
     test "gathering phase transitions to generating when done" do
       state = RepoPlanner.init(%{"codebase_path" => @test_dir})
-      state = %{state | phase: :planning, current_task: %{
-        id: "test-id",
-        task: "Add feature",
-        phase: :gathering,
-        analysis: %{},
-        files_to_read: [],
-        gathered_files: %{},
-        started_at: DateTime.utc_now()
-      }}
+
+      state = %{
+        state
+        | phase: :planning,
+          current_task: %{
+            id: "test-id",
+            task: "Add feature",
+            phase: :gathering,
+            analysis: %{},
+            files_to_read: [],
+            gathered_files: %{},
+            started_at: DateTime.utc_now()
+          }
+      }
 
       {:continue, new_state} = RepoPlanner.handle_wakeup(state, @context)
 
@@ -229,15 +254,20 @@ defmodule Maraithon.Behaviors.RepoPlannerTest do
 
     test "generating phase requests plan generation" do
       state = RepoPlanner.init(%{"codebase_path" => @test_dir})
-      state = %{state | phase: :planning, current_task: %{
-        id: "test-id",
-        task: "Add feature",
-        phase: :generating,
-        analysis: %{},
-        files_to_read: [],
-        gathered_files: %{"/path/file.ex" => "content"},
-        started_at: DateTime.utc_now()
-      }}
+
+      state = %{
+        state
+        | phase: :planning,
+          current_task: %{
+            id: "test-id",
+            task: "Add feature",
+            phase: :generating,
+            analysis: %{},
+            files_to_read: [],
+            gathered_files: %{"/path/file.ex" => "content"},
+            started_at: DateTime.utc_now()
+          }
+      }
 
       {:effect, {:llm_call, params}, _new_state} = RepoPlanner.handle_wakeup(state, @context)
 
@@ -264,17 +294,25 @@ defmodule Maraithon.Behaviors.RepoPlannerTest do
     test "handles analysis response with valid JSON" do
       state = RepoPlanner.init(%{"codebase_path" => @test_dir})
       file_path = Path.join(@test_dir, "lib/test.ex")
-      state = %{state | phase: :planning, current_task: %{
-        id: "test-id",
-        task: "Add feature",
-        phase: :analyzing,
-        analysis: nil,
-        files_to_read: [],
-        gathered_files: %{},
-        started_at: DateTime.utc_now()
-      }}
 
-      response = %{content: ~s({"understanding": "Add auth", "files_to_examine": ["#{file_path}"], "patterns_observed": [], "considerations": []})}
+      state = %{
+        state
+        | phase: :planning,
+          current_task: %{
+            id: "test-id",
+            task: "Add feature",
+            phase: :analyzing,
+            analysis: nil,
+            files_to_read: [],
+            gathered_files: %{},
+            started_at: DateTime.utc_now()
+          }
+      }
+
+      response = %{
+        content:
+          ~s({"understanding": "Add auth", "files_to_examine": ["#{file_path}"], "patterns_observed": [], "considerations": []})
+      }
 
       {:continue, new_state} =
         RepoPlanner.handle_effect_result({:llm_call, response}, state, @context)
@@ -286,15 +324,20 @@ defmodule Maraithon.Behaviors.RepoPlannerTest do
 
     test "handles analysis response with invalid JSON" do
       state = RepoPlanner.init(%{"codebase_path" => @test_dir})
-      state = %{state | phase: :planning, current_task: %{
-        id: "test-id",
-        task: "Add feature",
-        phase: :analyzing,
-        analysis: nil,
-        files_to_read: [],
-        gathered_files: %{},
-        started_at: DateTime.utc_now()
-      }}
+
+      state = %{
+        state
+        | phase: :planning,
+          current_task: %{
+            id: "test-id",
+            task: "Add feature",
+            phase: :analyzing,
+            analysis: nil,
+            files_to_read: [],
+            gathered_files: %{},
+            started_at: DateTime.utc_now()
+          }
+      }
 
       response = %{content: "Not valid JSON at all"}
 
@@ -307,19 +350,25 @@ defmodule Maraithon.Behaviors.RepoPlannerTest do
     end
 
     test "handles generating phase result" do
-      state = RepoPlanner.init(%{
-        "codebase_path" => @test_dir,
-        "write_plan_files" => false
-      })
-      state = %{state | phase: :planning, current_task: %{
-        id: "test-id",
-        task: "Add feature",
-        phase: :generating,
-        analysis: %{},
-        files_to_read: [],
-        gathered_files: %{"/file.ex" => "content"},
-        started_at: DateTime.utc_now()
-      }}
+      state =
+        RepoPlanner.init(%{
+          "codebase_path" => @test_dir,
+          "write_plan_files" => false
+        })
+
+      state = %{
+        state
+        | phase: :planning,
+          current_task: %{
+            id: "test-id",
+            task: "Add feature",
+            phase: :generating,
+            analysis: %{},
+            files_to_read: [],
+            gathered_files: %{"/file.ex" => "content"},
+            started_at: DateTime.utc_now()
+          }
+      }
 
       response = %{content: "# Implementation Plan\n\n## Overview\nThis plan..."}
 
@@ -337,15 +386,20 @@ defmodule Maraithon.Behaviors.RepoPlannerTest do
   describe "handle_effect_result/3 - tool results" do
     test "stores file content from tool result" do
       state = RepoPlanner.init(%{"codebase_path" => @test_dir})
-      state = %{state | phase: :planning, current_task: %{
-        id: "test-id",
-        task: "Add feature",
-        phase: :gathering,
-        analysis: %{},
-        files_to_read: [],
-        gathered_files: %{},
-        started_at: DateTime.utc_now()
-      }}
+
+      state = %{
+        state
+        | phase: :planning,
+          current_task: %{
+            id: "test-id",
+            task: "Add feature",
+            phase: :gathering,
+            analysis: %{},
+            files_to_read: [],
+            gathered_files: %{},
+            started_at: DateTime.utc_now()
+          }
+      }
 
       result = {:ok, %{content: "file content", path: "/path/to/file.ex"}}
 
@@ -357,15 +411,20 @@ defmodule Maraithon.Behaviors.RepoPlannerTest do
 
     test "handles error in tool result" do
       state = RepoPlanner.init(%{"codebase_path" => @test_dir})
-      state = %{state | phase: :planning, current_task: %{
-        id: "test-id",
-        task: "Add feature",
-        phase: :gathering,
-        analysis: %{},
-        files_to_read: [],
-        gathered_files: %{},
-        started_at: DateTime.utc_now()
-      }}
+
+      state = %{
+        state
+        | phase: :planning,
+          current_task: %{
+            id: "test-id",
+            task: "Add feature",
+            phase: :gathering,
+            analysis: %{},
+            files_to_read: [],
+            gathered_files: %{},
+            started_at: DateTime.utc_now()
+          }
+      }
 
       result = {:error, :enoent}
 
@@ -402,10 +461,12 @@ defmodule Maraithon.Behaviors.RepoPlannerTest do
     end
 
     test "returns configured interval when ready" do
-      state = RepoPlanner.init(%{
-        "codebase_path" => @test_dir,
-        "wakeup_interval_ms" => 60_000
-      })
+      state =
+        RepoPlanner.init(%{
+          "codebase_path" => @test_dir,
+          "wakeup_interval_ms" => 60_000
+        })
+
       state = %{state | phase: :ready}
 
       {:relative, interval} = RepoPlanner.next_wakeup(state)

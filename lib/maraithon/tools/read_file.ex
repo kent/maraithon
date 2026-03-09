@@ -3,22 +3,26 @@ defmodule Maraithon.Tools.ReadFile do
   Tool for reading file contents.
   """
 
+  alias Maraithon.Tools.PathPolicy
+
   # 100KB
   @max_file_size 100_000
 
   def execute(args) do
     path = args["path"]
 
-    unless path do
-      {:error, "path is required"}
-    else
-      read_file(path)
+    cond do
+      is_nil(path) ->
+        {:error, "path is required"}
+
+      true ->
+        with {:ok, resolved_path} <- PathPolicy.resolve_allowed_path(path) do
+          read_file(resolved_path)
+        end
     end
   end
 
   defp read_file(path) do
-    # Security: Don't allow reading outside configured directories
-    # For now, just read the file
     case File.stat(path) do
       {:ok, %{size: size}} when size > @max_file_size ->
         {:error, "file too large (max #{@max_file_size} bytes)"}

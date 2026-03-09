@@ -123,13 +123,16 @@ defmodule Maraithon.OAuth.GoogleTest do
 
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.resp(200, Jason.encode!(%{
-          "access_token" => "ya29.test_access_token",
-          "refresh_token" => "1//test_refresh_token",
-          "expires_in" => 3600,
-          "scope" => "https://www.googleapis.com/auth/calendar.readonly",
-          "token_type" => "Bearer"
-        }))
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{
+            "access_token" => "ya29.test_access_token",
+            "refresh_token" => "1//test_refresh_token",
+            "expires_in" => 3600,
+            "scope" => "https://www.googleapis.com/auth/calendar.readonly",
+            "token_type" => "Bearer"
+          })
+        )
       end)
 
       {:ok, tokens} = Google.exchange_code("valid_auth_code")
@@ -168,11 +171,14 @@ defmodule Maraithon.OAuth.GoogleTest do
 
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.resp(200, Jason.encode!(%{
-          "access_token" => "ya29.new_access_token",
-          "expires_in" => 3600,
-          "token_type" => "Bearer"
-        }))
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{
+            "access_token" => "ya29.new_access_token",
+            "expires_in" => 3600,
+            "token_type" => "Bearer"
+          })
+        )
       end)
 
       {:ok, tokens} = Google.refresh_token("valid_refresh_token")
@@ -193,10 +199,13 @@ defmodule Maraithon.OAuth.GoogleTest do
       Bypass.expect_once(bypass, "POST", "/token", fn conn ->
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.resp(400, Jason.encode!(%{
-          "error" => "invalid_grant",
-          "error_description" => "Token has been revoked"
-        }))
+        |> Plug.Conn.resp(
+          400,
+          Jason.encode!(%{
+            "error" => "invalid_grant",
+            "error_description" => "Token has been revoked"
+          })
+        )
       end)
 
       result = Google.refresh_token("revoked_refresh_token")
@@ -249,11 +258,12 @@ defmodule Maraithon.OAuth.GoogleTest do
         |> Plug.Conn.resp(200, ~s({"items": []}))
       end)
 
-      {:ok, response} = Google.api_request(
-        :get,
-        "http://localhost:#{bypass.port}/calendar/v3/users/me/calendarList",
-        "test_access_token"
-      )
+      {:ok, response} =
+        Google.api_request(
+          :get,
+          "http://localhost:#{bypass.port}/calendar/v3/users/me/calendarList",
+          "test_access_token"
+        )
 
       assert response["items"] == []
     end
@@ -270,12 +280,13 @@ defmodule Maraithon.OAuth.GoogleTest do
         |> Plug.Conn.resp(200, ~s({"created": true}))
       end)
 
-      {:ok, response} = Google.api_request(
-        :post,
-        "http://localhost:#{bypass.port}/api/resource",
-        "test_token",
-        %{name: "test"}
-      )
+      {:ok, response} =
+        Google.api_request(
+          :post,
+          "http://localhost:#{bypass.port}/api/resource",
+          "test_token",
+          %{name: "test"}
+        )
 
       assert response["created"] == true
     end
@@ -289,12 +300,13 @@ defmodule Maraithon.OAuth.GoogleTest do
         |> Plug.Conn.resp(200, ~s({"updated": true}))
       end)
 
-      {:ok, response} = Google.api_request(
-        :put,
-        "http://localhost:#{bypass.port}/api/resource/1",
-        "test_token",
-        %{name: "updated"}
-      )
+      {:ok, response} =
+        Google.api_request(
+          :put,
+          "http://localhost:#{bypass.port}/api/resource/1",
+          "test_token",
+          %{name: "updated"}
+        )
 
       assert response["updated"] == true
     end
@@ -308,12 +320,13 @@ defmodule Maraithon.OAuth.GoogleTest do
         |> Plug.Conn.resp(200, ~s({"patched": true}))
       end)
 
-      {:ok, response} = Google.api_request(
-        :patch,
-        "http://localhost:#{bypass.port}/api/resource/1",
-        "test_token",
-        %{status: "active"}
-      )
+      {:ok, response} =
+        Google.api_request(
+          :patch,
+          "http://localhost:#{bypass.port}/api/resource/1",
+          "test_token",
+          %{status: "active"}
+        )
 
       assert response["patched"] == true
     end
@@ -327,11 +340,12 @@ defmodule Maraithon.OAuth.GoogleTest do
         |> Plug.Conn.resp(200, ~s({"deleted": true}))
       end)
 
-      {:ok, response} = Google.api_request(
-        :delete,
-        "http://localhost:#{bypass.port}/api/resource/1",
-        "test_token"
-      )
+      {:ok, response} =
+        Google.api_request(
+          :delete,
+          "http://localhost:#{bypass.port}/api/resource/1",
+          "test_token"
+        )
 
       assert response["deleted"] == true
     end
@@ -348,13 +362,14 @@ defmodule Maraithon.OAuth.GoogleTest do
         |> Plug.Conn.resp(200, ~s({}))
       end)
 
-      {:ok, _} = Google.api_request(
-        :get,
-        "http://localhost:#{bypass.port}/api",
-        "test_token",
-        nil,
-        [{"X-Custom-Header", "custom_value"}]
-      )
+      {:ok, _} =
+        Google.api_request(
+          :get,
+          "http://localhost:#{bypass.port}/api",
+          "test_token",
+          nil,
+          [{"X-Custom-Header", "custom_value"}]
+        )
     end
   end
 end

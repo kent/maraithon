@@ -151,6 +151,7 @@ defmodule Maraithon.Runtime.AgentSupervisorTest do
     This is a sanity check to ensure the public API hasn't changed.
     """
     test "function exists and accepts an agent struct" do
+      assert Code.ensure_loaded?(AgentSupervisor)
       # Verify the function is exported with correct arity
       assert function_exported?(AgentSupervisor, :start_agent, 1)
     end
@@ -170,6 +171,7 @@ defmodule Maraithon.Runtime.AgentSupervisorTest do
     This is a sanity check to ensure the public API hasn't changed.
     """
     test "function exists and accepts a pid" do
+      assert Code.ensure_loaded?(AgentSupervisor)
       # Verify the function is exported with correct arity
       assert function_exported?(AgentSupervisor, :stop_agent, 1)
     end

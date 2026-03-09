@@ -10,7 +10,11 @@ defmodule Maraithon.Tools.SearchFilesTest do
     File.mkdir_p!(@test_dir)
     File.write!(Path.join(@test_dir, "file1.txt"), "Hello World\nThis is a test\nGoodbye World")
     File.write!(Path.join(@test_dir, "file2.txt"), "No matches here\nJust some text")
-    File.write!(Path.join(@test_dir, "code.ex"), "defmodule Test do\n  def hello, do: :world\nend")
+
+    File.write!(
+      Path.join(@test_dir, "code.ex"),
+      "defmodule Test do\n  def hello, do: :world\nend"
+    )
 
     on_exit(fn -> File.rm_rf!(@test_dir) end)
     :ok

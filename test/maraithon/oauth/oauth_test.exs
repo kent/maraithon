@@ -6,6 +6,7 @@ defmodule Maraithon.OAuthTest do
   describe "store_tokens/3" do
     test "creates new token" do
       user_id = "user_#{System.unique_integer()}"
+
       token_data = %{
         access_token: "access_123",
         refresh_token: "refresh_123",
@@ -98,10 +99,12 @@ defmodule Maraithon.OAuthTest do
     test "returns access_token when not expired" do
       user_id = "user_#{System.unique_integer()}"
       expires_at = DateTime.add(DateTime.utc_now(), 3600, :second)
-      {:ok, _} = OAuth.store_tokens(user_id, "google", %{
-        access_token: "valid_token",
-        expires_at: expires_at
-      })
+
+      {:ok, _} =
+        OAuth.store_tokens(user_id, "google", %{
+          access_token: "valid_token",
+          expires_at: expires_at
+        })
 
       {:ok, token} = OAuth.get_valid_access_token(user_id, "google")
 
@@ -126,10 +129,12 @@ defmodule Maraithon.OAuthTest do
     test "returns existing token when not expired" do
       user_id = "user_#{System.unique_integer()}"
       expires_at = DateTime.add(DateTime.utc_now(), 3600, :second)
-      {:ok, stored} = OAuth.store_tokens(user_id, "google", %{
-        access_token: "valid_token",
-        expires_at: expires_at
-      })
+
+      {:ok, stored} =
+        OAuth.store_tokens(user_id, "google", %{
+          access_token: "valid_token",
+          expires_at: expires_at
+        })
 
       {:ok, token} = OAuth.refresh_if_expired(user_id, "google")
 
@@ -139,10 +144,12 @@ defmodule Maraithon.OAuthTest do
     test "returns error when expired without refresh_token" do
       user_id = "user_#{System.unique_integer()}"
       expires_at = DateTime.add(DateTime.utc_now(), -3600, :second)
-      {:ok, _} = OAuth.store_tokens(user_id, "google", %{
-        access_token: "expired_token",
-        expires_at: expires_at
-      })
+
+      {:ok, _} =
+        OAuth.store_tokens(user_id, "google", %{
+          access_token: "expired_token",
+          expires_at: expires_at
+        })
 
       {:error, :no_refresh_token} = OAuth.refresh_if_expired(user_id, "google")
     end
@@ -221,29 +228,33 @@ defmodule Maraithon.OAuthTest do
       user_id = "user_#{System.unique_integer()}"
       # Token expiring in 60 seconds
       expires_soon = DateTime.add(DateTime.utc_now(), 60, :second)
-      {:ok, _} = OAuth.store_tokens(user_id, "google", %{
-        access_token: "expiring_token",
-        refresh_token: "refresh_token",
-        expires_at: expires_soon
-      })
+
+      {:ok, _} =
+        OAuth.store_tokens(user_id, "google", %{
+          access_token: "expiring_token",
+          refresh_token: "refresh_token",
+          expires_at: expires_soon
+        })
 
       tokens = OAuth.list_expiring_tokens(300)
 
       assert length(tokens) >= 1
-      expiring_token = Enum.find(tokens, & &1.user_id == user_id)
+      expiring_token = Enum.find(tokens, &(&1.user_id == user_id))
       assert expiring_token != nil
     end
 
     test "does not return tokens without refresh_token" do
       user_id = "user_#{System.unique_integer()}"
       expires_soon = DateTime.add(DateTime.utc_now(), 60, :second)
-      {:ok, _} = OAuth.store_tokens(user_id, "google", %{
-        access_token: "expiring_no_refresh",
-        expires_at: expires_soon
-      })
+
+      {:ok, _} =
+        OAuth.store_tokens(user_id, "google", %{
+          access_token: "expiring_no_refresh",
+          expires_at: expires_soon
+        })
 
       tokens = OAuth.list_expiring_tokens(300)
-      expiring_token = Enum.find(tokens, & &1.user_id == user_id)
+      expiring_token = Enum.find(tokens, &(&1.user_id == user_id))
 
       # Should not be in the list since no refresh token
       assert expiring_token == nil
@@ -254,10 +265,12 @@ defmodule Maraithon.OAuthTest do
     test "returns error when expired without refresh token" do
       user_id = "user_#{System.unique_integer()}"
       expired_at = DateTime.add(DateTime.utc_now(), -3600, :second)
-      {:ok, _} = OAuth.store_tokens(user_id, "google", %{
-        access_token: "expired_token_no_refresh",
-        expires_at: expired_at
-      })
+
+      {:ok, _} =
+        OAuth.store_tokens(user_id, "google", %{
+          access_token: "expired_token_no_refresh",
+          expires_at: expired_at
+        })
 
       # Should return error since no refresh token
       assert {:error, :no_refresh_token} = OAuth.get_valid_access_token(user_id, "google")
@@ -266,11 +279,13 @@ defmodule Maraithon.OAuthTest do
     test "attempts refresh when expired with refresh token" do
       user_id = "user_#{System.unique_integer()}"
       expired_at = DateTime.add(DateTime.utc_now(), -3600, :second)
-      {:ok, _} = OAuth.store_tokens(user_id, "google", %{
-        access_token: "expired_token_with_refresh",
-        refresh_token: "refresh_token_123",
-        expires_at: expired_at
-      })
+
+      {:ok, _} =
+        OAuth.store_tokens(user_id, "google", %{
+          access_token: "expired_token_with_refresh",
+          refresh_token: "refresh_token_123",
+          expires_at: expired_at
+        })
 
       # Should attempt refresh (will fail due to no real API)
       result = OAuth.get_valid_access_token(user_id, "google")
@@ -282,10 +297,12 @@ defmodule Maraithon.OAuthTest do
   describe "update token metadata" do
     test "preserves metadata when updating token" do
       user_id = "user_#{System.unique_integer()}"
+
       initial_data = %{
         access_token: "initial_token",
         metadata: %{email: "user@example.com", team_id: "T123"}
       }
+
       # Slack requires format slack:{team_id}
       {:ok, _} = OAuth.store_tokens(user_id, "slack:T123", initial_data)
 
@@ -294,6 +311,7 @@ defmodule Maraithon.OAuthTest do
         access_token: "new_token",
         metadata: %{email: "user@example.com", team_id: "T123", extra: "data"}
       }
+
       {:ok, updated} = OAuth.store_tokens(user_id, "slack:T123", update_data)
 
       assert updated.access_token == "new_token"
@@ -305,11 +323,13 @@ defmodule Maraithon.OAuthTest do
     test "returns error for linear provider (no refresh support)" do
       user_id = "user_#{System.unique_integer()}"
       expired_at = DateTime.add(DateTime.utc_now(), -3600, :second)
-      {:ok, _} = OAuth.store_tokens(user_id, "linear", %{
-        access_token: "expired_token",
-        refresh_token: "refresh_token",
-        expires_at: expired_at
-      })
+
+      {:ok, _} =
+        OAuth.store_tokens(user_id, "linear", %{
+          access_token: "expired_token",
+          refresh_token: "refresh_token",
+          expires_at: expired_at
+        })
 
       # Linear tokens don't have refresh support implemented
       assert {:error, {:unknown_provider, "linear"}} = OAuth.refresh_if_expired(user_id, "linear")
@@ -318,14 +338,17 @@ defmodule Maraithon.OAuthTest do
     test "returns error for whatsapp provider (no refresh support)" do
       user_id = "user_#{System.unique_integer()}"
       expired_at = DateTime.add(DateTime.utc_now(), -3600, :second)
-      {:ok, _} = OAuth.store_tokens(user_id, "whatsapp", %{
-        access_token: "expired_token",
-        refresh_token: "refresh_token",
-        expires_at: expired_at
-      })
+
+      {:ok, _} =
+        OAuth.store_tokens(user_id, "whatsapp", %{
+          access_token: "expired_token",
+          refresh_token: "refresh_token",
+          expires_at: expired_at
+        })
 
       # WhatsApp tokens don't have refresh support implemented
-      assert {:error, {:unknown_provider, "whatsapp"}} = OAuth.refresh_if_expired(user_id, "whatsapp")
+      assert {:error, {:unknown_provider, "whatsapp"}} =
+               OAuth.refresh_if_expired(user_id, "whatsapp")
     end
   end
 
@@ -367,23 +390,28 @@ defmodule Maraithon.OAuthTest do
 
       user_id = "user_#{System.unique_integer()}"
       expired_at = DateTime.add(DateTime.utc_now(), -3600, :second)
-      {:ok, _} = OAuth.store_tokens(user_id, "google", %{
-        access_token: "old_expired_token",
-        refresh_token: "valid_refresh_token",
-        expires_at: expired_at,
-        scopes: ["calendar.read"],
-        metadata: %{test: "data"}
-      })
+
+      {:ok, _} =
+        OAuth.store_tokens(user_id, "google", %{
+          access_token: "old_expired_token",
+          refresh_token: "valid_refresh_token",
+          expires_at: expired_at,
+          scopes: ["calendar.read"],
+          metadata: %{test: "data"}
+        })
 
       # Mock the token refresh endpoint
       Bypass.expect_once(bypass, "POST", "/token", fn conn ->
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.resp(200, Jason.encode!(%{
-          "access_token" => "new_refreshed_token",
-          "expires_in" => 3600,
-          "token_type" => "Bearer"
-        }))
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{
+            "access_token" => "new_refreshed_token",
+            "expires_in" => 3600,
+            "token_type" => "Bearer"
+          })
+        )
       end)
 
       {:ok, token} = OAuth.get_valid_access_token(user_id, "google")
@@ -408,20 +436,25 @@ defmodule Maraithon.OAuthTest do
 
       user_id = "user_#{System.unique_integer()}"
       expired_at = DateTime.add(DateTime.utc_now(), -3600, :second)
-      {:ok, _} = OAuth.store_tokens(user_id, "google", %{
-        access_token: "old_token",
-        refresh_token: "invalid_refresh",
-        expires_at: expired_at
-      })
+
+      {:ok, _} =
+        OAuth.store_tokens(user_id, "google", %{
+          access_token: "old_token",
+          refresh_token: "invalid_refresh",
+          expires_at: expired_at
+        })
 
       # Mock failed token refresh
       Bypass.expect_once(bypass, "POST", "/token", fn conn ->
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.resp(400, Jason.encode!(%{
-          "error" => "invalid_grant",
-          "error_description" => "Token has been revoked"
-        }))
+        |> Plug.Conn.resp(
+          400,
+          Jason.encode!(%{
+            "error" => "invalid_grant",
+            "error_description" => "Token has been revoked"
+          })
+        )
       end)
 
       result = OAuth.get_valid_access_token(user_id, "google")

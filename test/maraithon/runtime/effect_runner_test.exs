@@ -68,12 +68,13 @@ defmodule Maraithon.Runtime.EffectRunnerTest do
     # Create a test agent that effects will be associated with.
     # The agent doesn't need to be actually running - we just need a valid
     # agent_id for the foreign key constraint on the effects table.
-    {:ok, agent} = Agents.create_agent(%{
-      behavior: "watchdog_summarizer",
-      config: %{},
-      status: "running",
-      started_at: DateTime.utc_now()
-    })
+    {:ok, agent} =
+      Agents.create_agent(%{
+        behavior: "watchdog_summarizer",
+        config: %{},
+        status: "running",
+        started_at: DateTime.utc_now()
+      })
 
     %{agent: agent}
   end
@@ -261,6 +262,7 @@ defmodule Maraithon.Runtime.EffectRunnerTest do
       case Process.whereis(Maraithon.Runtime.EffectSupervisor) do
         nil ->
           Task.Supervisor.start_link(name: Maraithon.Runtime.EffectSupervisor)
+
         _ ->
           :ok
       end
@@ -272,6 +274,7 @@ defmodule Maraithon.Runtime.EffectRunnerTest do
       # The MockProvider returns realistic responses without network calls.
       # -----------------------------------------------------------------------
       original_config = Application.get_env(:maraithon, Maraithon.Runtime)
+
       Application.put_env(:maraithon, Maraithon.Runtime,
         llm_provider: Maraithon.LLM.MockProvider,
         anthropic_api_key: "test_key"
@@ -315,10 +318,11 @@ defmodule Maraithon.Runtime.EffectRunnerTest do
 
       # Create a pending LLM effect in the database
       # This simulates what an agent would do when it needs an LLM completion
-      {:ok, effect_id} = Maraithon.Effects.request(agent.id, "llm_call", nil, %{
-        "messages" => [%{"role" => "user", "content" => "Hello"}],
-        "max_tokens" => 100
-      })
+      {:ok, effect_id} =
+        Maraithon.Effects.request(agent.id, "llm_call", nil, %{
+          "messages" => [%{"role" => "user", "content" => "Hello"}],
+          "max_tokens" => 100
+        })
 
       # Start the EffectRunner
       {:ok, pid} = EffectRunner.start_link([])
@@ -360,9 +364,10 @@ defmodule Maraithon.Runtime.EffectRunnerTest do
       end
 
       # Create a tool call effect for the "time" tool
-      {:ok, effect_id} = Maraithon.Effects.request(agent.id, "tool_call", "time", %{
-        "args" => %{}
-      })
+      {:ok, effect_id} =
+        Maraithon.Effects.request(agent.id, "tool_call", "time", %{
+          "args" => %{}
+        })
 
       {:ok, pid} = EffectRunner.start_link([])
       Ecto.Adapters.SQL.Sandbox.allow(Maraithon.Repo, self(), pid)
@@ -487,6 +492,7 @@ defmodule Maraithon.Runtime.EffectRunnerTest do
       # Manually mark it as claimed with an OLD timestamp (simulates crash)
       # The effect appears to have been claimed 400 seconds ago
       old_time = DateTime.add(DateTime.utc_now(), -400_000, :millisecond)
+
       Maraithon.Repo.update_all(
         from(e in Maraithon.Effects.Effect, where: e.id == ^effect_id),
         set: [status: "claimed", claimed_at: old_time, claimed_by: "old_node"]
@@ -530,6 +536,7 @@ defmodule Maraithon.Runtime.EffectRunnerTest do
 
       # Set retry_after to 1 minute in the future
       future_time = DateTime.add(DateTime.utc_now(), 60_000, :millisecond)
+
       Maraithon.Repo.update_all(
         from(e in Maraithon.Effects.Effect, where: e.id == ^effect_id),
         set: [retry_after: future_time]
@@ -570,6 +577,7 @@ defmodule Maraithon.Runtime.EffectRunnerTest do
 
       # Set retry_after to 1 second in the past
       past_time = DateTime.add(DateTime.utc_now(), -1000, :millisecond)
+
       Maraithon.Repo.update_all(
         from(e in Maraithon.Effects.Effect, where: e.id == ^effect_id),
         set: [retry_after: past_time]
@@ -697,10 +705,11 @@ defmodule Maraithon.Runtime.EffectRunnerTest do
       end
 
       # Create a tool call effect with a non-existent tool
-      {:ok, effect_id} = Maraithon.Effects.request(agent.id, "tool_call", "nonexistent_tool", %{
-        "tool" => "nonexistent_tool",
-        "args" => %{}
-      })
+      {:ok, effect_id} =
+        Maraithon.Effects.request(agent.id, "tool_call", "nonexistent_tool", %{
+          "tool" => "nonexistent_tool",
+          "args" => %{}
+        })
 
       {:ok, pid} = EffectRunner.start_link([])
       Ecto.Adapters.SQL.Sandbox.allow(Maraithon.Repo, self(), pid)

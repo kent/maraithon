@@ -133,9 +133,20 @@ defmodule MaraithonWeb.WebhookControllerTest do
     # Enable unsigned webhooks for testing
     Application.put_env(:maraithon, :github, webhook_secret: "", allow_unsigned: true)
     Application.put_env(:maraithon, :slack, signing_secret: "", allow_unsigned: true)
-    Application.put_env(:maraithon, :whatsapp, app_secret: "", verify_token: "test_verify_token", allow_unsigned: true)
+
+    Application.put_env(:maraithon, :whatsapp,
+      app_secret: "",
+      verify_token: "test_verify_token",
+      allow_unsigned: true
+    )
+
     Application.put_env(:maraithon, :linear, webhook_secret: "", allow_unsigned: true)
-    Application.put_env(:maraithon, :telegram, bot_token: "123456:ABC-DEF", webhook_secret_path: "secret123", allow_unsigned: true)
+
+    Application.put_env(:maraithon, :telegram,
+      bot_token: "123456:ABC-DEF",
+      webhook_secret_path: "secret123",
+      allow_unsigned: true
+    )
 
     on_exit(fn ->
       Application.put_env(:maraithon, :github, webhook_secret: "", allow_unsigned: false)
@@ -215,7 +226,10 @@ defmodule MaraithonWeb.WebhookControllerTest do
     """
     test "rejects invalid signature when not allowing unsigned", %{conn: conn} do
       # Temporarily disable allow_unsigned
-      Application.put_env(:maraithon, :github, webhook_secret: "real_secret", allow_unsigned: false)
+      Application.put_env(:maraithon, :github,
+        webhook_secret: "real_secret",
+        allow_unsigned: false
+      )
 
       payload = %{"action" => "test"}
 
@@ -471,7 +485,11 @@ defmodule MaraithonWeb.WebhookControllerTest do
     """
     test "rejects invalid secret path", %{conn: conn} do
       # Temporarily disable allow_unsigned
-      Application.put_env(:maraithon, :telegram, bot_token: "123456:ABC-DEF", webhook_secret_path: "secret123", allow_unsigned: false)
+      Application.put_env(:maraithon, :telegram,
+        bot_token: "123456:ABC-DEF",
+        webhook_secret_path: "secret123",
+        allow_unsigned: false
+      )
 
       payload = %{
         "message" => %{
@@ -490,7 +508,11 @@ defmodule MaraithonWeb.WebhookControllerTest do
 
       assert json_response(conn, 401)["error"] == "Invalid request"
 
-      Application.put_env(:maraithon, :telegram, bot_token: "123456:ABC-DEF", webhook_secret_path: "secret123", allow_unsigned: true)
+      Application.put_env(:maraithon, :telegram,
+        bot_token: "123456:ABC-DEF",
+        webhook_secret_path: "secret123",
+        allow_unsigned: true
+      )
     end
   end
 
@@ -610,7 +632,10 @@ defmodule MaraithonWeb.WebhookControllerTest do
     Verifies signature rejection when security is enabled for Slack.
     """
     test "rejects invalid signature when not allowing unsigned", %{conn: conn} do
-      Application.put_env(:maraithon, :slack, signing_secret: "real_secret", allow_unsigned: false)
+      Application.put_env(:maraithon, :slack,
+        signing_secret: "real_secret",
+        allow_unsigned: false
+      )
 
       payload = %{"type" => "event_callback"}
 

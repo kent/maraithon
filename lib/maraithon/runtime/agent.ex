@@ -8,6 +8,7 @@ defmodule Maraithon.Runtime.Agent do
 
   alias Maraithon.Events
   alias Maraithon.Behaviors
+  alias Maraithon.Runtime.Dispatch
   alias Maraithon.Runtime.Scheduler
 
   require Logger
@@ -25,7 +26,8 @@ defmodule Maraithon.Runtime.Agent do
     :last_checkpoint_at,
     :started_at,
     :subscriptions,
-    :current_event
+    :current_event,
+    :deferred_messages
   ]
 
   # ==========================================================================
@@ -53,20 +55,27 @@ defmodule Maraithon.Runtime.Agent do
 
   @impl true
   def init(agent) do
-    Logger.metadata(agent_id: agent.id)
-    Logger.info("Agent initializing", behavior: agent.behavior)
+    case register_global_name(agent.id) do
+      :ok ->
+        Logger.metadata(agent_id: agent.id)
+        Logger.info("Agent initializing", behavior: agent.behavior)
 
-    data = %__MODULE__{
-      agent_id: agent.id,
-      config: agent.config,
-      sequence_num: 0,
-      pending_effects: %{},
-      handled_jobs: MapSet.new(),
-      started_at: DateTime.utc_now()
-    }
+        data = %__MODULE__{
+          agent_id: agent.id,
+          config: agent.config,
+          sequence_num: 0,
+          pending_effects: %{},
+          handled_jobs: MapSet.new(),
+          started_at: DateTime.utc_now(),
+          deferred_messages: []
+        }
 
-    # Start in recovering state to load any existing state
-    {:ok, :recovering, data, [{:next_event, :internal, {:init, agent}}]}
+        # Start in recovering state to load any existing state
+        {:ok, :recovering, data, [{:next_event, :internal, {:init, agent}}]}
+
+      {:error, reason} ->
+        {:stop, reason}
+    end
   end
 
   # ==========================================================================
@@ -90,6 +99,9 @@ defmodule Maraithon.Runtime.Agent do
 
     # Initialize behavior state
     behavior_state = behavior_module.init(agent.config)
+
+    # Subscribe to internal runtime dispatch topic (cluster-safe routing)
+    :ok = Dispatch.subscribe(agent.id)
 
     # Subscribe to PubSub topics from config
     subscriptions = agent.config["subscribe"] || []
@@ -123,8 +135,21 @@ defmodule Maraithon.Runtime.Agent do
     # Schedule first wakeup based on behavior
     schedule_next_wakeup(data)
 
+    # Drain any messages that arrived during recovery.
+    Enum.each(Enum.reverse(data.deferred_messages), &send(self(), &1))
+
+    data = %{data | deferred_messages: []}
+
     Logger.info("Agent recovered, transitioning to idle")
     {:next_state, :idle, data}
+  end
+
+  def recovering(:info, {:agent_dispatch, msg}, data) do
+    {:keep_state, %{data | deferred_messages: [msg | data.deferred_messages]}}
+  end
+
+  def recovering(:info, msg, data) do
+    {:keep_state, %{data | deferred_messages: [msg | data.deferred_messages]}}
   end
 
   # ==========================================================================
@@ -136,7 +161,13 @@ defmodule Maraithon.Runtime.Agent do
     {:keep_state, data}
   end
 
+  def idle(:info, {:agent_dispatch, msg}, data) do
+    idle(:info, msg, data)
+  end
+
   def idle(:info, {:wakeup, job_type, job_id, _payload}, data) do
+    acknowledge_wakeup(job_id)
+
     if MapSet.member?(data.handled_jobs, job_id) do
       # Duplicate, ignore
       {:keep_state, data}
@@ -165,6 +196,10 @@ defmodule Maraithon.Runtime.Agent do
           end
       end
     end
+  end
+
+  def idle(:info, {:control, :stop, reason}, data) do
+    stop_agent(reason, data)
   end
 
   def idle(:info, {:message, message, metadata, message_id}, data) do
@@ -221,6 +256,10 @@ defmodule Maraithon.Runtime.Agent do
     {:keep_state, data}
   end
 
+  def working(:info, {:agent_dispatch, msg}, data) do
+    working(:info, msg, data)
+  end
+
   def working(:internal, :execute_behavior, data) do
     context = build_context(data)
 
@@ -252,6 +291,10 @@ defmodule Maraithon.Runtime.Agent do
     {:keep_state, data}
   end
 
+  def working(:info, {:control, :stop, reason}, data) do
+    stop_agent(reason, data)
+  end
+
   def working(:info, msg, data) do
     Logger.debug("Working received message: #{inspect(msg)}")
     {:keep_state, data}
@@ -264,6 +307,10 @@ defmodule Maraithon.Runtime.Agent do
   def waiting_effect(:enter, _old_state, data) do
     Logger.debug("Entering waiting_effect state")
     {:keep_state, data, [{:state_timeout, 120_000, :effect_timeout}]}
+  end
+
+  def waiting_effect(:info, {:agent_dispatch, msg}, data) do
+    waiting_effect(:info, msg, data)
   end
 
   def waiting_effect(:info, {:effect_result, effect_id, result}, data) do
@@ -330,6 +377,15 @@ defmodule Maraithon.Runtime.Agent do
 
   def waiting_effect(:info, {:wakeup, _, _, _} = msg, data) do
     send(self(), msg)
+    {:keep_state, data}
+  end
+
+  def waiting_effect(:info, {:control, :stop, reason}, data) do
+    stop_agent(reason, data)
+  end
+
+  def waiting_effect(:info, msg, data) do
+    Logger.debug("Waiting effect received message: #{inspect(msg)}")
     {:keep_state, data}
   end
 
@@ -459,7 +515,31 @@ defmodule Maraithon.Runtime.Agent do
   end
 
   defp get_config(key, default) do
-    Application.get_env(:maraithon, Maraithon.Runtime, [])
-    |> Keyword.get(key, default)
+    Maraithon.Runtime.Config.get(key, default)
+  end
+
+  defp acknowledge_wakeup(job_id) do
+    case Scheduler.ack_delivered(job_id) do
+      {:ok, _status} -> :ok
+      {:error, :not_found} -> :ok
+      {:error, :invalid_state} -> :ok
+    end
+  end
+
+  defp stop_agent(reason, data) do
+    data = emit_event(data, "agent_stopped", %{reason: reason})
+    {:stop, :normal, data}
+  end
+
+  defp register_global_name(agent_id) do
+    name = {:maraithon_agent, agent_id}
+
+    case :global.register_name(name, self()) do
+      :yes ->
+        :ok
+
+      :no ->
+        {:error, {:already_started, :global.whereis_name(name)}}
+    end
   end
 end

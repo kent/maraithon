@@ -7,6 +7,7 @@ defmodule Maraithon.Runtime do
   alias Maraithon.Agents
   alias Maraithon.Runtime.AgentSupervisor
   alias Maraithon.Runtime.AgentRegistry
+  alias Maraithon.Runtime.Dispatch
   alias Maraithon.Events
 
   require Logger
@@ -50,7 +51,8 @@ defmodule Maraithon.Runtime do
         {:error, :not_found}
 
       agent ->
-        # Stop the process if running
+        # Ask agent to stop across the cluster, then stop local process if present.
+        Dispatch.dispatch(id, {:control, :stop, reason})
         stop_agent_process(id)
 
         # Update database
@@ -79,17 +81,17 @@ defmodule Maraithon.Runtime do
   Send a message to an agent.
   """
   def send_message(id, message, metadata \\ %{}) do
-    case lookup_agent_process(id) do
-      {:ok, pid} ->
+    case Agents.get_agent(id) do
+      nil ->
+        {:error, :not_found}
+
+      %{status: status} when status in ["running", "degraded"] ->
         message_id = Ecto.UUID.generate()
-        send(pid, {:message, message, metadata, message_id})
+        :ok = Dispatch.dispatch(id, {:message, message, metadata, message_id})
         {:ok, %{message_id: message_id}}
 
-      :not_running ->
-        case Agents.get_agent(id) do
-          nil -> {:error, :not_found}
-          _agent -> {:error, :agent_stopped}
-        end
+      _agent ->
+        {:error, :agent_stopped}
     end
   end
 
@@ -147,7 +149,14 @@ defmodule Maraithon.Runtime do
   defp lookup_agent_process(id) do
     case Registry.lookup(AgentRegistry, id) do
       [{pid, _}] -> {:ok, pid}
-      [] -> :not_running
+      [] -> lookup_global_agent_process(id)
+    end
+  end
+
+  defp lookup_global_agent_process(id) do
+    case :global.whereis_name({:maraithon_agent, id}) do
+      pid when is_pid(pid) -> {:ok, pid}
+      :undefined -> :not_running
     end
   end
 

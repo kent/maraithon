@@ -19,20 +19,22 @@ defmodule Maraithon.HealthTest do
 
     test "returns agent counts" do
       # Create some agents
-      {:ok, _running} = Agents.create_agent(%{
-        behavior: "watchdog_summarizer",
-        config: %{},
-        status: "running",
-        started_at: DateTime.utc_now()
-      })
+      {:ok, _running} =
+        Agents.create_agent(%{
+          behavior: "watchdog_summarizer",
+          config: %{},
+          status: "running",
+          started_at: DateTime.utc_now()
+        })
 
-      {:ok, _stopped} = Agents.create_agent(%{
-        behavior: "prompt_agent",
-        config: %{},
-        status: "stopped",
-        started_at: DateTime.utc_now(),
-        stopped_at: DateTime.utc_now()
-      })
+      {:ok, _stopped} =
+        Agents.create_agent(%{
+          behavior: "prompt_agent",
+          config: %{},
+          status: "stopped",
+          started_at: DateTime.utc_now(),
+          stopped_at: DateTime.utc_now()
+        })
 
       result = Health.check()
 

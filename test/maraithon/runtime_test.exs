@@ -154,12 +154,13 @@ defmodule Maraithon.RuntimeTest do
     The status struct should include id, status, and behavior.
     """
     test "returns status for existing agent" do
-      {:ok, agent} = Agents.create_agent(%{
-        behavior: "watchdog_summarizer",
-        config: %{},
-        status: "running",
-        started_at: DateTime.utc_now()
-      })
+      {:ok, agent} =
+        Agents.create_agent(%{
+          behavior: "watchdog_summarizer",
+          config: %{},
+          status: "running",
+          started_at: DateTime.utc_now()
+        })
 
       {:ok, status} = Runtime.get_agent_status(agent.id)
 
@@ -189,12 +190,13 @@ defmodule Maraithon.RuntimeTest do
     New agents haven't done anything yet, so they have no events.
     """
     test "returns events for existing agent" do
-      {:ok, agent} = Agents.create_agent(%{
-        behavior: "watchdog_summarizer",
-        config: %{},
-        status: "running",
-        started_at: DateTime.utc_now()
-      })
+      {:ok, agent} =
+        Agents.create_agent(%{
+          behavior: "watchdog_summarizer",
+          config: %{},
+          status: "running",
+          started_at: DateTime.utc_now()
+        })
 
       {:ok, events} = Runtime.get_events(agent.id)
 
@@ -223,13 +225,14 @@ defmodule Maraithon.RuntimeTest do
     Users can't send messages to agents that aren't running.
     """
     test "returns agent_stopped for stopped agent" do
-      {:ok, agent} = Agents.create_agent(%{
-        behavior: "watchdog_summarizer",
-        config: %{},
-        status: "stopped",
-        started_at: DateTime.utc_now(),
-        stopped_at: DateTime.utc_now()
-      })
+      {:ok, agent} =
+        Agents.create_agent(%{
+          behavior: "watchdog_summarizer",
+          config: %{},
+          status: "stopped",
+          started_at: DateTime.utc_now(),
+          stopped_at: DateTime.utc_now()
+        })
 
       assert {:error, :agent_stopped} = Runtime.send_message(agent.id, "hello")
     end
@@ -255,12 +258,13 @@ defmodule Maraithon.RuntimeTest do
     The agent should be marked as "stopped" with a stopped_at timestamp.
     """
     test "stops existing agent and updates database" do
-      {:ok, agent} = Agents.create_agent(%{
-        behavior: "watchdog_summarizer",
-        config: %{},
-        status: "running",
-        started_at: DateTime.utc_now()
-      })
+      {:ok, agent} =
+        Agents.create_agent(%{
+          behavior: "watchdog_summarizer",
+          config: %{},
+          status: "running",
+          started_at: DateTime.utc_now()
+        })
 
       {:ok, result} = Runtime.stop_agent(agent.id)
 
@@ -277,12 +281,13 @@ defmodule Maraithon.RuntimeTest do
     Stop reasons are useful for debugging and audit trails.
     """
     test "accepts custom reason" do
-      {:ok, agent} = Agents.create_agent(%{
-        behavior: "watchdog_summarizer",
-        config: %{},
-        status: "running",
-        started_at: DateTime.utc_now()
-      })
+      {:ok, agent} =
+        Agents.create_agent(%{
+          behavior: "watchdog_summarizer",
+          config: %{},
+          status: "running",
+          started_at: DateTime.utc_now()
+        })
 
       {:ok, _result} = Runtime.stop_agent(agent.id, "test_reason")
 
@@ -346,13 +351,14 @@ defmodule Maraithon.RuntimeTest do
     """
     test "returns ok even with stopped agents" do
       # Create a stopped agent (won't be resumed)
-      {:ok, agent} = Agents.create_agent(%{
-        behavior: "watchdog_summarizer",
-        config: %{},
-        status: "stopped",
-        started_at: DateTime.utc_now(),
-        stopped_at: DateTime.utc_now()
-      })
+      {:ok, agent} =
+        Agents.create_agent(%{
+          behavior: "watchdog_summarizer",
+          config: %{},
+          status: "stopped",
+          started_at: DateTime.utc_now(),
+          stopped_at: DateTime.utc_now()
+        })
 
       # Should succeed without trying to start stopped agents
       assert :ok = Runtime.resume_all_agents()

@@ -68,7 +68,7 @@ defmodule Maraithon.Runtime.ScheduledJobTest do
     end
 
     test "validates status values" do
-      valid_statuses = ["pending", "delivered", "cancelled"]
+      valid_statuses = ["pending", "dispatched", "delivered", "cancelled"]
 
       for status <- valid_statuses do
         attrs = %{

@@ -36,7 +36,8 @@ defmodule Maraithon.Behaviors.WatchdogSummarizerTest do
       state = WatchdogSummarizer.init(%{})
       state = %{state | iteration: 0}
 
-      {:emit, {:note_appended, note}, new_state} = WatchdogSummarizer.handle_wakeup(state, @context)
+      {:emit, {:note_appended, note}, new_state} =
+        WatchdogSummarizer.handle_wakeup(state, @context)
 
       assert new_state.iteration == 1
       assert note =~ "Iteration 1"
@@ -46,7 +47,8 @@ defmodule Maraithon.Behaviors.WatchdogSummarizerTest do
       state = WatchdogSummarizer.init(%{})
       state = %{state | iteration: 1}
 
-      {:effect, {:llm_call, params}, new_state} = WatchdogSummarizer.handle_wakeup(state, @context)
+      {:effect, {:llm_call, params}, new_state} =
+        WatchdogSummarizer.handle_wakeup(state, @context)
 
       assert new_state.iteration == 2
       assert is_map(params)

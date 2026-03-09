@@ -9,14 +9,16 @@ defmodule Maraithon.Runtime.EffectRunner do
   alias Maraithon.Repo
   alias Maraithon.Effects.Effect
   alias Maraithon.LLM
+  alias Maraithon.Runtime.Config, as: RuntimeConfig
+  alias Maraithon.Runtime.Dispatch
   alias Maraithon.Tools
 
   require Logger
 
-  @poll_interval_ms 1_000
+  @default_poll_interval_ms 1_000
   # 5 minutes
-  @claim_timeout_ms 300_000
-  @batch_size 10
+  @default_claim_timeout_ms 300_000
+  @default_batch_size 10
 
   def start_link(opts) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
@@ -24,17 +26,32 @@ defmodule Maraithon.Runtime.EffectRunner do
 
   @impl true
   def init(_opts) do
-    schedule_poll()
-    {:ok, %{running: %{}}}
+    poll_interval_ms =
+      RuntimeConfig.positive_integer(:effect_poll_interval_ms, @default_poll_interval_ms)
+
+    claim_timeout_ms =
+      RuntimeConfig.positive_integer(:effect_claim_timeout_ms, @default_claim_timeout_ms)
+
+    batch_size = RuntimeConfig.positive_integer(:effect_batch_size, @default_batch_size)
+
+    schedule_poll(poll_interval_ms)
+
+    {:ok,
+     %{
+       running: %{},
+       poll_interval_ms: poll_interval_ms,
+       claim_timeout_ms: claim_timeout_ms,
+       batch_size: batch_size
+     }}
   end
 
   @impl true
   def handle_info(:poll, state) do
     # Reclaim stale effects
-    reclaim_stale_effects()
+    reclaim_stale_effects(state.claim_timeout_ms)
 
     # Fetch pending effects
-    effects = fetch_pending_effects(@batch_size)
+    effects = fetch_pending_effects(state.batch_size)
 
     # Claim and execute each
     running =
@@ -49,7 +66,7 @@ defmodule Maraithon.Runtime.EffectRunner do
         end
       end)
 
-    schedule_poll()
+    schedule_poll(state.poll_interval_ms)
     {:noreply, %{state | running: running}}
   end
 
@@ -186,6 +203,8 @@ defmodule Maraithon.Runtime.EffectRunner do
       set: [
         status: "completed",
         result: result,
+        claimed_by: nil,
+        claimed_at: nil,
         updated_at: DateTime.utc_now()
       ]
     )
@@ -215,23 +234,19 @@ defmodule Maraithon.Runtime.EffectRunner do
       set: [
         status: "failed",
         error: inspect(reason),
+        claimed_by: nil,
+        claimed_at: nil,
         updated_at: DateTime.utc_now()
       ]
     )
   end
 
   defp notify_agent(agent_id, effect_id, result) do
-    case Registry.lookup(Maraithon.Runtime.AgentRegistry, agent_id) do
-      [{pid, _}] ->
-        send(pid, {:effect_result, effect_id, result})
-
-      [] ->
-        Logger.warning("Agent #{agent_id} not running, cannot deliver effect result")
-    end
+    :ok = Dispatch.dispatch(agent_id, {:effect_result, effect_id, result})
   end
 
-  defp reclaim_stale_effects do
-    cutoff = DateTime.add(DateTime.utc_now(), -@claim_timeout_ms, :millisecond)
+  defp reclaim_stale_effects(claim_timeout_ms) do
+    cutoff = DateTime.add(DateTime.utc_now(), -claim_timeout_ms, :millisecond)
 
     {count, _} =
       Repo.update_all(
@@ -255,7 +270,7 @@ defmodule Maraithon.Runtime.EffectRunner do
     round(min(delay + jitter, max))
   end
 
-  defp schedule_poll do
-    Process.send_after(self(), :poll, @poll_interval_ms)
+  defp schedule_poll(interval_ms) do
+    Process.send_after(self(), :poll, interval_ms)
   end
 end

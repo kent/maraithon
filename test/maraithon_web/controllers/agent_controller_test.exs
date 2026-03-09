@@ -307,12 +307,13 @@ defmodule MaraithonWeb.AgentControllerTest do
     The response should include id, status, and behavior.
     """
     test "returns agent status", %{conn: conn} do
-      {:ok, agent} = Agents.create_agent(%{
-        behavior: "watchdog_summarizer",
-        config: %{},
-        status: "running",
-        started_at: DateTime.utc_now()
-      })
+      {:ok, agent} =
+        Agents.create_agent(%{
+          behavior: "watchdog_summarizer",
+          config: %{},
+          status: "running",
+          started_at: DateTime.utc_now()
+        })
 
       conn = get(conn, "/api/v1/agents/#{agent.id}")
 
@@ -336,10 +337,11 @@ defmodule MaraithonWeb.AgentControllerTest do
     The agent should be immediately started after creation.
     """
     test "creates an agent", %{conn: conn} do
-      conn = post(conn, "/api/v1/agents", %{
-        "behavior" => "watchdog_summarizer",
-        "config" => %{"key" => "value"}
-      })
+      conn =
+        post(conn, "/api/v1/agents", %{
+          "behavior" => "watchdog_summarizer",
+          "config" => %{"key" => "value"}
+        })
 
       response = json_response(conn, 201)
       assert response["behavior"] == "watchdog_summarizer"
@@ -365,13 +367,14 @@ defmodule MaraithonWeb.AgentControllerTest do
     Users can't send messages to agents that aren't running.
     """
     test "returns agent_stopped for stopped agent", %{conn: conn} do
-      {:ok, agent} = Agents.create_agent(%{
-        behavior: "prompt_agent",
-        config: %{},
-        status: "stopped",
-        started_at: DateTime.utc_now(),
-        stopped_at: DateTime.utc_now()
-      })
+      {:ok, agent} =
+        Agents.create_agent(%{
+          behavior: "prompt_agent",
+          config: %{},
+          status: "stopped",
+          started_at: DateTime.utc_now(),
+          stopped_at: DateTime.utc_now()
+        })
 
       conn = post(conn, "/api/v1/agents/#{agent.id}/ask", %{message: "hello"})
 
@@ -393,12 +396,13 @@ defmodule MaraithonWeb.AgentControllerTest do
     The agent status should be "stopped" in the response.
     """
     test "stops an existing agent", %{conn: conn} do
-      {:ok, agent} = Agents.create_agent(%{
-        behavior: "watchdog_summarizer",
-        config: %{},
-        status: "running",
-        started_at: DateTime.utc_now()
-      })
+      {:ok, agent} =
+        Agents.create_agent(%{
+          behavior: "watchdog_summarizer",
+          config: %{},
+          status: "running",
+          started_at: DateTime.utc_now()
+        })
 
       conn = post(conn, "/api/v1/agents/#{agent.id}/stop", %{reason: "test_reason"})
 
@@ -420,12 +424,13 @@ defmodule MaraithonWeb.AgentControllerTest do
     Verifies that getting events returns event list and pagination info.
     """
     test "returns events for agent", %{conn: conn} do
-      {:ok, agent} = Agents.create_agent(%{
-        behavior: "watchdog_summarizer",
-        config: %{},
-        status: "running",
-        started_at: DateTime.utc_now()
-      })
+      {:ok, agent} =
+        Agents.create_agent(%{
+          behavior: "watchdog_summarizer",
+          config: %{},
+          status: "running",
+          started_at: DateTime.utc_now()
+        })
 
       conn = get(conn, "/api/v1/agents/#{agent.id}/events")
 
@@ -438,12 +443,13 @@ defmodule MaraithonWeb.AgentControllerTest do
     Verifies that the limit parameter controls max events returned.
     """
     test "accepts limit parameter", %{conn: conn} do
-      {:ok, agent} = Agents.create_agent(%{
-        behavior: "watchdog_summarizer",
-        config: %{},
-        status: "running",
-        started_at: DateTime.utc_now()
-      })
+      {:ok, agent} =
+        Agents.create_agent(%{
+          behavior: "watchdog_summarizer",
+          config: %{},
+          status: "running",
+          started_at: DateTime.utc_now()
+        })
 
       conn = get(conn, "/api/v1/agents/#{agent.id}/events?limit=10")
 
@@ -456,12 +462,13 @@ defmodule MaraithonWeb.AgentControllerTest do
     Multiple types can be specified as comma-separated values.
     """
     test "accepts types parameter as comma-separated string", %{conn: conn} do
-      {:ok, agent} = Agents.create_agent(%{
-        behavior: "watchdog_summarizer",
-        config: %{},
-        status: "running",
-        started_at: DateTime.utc_now()
-      })
+      {:ok, agent} =
+        Agents.create_agent(%{
+          behavior: "watchdog_summarizer",
+          config: %{},
+          status: "running",
+          started_at: DateTime.utc_now()
+        })
 
       conn = get(conn, "/api/v1/agents/#{agent.id}/events?types=message,tool_call")
 

@@ -89,7 +89,14 @@ defmodule Maraithon.Behaviors.PromptAgentTest do
 
     test "does proactive action when has memory" do
       state = PromptAgent.init(%{"name" => "test"})
-      memory_event = %{type: :message, content: "hello", timestamp: DateTime.utc_now(), source: "direct"}
+
+      memory_event = %{
+        type: :message,
+        content: "hello",
+        timestamp: DateTime.utc_now(),
+        source: "direct"
+      }
+
       state = %{state | memory: [memory_event]}
 
       {:effect, {:llm_call, params}, _state} = PromptAgent.handle_wakeup(state, @context)
@@ -171,7 +178,10 @@ defmodule Maraithon.Behaviors.PromptAgentTest do
     test "parses ACTION embedded in response" do
       state = PromptAgent.init(%{"name" => "test", "tools" => ["search_files"]})
       state = %{state | processing_event: %{type: :message}}
-      response = %{content: "Let me check that.\nACTION: search_files\nARGS: {\"pattern\": \"TODO\"}"}
+
+      response = %{
+        content: "Let me check that.\nACTION: search_files\nARGS: {\"pattern\": \"TODO\"}"
+      }
 
       {:effect, {:tool_call, tool, _args}, _state} =
         PromptAgent.handle_effect_result({:llm_call, response}, state, @context)
@@ -183,7 +193,12 @@ defmodule Maraithon.Behaviors.PromptAgentTest do
   describe "handle_effect_result/3 for tool results" do
     test "handles successful tool result" do
       state = PromptAgent.init(%{"name" => "test"})
-      state = %{state | pending_tool_call: %{tool: "read_file", args: %{"path" => "/tmp/test.txt"}}}
+
+      state = %{
+        state
+        | pending_tool_call: %{tool: "read_file", args: %{"path" => "/tmp/test.txt"}}
+      }
+
       result = {:ok, "file contents here"}
 
       {:effect, {:llm_call, params}, new_state} =

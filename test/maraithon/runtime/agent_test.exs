@@ -138,7 +138,9 @@ defmodule Maraithon.Runtime.AgentTest do
 
     on_exit(fn ->
       case Process.whereis(Maraithon.Runtime.Scheduler) do
-        nil -> :ok
+        nil ->
+          :ok
+
         pid ->
           if Process.alive?(pid) do
             GenServer.stop(pid, :normal)
@@ -422,7 +424,10 @@ defmodule Maraithon.Runtime.AgentTest do
     This ensures agents only process relevant events and don't waste
     resources on unrelated PubSub traffic.
     """
-    test "ignores pubsub event when not subscribed", %{agent: agent, scheduler_pid: _scheduler_pid} do
+    test "ignores pubsub event when not subscribed", %{
+      agent: agent,
+      scheduler_pid: _scheduler_pid
+    } do
       {:ok, pid} = RuntimeAgent.start_link(agent)
       Ecto.Adapters.SQL.Sandbox.allow(Maraithon.Repo, self(), pid)
 
@@ -453,7 +458,10 @@ defmodule Maraithon.Runtime.AgentTest do
     This can happen if an effect times out and then completes later.
     The agent should handle this gracefully without crashing.
     """
-    test "handles effect_result for unknown effect", %{agent: agent, scheduler_pid: _scheduler_pid} do
+    test "handles effect_result for unknown effect", %{
+      agent: agent,
+      scheduler_pid: _scheduler_pid
+    } do
       {:ok, pid} = RuntimeAgent.start_link(agent)
       Ecto.Adapters.SQL.Sandbox.allow(Maraithon.Repo, self(), pid)
 
@@ -655,7 +663,10 @@ defmodule Maraithon.Runtime.AgentTest do
     The agent transitions to waiting_effect when it dispatches an async
     operation and needs to wait for the result.
     """
-    test "queues wakeup when in waiting_effect state", %{agent: agent, scheduler_pid: _scheduler_pid} do
+    test "queues wakeup when in waiting_effect state", %{
+      agent: agent,
+      scheduler_pid: _scheduler_pid
+    } do
       {:ok, pid} = RuntimeAgent.start_link(agent)
       Ecto.Adapters.SQL.Sandbox.allow(Maraithon.Repo, self(), pid)
 

@@ -77,10 +77,11 @@ defmodule Maraithon.HTTPTest do
         |> Plug.Conn.resp(200, ~s({"authenticated": true}))
       end)
 
-      {:ok, response} = HTTP.get(
-        "http://localhost:#{bypass.port}/headers",
-        [{"Authorization", "Bearer token123"}]
-      )
+      {:ok, response} =
+        HTTP.get(
+          "http://localhost:#{bypass.port}/headers",
+          [{"Authorization", "Bearer token123"}]
+        )
 
       assert response["authenticated"] == true
     end
@@ -102,10 +103,11 @@ defmodule Maraithon.HTTPTest do
         |> Plug.Conn.resp(200, ~s({"created": true}))
       end)
 
-      {:ok, response} = HTTP.post_json(
-        "http://localhost:#{bypass.port}/api",
-        %{name: "test", value: 123}
-      )
+      {:ok, response} =
+        HTTP.post_json(
+          "http://localhost:#{bypass.port}/api",
+          %{name: "test", value: 123}
+        )
 
       assert response["created"] == true
     end
@@ -127,10 +129,11 @@ defmodule Maraithon.HTTPTest do
         |> Plug.Conn.resp(200, ~s({"logged_in": true}))
       end)
 
-      {:ok, response} = HTTP.post_form(
-        "http://localhost:#{bypass.port}/form",
-        %{username: "test", password: "secret"}
-      )
+      {:ok, response} =
+        HTTP.post_form(
+          "http://localhost:#{bypass.port}/form",
+          %{username: "test", password: "secret"}
+        )
 
       assert response["logged_in"] == true
     end
@@ -149,10 +152,11 @@ defmodule Maraithon.HTTPTest do
         |> Plug.Conn.resp(200, ~s({"updated": true}))
       end)
 
-      {:ok, response} = HTTP.put_json(
-        "http://localhost:#{bypass.port}/resource/1",
-        %{name: "updated"}
-      )
+      {:ok, response} =
+        HTTP.put_json(
+          "http://localhost:#{bypass.port}/resource/1",
+          %{name: "updated"}
+        )
 
       assert response["updated"] == true
     end
@@ -171,10 +175,11 @@ defmodule Maraithon.HTTPTest do
         |> Plug.Conn.resp(200, ~s({"patched": true}))
       end)
 
-      {:ok, response} = HTTP.patch_json(
-        "http://localhost:#{bypass.port}/resource/1",
-        %{status: "active"}
-      )
+      {:ok, response} =
+        HTTP.patch_json(
+          "http://localhost:#{bypass.port}/resource/1",
+          %{status: "active"}
+        )
 
       assert response["patched"] == true
     end
@@ -205,10 +210,11 @@ defmodule Maraithon.HTTPTest do
         Plug.Conn.resp(conn, 204, "")
       end)
 
-      {:ok, ""} = HTTP.delete(
-        "http://localhost:#{bypass.port}/resource/1",
-        [{"Authorization", "Bearer admin"}]
-      )
+      {:ok, ""} =
+        HTTP.delete(
+          "http://localhost:#{bypass.port}/resource/1",
+          [{"Authorization", "Bearer admin"}]
+        )
     end
   end
 

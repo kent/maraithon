@@ -33,7 +33,9 @@ defmodule Maraithon.Tools.ReadFileTest do
     test "returns error for non-existent file" do
       {:error, message} = ReadFile.execute(%{"path" => "/nonexistent/file.txt"})
 
-      assert String.contains?(message, "not found") or String.contains?(message, "not accessible")
+      assert String.contains?(message, "not found") or
+               String.contains?(message, "not accessible") or
+               String.contains?(message, "outside allowed roots")
     end
 
     test "returns error for file too large" do

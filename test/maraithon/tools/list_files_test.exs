@@ -49,12 +49,9 @@ defmodule Maraithon.Tools.ListFilesTest do
       assert result.base_path == "."
     end
 
-    test "returns empty for non-existent path" do
-      {:ok, result} = ListFiles.execute(%{"path" => "/nonexistent/deeply/nested"})
-
-      # Path.wildcard returns empty for non-existent paths
-      assert result.count == 0
-      assert result.files == []
+    test "returns error for path outside allowed roots" do
+      {:error, message} = ListFiles.execute(%{"path" => "/nonexistent/deeply/nested"})
+      assert message == "path is outside allowed roots"
     end
   end
 end

@@ -7,11 +7,14 @@ defmodule Maraithon.Runtime.Scheduler do
 
   import Ecto.Query
   alias Maraithon.Repo
+  alias Maraithon.Runtime.Config, as: RuntimeConfig
+  alias Maraithon.Runtime.Dispatch
   alias Maraithon.Runtime.ScheduledJob
 
   require Logger
 
-  @poll_interval_ms 5_000
+  @default_poll_interval_ms 5_000
+  @default_dispatch_timeout_ms 60_000
 
   def start_link(opts) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
@@ -55,23 +58,70 @@ defmodule Maraithon.Runtime.Scheduler do
     from(j in ScheduledJob,
       where: j.agent_id == ^agent_id,
       where: j.job_type == ^job_type,
-      where: j.status == "pending"
+      where: j.status in ["pending", "dispatched"]
     )
-    |> Repo.update_all(set: [status: "cancelled"])
+    |> Repo.update_all(
+      set: [status: "cancelled", claimed_by: nil, claimed_at: nil, dispatched_at: nil]
+    )
+  end
+
+  @doc """
+  Mark a dispatched job as delivered after an agent acknowledges receipt.
+  """
+  def ack_delivered(job_id) do
+    now = DateTime.utc_now()
+
+    case Repo.update_all(
+           from(j in ScheduledJob,
+             where: j.id == ^job_id,
+             where: j.status in ["pending", "dispatched"]
+           ),
+           set: [
+             status: "delivered",
+             delivered_at: now,
+             claimed_by: nil,
+             claimed_at: nil,
+             dispatched_at: nil
+           ]
+         ) do
+      {1, _} ->
+        {:ok, :delivered}
+
+      {0, _} ->
+        case Repo.get(ScheduledJob, job_id) do
+          nil -> {:error, :not_found}
+          %ScheduledJob{status: "delivered"} -> {:ok, :already_delivered}
+          _ -> {:error, :invalid_state}
+        end
+    end
   end
 
   # GenServer callbacks
 
   @impl true
   def init(_opts) do
+    poll_interval_ms =
+      RuntimeConfig.positive_integer(:scheduler_poll_interval_ms, @default_poll_interval_ms)
+
+    dispatch_timeout_ms =
+      RuntimeConfig.positive_integer(:scheduler_dispatch_timeout_ms, @default_dispatch_timeout_ms)
+
     # Recover overdue jobs on startup
     send(self(), :recover_overdue)
-    schedule_poll()
-    {:ok, %{in_flight: MapSet.new()}}
+    schedule_poll(poll_interval_ms)
+
+    {:ok,
+     %{
+       in_flight: MapSet.new(),
+       poll_interval_ms: poll_interval_ms,
+       dispatch_timeout_ms: dispatch_timeout_ms
+     }}
   end
 
   @impl true
   def handle_info(:recover_overdue, state) do
+    reclaim_stale_dispatched_jobs(state.dispatch_timeout_ms)
+
     overdue_jobs = fetch_overdue_jobs()
     Logger.info("Recovering #{length(overdue_jobs)} overdue jobs")
     Enum.each(overdue_jobs, &deliver_job/1)
@@ -80,6 +130,8 @@ defmodule Maraithon.Runtime.Scheduler do
 
   @impl true
   def handle_info(:poll, state) do
+    reclaim_stale_dispatched_jobs(state.dispatch_timeout_ms)
+
     now = DateTime.utc_now()
     horizon = DateTime.add(now, 10_000, :millisecond)
 
@@ -104,7 +156,7 @@ defmodule Maraithon.Runtime.Scheduler do
         end
       end)
 
-    schedule_poll()
+    schedule_poll(state.poll_interval_ms)
     {:noreply, %{state | in_flight: in_flight}}
   end
 
@@ -129,13 +181,19 @@ defmodule Maraithon.Runtime.Scheduler do
   # Private functions
 
   defp deliver_job(job) do
-    # Atomically mark as delivered
+    # Atomically claim for dispatch. Delivery is acknowledged by the agent.
     case Repo.update_all(
            from(j in ScheduledJob,
              where: j.id == ^job.id,
              where: j.status == "pending"
            ),
-           set: [status: "delivered", delivered_at: DateTime.utc_now()]
+           set: [
+             status: "dispatched",
+             claimed_by: to_string(node()),
+             claimed_at: DateTime.utc_now(),
+             dispatched_at: DateTime.utc_now()
+           ],
+           inc: [attempts: 1]
          ) do
       {1, _} ->
         send_to_agent(job.agent_id, {:wakeup, job.job_type, job.id, job.payload})
@@ -146,13 +204,7 @@ defmodule Maraithon.Runtime.Scheduler do
   end
 
   defp send_to_agent(agent_id, message) do
-    case Registry.lookup(Maraithon.Runtime.AgentRegistry, agent_id) do
-      [{pid, _}] ->
-        send(pid, message)
-
-      [] ->
-        Logger.warning("Agent #{agent_id} not running, job will redeliver on resume")
-    end
+    :ok = Dispatch.dispatch(agent_id, message)
   end
 
   defp fetch_overdue_jobs do
@@ -164,7 +216,24 @@ defmodule Maraithon.Runtime.Scheduler do
     |> Repo.all()
   end
 
-  defp schedule_poll do
-    Process.send_after(self(), :poll, @poll_interval_ms)
+  defp reclaim_stale_dispatched_jobs(timeout_ms) do
+    cutoff = DateTime.add(DateTime.utc_now(), -timeout_ms, :millisecond)
+
+    {count, _} =
+      Repo.update_all(
+        from(j in ScheduledJob,
+          where: j.status == "dispatched",
+          where: j.claimed_at < ^cutoff
+        ),
+        set: [status: "pending", claimed_by: nil, claimed_at: nil, dispatched_at: nil]
+      )
+
+    if count > 0 do
+      Logger.info("Reclaimed #{count} stale scheduled jobs")
+    end
+  end
+
+  defp schedule_poll(interval_ms) do
+    Process.send_after(self(), :poll, interval_ms)
   end
 end
