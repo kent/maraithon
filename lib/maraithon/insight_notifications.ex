@@ -182,7 +182,7 @@ defmodule Maraithon.InsightNotifications do
   defp handle_feedback_callback(data) when is_map(data) do
     callback_data = read_string(data, "data")
     callback_id = read_string(data, "callback_id")
-    chat_id = read_string(data, "chat_id")
+    chat_id = read_id_string(data, "chat_id")
 
     with {:ok, delivery_id, feedback} <- parse_feedback_data(callback_data),
          %Delivery{} = delivery <- Repo.get(Delivery, delivery_id),
@@ -254,7 +254,7 @@ defmodule Maraithon.InsightNotifications do
   end
 
   defp maybe_handle_link_command(data) do
-    chat_id = read_string(data, "chat_id")
+    chat_id = read_id_string(data, "chat_id")
     text = read_string(data, "text")
 
     cond do
@@ -323,9 +323,13 @@ defmodule Maraithon.InsightNotifications do
 
     candidate =
       case parts do
-        ["/start", arg] -> arg
-        ["/link", arg] -> arg
-        _ -> nil
+        [command, arg | _] when is_binary(command) ->
+          if command_matches?(command, "/start") or command_matches?(command, "/link"),
+            do: arg,
+            else: nil
+
+        _ ->
+          nil
       end
 
     case Accounts.normalize_email(candidate || "") do
@@ -335,6 +339,17 @@ defmodule Maraithon.InsightNotifications do
   end
 
   defp parse_link_user_id(_), do: nil
+
+  defp command_matches?(command, base) when is_binary(command) and is_binary(base) do
+    normalized =
+      command
+      |> String.trim()
+      |> String.downcase()
+      |> String.split("@", parts: 2)
+      |> List.first()
+
+    normalized == base
+  end
 
   defp parse_feedback_data(value) when is_binary(value) do
     case Regex.run(~r/^insfb:([0-9a-f\-]{36}):(h|n)$/i, value, capture: :all_but_first) do
@@ -433,6 +448,20 @@ defmodule Maraithon.InsightNotifications do
           {parsed, ""} -> parsed
           _ -> nil
         end
+
+      _ ->
+        nil
+    end
+  end
+
+  defp read_id_string(map, key) when is_map(map) and is_binary(key) do
+    case fetch(map, key) do
+      value when is_integer(value) ->
+        Integer.to_string(value)
+
+      value when is_binary(value) ->
+        trimmed = String.trim(value)
+        if trimmed == "", do: nil, else: trimmed
 
       _ ->
         nil

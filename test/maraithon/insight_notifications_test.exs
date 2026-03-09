@@ -75,7 +75,7 @@ defmodule Maraithon.InsightNotificationsTest do
       event = %{
         type: "message",
         data: %{
-          chat_id: "998877",
+          chat_id: 998_877,
           text: "/start #{user_id}",
           from: %{id: 1001, username: "linker"}
         }
@@ -86,6 +86,26 @@ defmodule Maraithon.InsightNotificationsTest do
       account = ConnectedAccounts.get(user_id, "telegram")
       assert account.status == "connected"
       assert account.external_account_id == "998877"
+    end
+
+    test "links telegram chat from start command with bot mention" do
+      user_id = "link-bot-mention@example.com"
+      {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+      event = %{
+        type: "message",
+        data: %{
+          chat_id: 445_566,
+          text: "/start@maraithon_bot #{user_id}",
+          from: %{id: 1002, username: "linker2"}
+        }
+      }
+
+      :ok = InsightNotifications.handle_telegram_event(event)
+
+      account = ConnectedAccounts.get(user_id, "telegram")
+      assert account.status == "connected"
+      assert account.external_account_id == "445566"
     end
 
     test "records callback feedback and tunes threshold", %{user_id: user_id, insight: insight} do
@@ -101,7 +121,7 @@ defmodule Maraithon.InsightNotificationsTest do
           type: "callback_query",
           data: %{
             callback_id: "cb_1",
-            chat_id: "12345",
+            chat_id: 12345,
             data: "insfb:#{delivery.id}:n"
           }
         })
