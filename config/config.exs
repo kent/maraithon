@@ -63,7 +63,7 @@ config :maraithon, Maraithon.FlyLogs,
   api_base_url: "https://api.fly.io/api/v1",
   apps: [],
   region: nil,
-  receive_timeout_ms: 15_000
+  receive_timeout_ms: 3_000
 
 # Import environment specific config. This must remain at the bottom
 # of this file so it overrides the configuration defined above.

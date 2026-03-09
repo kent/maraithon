@@ -16,10 +16,6 @@ defmodule MaraithonWeb.DashboardLive do
 
   @impl true
   def mount(_params, _session, socket) do
-    if connected?(socket) do
-      :timer.send_interval(@refresh_interval, self(), :refresh)
-    end
-
     socket =
       socket
       |> assign(
@@ -36,7 +32,16 @@ defmodule MaraithonWeb.DashboardLive do
         inspection: empty_inspection(),
         total_spend: empty_spend(),
         agent_spend: nil,
-        health: %{status: :unknown, checks: %{agents: %{running: 0, degraded: 0, stopped: 0}}},
+        health: %{
+          status: :unknown,
+          checks: %{
+            database: :unknown,
+            agents: %{running: 0, degraded: 0, stopped: 0},
+            memory_mb: 0,
+            uptime_seconds: 0
+          },
+          version: nil
+        },
         queue_metrics: %{
           effects: %{pending: 0, claimed: 0, completed: 0, failed: 0},
           jobs: %{pending: 0, dispatched: 0, delivered: 0, cancelled: 0}
@@ -48,7 +53,15 @@ defmodule MaraithonWeb.DashboardLive do
         dashboard_errors: [],
         inspection_errors: []
       )
-      |> refresh_dashboard(include_fly_logs: true)
+
+    socket =
+      if connected?(socket) do
+        :timer.send_interval(@refresh_interval, self(), :refresh)
+        send(self(), :load_fly_logs)
+        refresh_dashboard(socket)
+      else
+        socket
+      end
 
     {:ok, socket}
   end
@@ -90,16 +103,23 @@ defmodule MaraithonWeb.DashboardLive do
     {:noreply, refresh_dashboard(socket)}
   end
 
+  def handle_info(:load_fly_logs, socket) do
+    {:noreply, refresh_fly_logs(socket)}
+  end
+
   @impl true
   def handle_event("refresh_now", _params, socket) do
+    send(self(), :load_fly_logs)
+
     {:noreply,
      socket
-     |> refresh_dashboard(include_fly_logs: true)
+     |> refresh_dashboard()
      |> put_flash(:info, "Dashboard refreshed")}
   end
 
   def handle_event("refresh_fly_logs", _params, socket) do
-    {:noreply, socket |> refresh_fly_logs() |> put_flash(:info, "Fly logs refreshed")}
+    send(self(), :load_fly_logs)
+    {:noreply, put_flash(socket, :info, "Fly logs refresh started")}
   end
 
   def handle_event("new_agent", _params, socket) do

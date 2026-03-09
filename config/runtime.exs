@@ -186,7 +186,7 @@ config :maraithon, Maraithon.FlyLogs,
   api_base_url: System.get_env("FLY_API_BASE_URL", "https://api.fly.io/api/v1"),
   apps: fly_log_apps,
   region: fly_log_region,
-  receive_timeout_ms: String.to_integer(System.get_env("FLY_LOG_TIMEOUT_MS", "15000"))
+  receive_timeout_ms: String.to_integer(System.get_env("FLY_LOG_TIMEOUT_MS", "3000"))
 
 # =============================================================================
 # Production Configuration

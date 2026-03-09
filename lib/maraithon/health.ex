@@ -8,7 +8,10 @@ defmodule Maraithon.Health do
 
   require Logger
 
-  @database_timeout_ms 1_500
+  @database_timeout_ms 750
+  @database_wall_timeout_ms 750
+  @database_failure_cooldown_ms 10_000
+  @database_failure_cache_key {__MODULE__, :database_failure_at_ms}
   @empty_agent_counts %{running: 0, degraded: 0, stopped: 0}
 
   @doc """
@@ -54,19 +57,46 @@ defmodule Maraithon.Health do
   end
 
   defp check_database(opts) do
+    wall_timeout_ms = Keyword.get(opts, :database_wall_timeout_ms, @database_wall_timeout_ms)
     timeout_ms = Keyword.get(opts, :database_timeout_ms, @database_timeout_ms)
     pool_timeout_ms = Keyword.get(opts, :database_pool_timeout_ms, timeout_ms)
 
-    case Repo.query("SELECT 1", [], timeout: timeout_ms, pool_timeout: pool_timeout_ms) do
-      {:ok, _} ->
-        :ok
+    failure_cooldown_ms =
+      Keyword.get(opts, :database_failure_cooldown_ms, @database_failure_cooldown_ms)
 
-      {:error, reason} ->
-        Logger.error("Database health check failed: #{inspect(reason)}")
-        :error
+    if recent_database_failure?(failure_cooldown_ms) do
+      :error
+    else
+      caller = self()
+
+      task =
+        Task.async(fn ->
+          Repo.query("SELECT 1", [],
+            timeout: timeout_ms,
+            pool_timeout: pool_timeout_ms,
+            caller: caller
+          )
+        end)
+
+      case Task.yield(task, wall_timeout_ms) || Task.shutdown(task, :brutal_kill) do
+        {:ok, {:ok, _}} ->
+          clear_database_failure()
+          :ok
+
+        {:ok, {:error, reason}} ->
+          mark_database_failure()
+          Logger.error("Database health check failed: #{inspect(reason)}")
+          :error
+
+        nil ->
+          mark_database_failure()
+          Logger.error("Database health check timed out after #{wall_timeout_ms}ms")
+          :error
+      end
     end
   rescue
     e ->
+      mark_database_failure()
       Logger.error("Database health check exception: #{inspect(e)}")
       :error
   end
@@ -90,5 +120,27 @@ defmodule Maraithon.Health do
   defp get_uptime do
     {uptime_ms, _} = :erlang.statistics(:wall_clock)
     div(uptime_ms, 1000)
+  end
+
+  defp recent_database_failure?(cooldown_ms) when cooldown_ms > 0 do
+    case :persistent_term.get(@database_failure_cache_key, nil) do
+      failure_at_ms when is_integer(failure_at_ms) ->
+        System.monotonic_time(:millisecond) - failure_at_ms < cooldown_ms
+
+      _ ->
+        false
+    end
+  end
+
+  defp recent_database_failure?(_cooldown_ms), do: false
+
+  defp mark_database_failure do
+    :persistent_term.put(@database_failure_cache_key, System.monotonic_time(:millisecond))
+  end
+
+  defp clear_database_failure do
+    :persistent_term.erase(@database_failure_cache_key)
+  rescue
+    ArgumentError -> :ok
   end
 end
