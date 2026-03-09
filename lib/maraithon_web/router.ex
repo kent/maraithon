@@ -10,8 +10,16 @@ defmodule MaraithonWeb.Router do
     plug :put_secure_browser_headers
   end
 
+  pipeline :browser_admin do
+    plug MaraithonWeb.Plugs.RequireAdmin
+  end
+
   pipeline :api do
     plug :accepts, ["json"]
+  end
+
+  pipeline :api_auth do
+    plug MaraithonWeb.Plugs.RequireApiToken
   end
 
   # Health check endpoint
@@ -33,7 +41,7 @@ defmodule MaraithonWeb.Router do
 
   # Web UI - Dashboard
   scope "/", MaraithonWeb do
-    pipe_through :browser
+    pipe_through [:browser, :browser_admin]
 
     live "/", DashboardLive, :index
     live "/admin", DashboardLive, :index
@@ -41,7 +49,7 @@ defmodule MaraithonWeb.Router do
 
   # API v1
   scope "/api/v1", MaraithonWeb do
-    pipe_through :api
+    pipe_through [:api, :api_auth]
 
     # Agent management
     post "/agents", AgentController, :create

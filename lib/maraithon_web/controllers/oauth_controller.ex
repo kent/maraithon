@@ -14,6 +14,9 @@ defmodule MaraithonWeb.OAuthController do
 
   require Logger
 
+  @oauth_state_salt "oauth_state"
+  @oauth_state_max_age_seconds 600
+
   @doc """
   Initiates Google OAuth flow.
 
@@ -192,14 +195,13 @@ defmodule MaraithonWeb.OAuthController do
     end
   end
 
-  defp encode_slack_state(user_id) do
-    Base.url_encode64(Jason.encode!(%{user_id: user_id, provider: "slack"}))
-  end
+  defp encode_slack_state(user_id),
+    do: sign_oauth_state(%{"user_id" => user_id, "provider" => "slack"})
 
   defp decode_slack_state(state) do
-    with {:ok, json} <- Base.url_decode64(state),
-         {:ok, data} <- Jason.decode(json) do
-      {:ok, data["user_id"]}
+    with {:ok, %{"provider" => "slack", "user_id" => user_id}} when is_binary(user_id) <-
+           verify_oauth_state(state) do
+      {:ok, user_id}
     else
       _ -> {:error, :invalid_state}
     end
@@ -308,14 +310,13 @@ defmodule MaraithonWeb.OAuthController do
     end
   end
 
-  defp encode_linear_state(user_id) do
-    Base.url_encode64(Jason.encode!(%{user_id: user_id, provider: "linear"}))
-  end
+  defp encode_linear_state(user_id),
+    do: sign_oauth_state(%{"user_id" => user_id, "provider" => "linear"})
 
   defp decode_linear_state(state) do
-    with {:ok, json} <- Base.url_decode64(state),
-         {:ok, data} <- Jason.decode(json) do
-      {:ok, data["user_id"]}
+    with {:ok, %{"provider" => "linear", "user_id" => user_id}} when is_binary(user_id) <-
+           verify_oauth_state(state) do
+      {:ok, user_id}
     else
       _ -> {:error, :invalid_state}
     end
@@ -405,16 +406,29 @@ defmodule MaraithonWeb.OAuthController do
   end
 
   defp encode_state(user_id, services) do
-    data = %{user_id: user_id, services: services}
-    Base.url_encode64(Jason.encode!(data))
+    sign_oauth_state(%{"user_id" => user_id, "services" => services, "provider" => "google"})
   end
 
   defp decode_state(state) do
-    with {:ok, json} <- Base.url_decode64(state),
-         {:ok, data} <- Jason.decode(json) do
-      {:ok, data["user_id"], data["services"]}
+    with {:ok, %{"provider" => "google", "user_id" => user_id, "services" => services}}
+         when is_binary(user_id) and is_list(services) <- verify_oauth_state(state) do
+      {:ok, user_id, services}
     else
       _ -> {:error, :invalid_state}
     end
+  end
+
+  defp sign_oauth_state(payload) when is_map(payload) do
+    state_payload = Map.put_new(payload, "nonce", Ecto.UUID.generate())
+    Phoenix.Token.sign(MaraithonWeb.Endpoint, @oauth_state_salt, state_payload)
+  end
+
+  defp verify_oauth_state(state) when is_binary(state) do
+    Phoenix.Token.verify(
+      MaraithonWeb.Endpoint,
+      @oauth_state_salt,
+      state,
+      max_age: @oauth_state_max_age_seconds
+    )
   end
 end

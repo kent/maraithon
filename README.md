@@ -371,6 +371,9 @@ end
 
 ## API Reference
 
+`/api/v1/*` endpoints can be protected with bearer auth by setting `API_BEARER_TOKEN`.
+When enabled, include: `Authorization: Bearer <API_BEARER_TOKEN>`.
+
 ### Agents
 
 | Endpoint | Description |
@@ -418,6 +421,11 @@ end
 ```bash
 # Required for LLM
 export ANTHROPIC_API_KEY="sk-..."
+
+# Required for production security
+export ADMIN_USERNAME="admin"
+export ADMIN_PASSWORD="replace-with-long-random-password"
+export API_BEARER_TOKEN="replace-with-long-random-token"
 
 # Optional
 export ANTHROPIC_MODEL="claude-sonnet-4-20250514"

@@ -4,6 +4,36 @@ import Config
 # Environment variables are read here at startup
 
 # =============================================================================
+# Security Configuration
+# =============================================================================
+
+admin_username = System.get_env("ADMIN_USERNAME", "")
+admin_password = System.get_env("ADMIN_PASSWORD", "")
+api_bearer_token = System.get_env("API_BEARER_TOKEN", "")
+
+if config_env() == :prod do
+  if admin_username == "" or admin_password == "" do
+    raise """
+    ADMIN_USERNAME and ADMIN_PASSWORD must be set in production.
+    These credentials protect the admin dashboard.
+    """
+  end
+
+  if api_bearer_token == "" do
+    raise """
+    API_BEARER_TOKEN must be set in production.
+    This token protects /api/v1 endpoints.
+    """
+  end
+end
+
+config :maraithon, :admin_auth,
+  username: admin_username,
+  password: admin_password
+
+config :maraithon, :api_auth, bearer_token: api_bearer_token
+
+# =============================================================================
 # Server Configuration
 # =============================================================================
 

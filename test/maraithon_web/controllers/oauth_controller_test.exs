@@ -298,7 +298,7 @@ defmodule MaraithonWeb.OAuthControllerTest do
     """
     test "returns error for token exchange failure with valid state", %{conn: conn} do
       # Create a valid state
-      state = Base.url_encode64(Jason.encode!(%{user_id: "user_123", services: ["calendar"]}))
+      state = signed_google_state("user_123", ["calendar"])
 
       conn = get(conn, "/auth/google/callback", %{code: "invalid_code", state: state})
 
@@ -385,7 +385,7 @@ defmodule MaraithonWeb.OAuthControllerTest do
     """
     test "returns error for token exchange failure with valid state", %{conn: conn} do
       # Create a valid state
-      state = Base.url_encode64(Jason.encode!(%{user_id: "user_123", provider: "slack"}))
+      state = signed_provider_state("slack", "user_123")
 
       conn = get(conn, "/auth/slack/callback", %{code: "invalid_code", state: state})
 
@@ -472,7 +472,7 @@ defmodule MaraithonWeb.OAuthControllerTest do
     """
     test "returns error for token exchange failure with valid state", %{conn: conn} do
       # Create a valid state
-      state = Base.url_encode64(Jason.encode!(%{user_id: "user_123", provider: "linear"}))
+      state = signed_provider_state("linear", "user_123")
 
       conn = get(conn, "/auth/linear/callback", %{code: "invalid_code", state: state})
 
@@ -578,7 +578,7 @@ defmodule MaraithonWeb.OAuthControllerTest do
       end)
 
       # Create a valid state
-      state = Base.url_encode64(Jason.encode!(%{user_id: "user_456", services: ["calendar"]}))
+      state = signed_google_state("user_456", ["calendar"])
 
       conn = get(conn, "/auth/google/callback", %{code: "valid_code", state: state})
 
@@ -624,7 +624,7 @@ defmodule MaraithonWeb.OAuthControllerTest do
       end)
 
       # Create a valid state
-      state = Base.url_encode64(Jason.encode!(%{user_id: "user_789", provider: "slack"}))
+      state = signed_provider_state("slack", "user_789")
 
       conn = get(conn, "/auth/slack/callback", %{code: "valid_slack_code", state: state})
 
@@ -687,7 +687,7 @@ defmodule MaraithonWeb.OAuthControllerTest do
       end)
 
       # Create a valid state
-      state = Base.url_encode64(Jason.encode!(%{user_id: "user_abc", provider: "linear"}))
+      state = signed_provider_state("linear", "user_abc")
 
       conn = get(conn, "/auth/linear/callback", %{code: "valid_linear_code", state: state})
 
@@ -740,7 +740,7 @@ defmodule MaraithonWeb.OAuthControllerTest do
       end)
 
       # Create a valid state
-      state = Base.url_encode64(Jason.encode!(%{user_id: "user_fail", provider: "linear"}))
+      state = signed_provider_state("linear", "user_fail")
 
       conn = get(conn, "/auth/linear/callback", %{code: "code", state: state})
 
@@ -748,5 +748,18 @@ defmodule MaraithonWeb.OAuthControllerTest do
       response = json_response(conn, 500)
       assert response["error"] == "Failed to store tokens"
     end
+  end
+
+  defp signed_google_state(user_id, services) do
+    signed_state(%{"provider" => "google", "user_id" => user_id, "services" => services})
+  end
+
+  defp signed_provider_state(provider, user_id) do
+    signed_state(%{"provider" => provider, "user_id" => user_id})
+  end
+
+  defp signed_state(payload) do
+    payload = Map.put(payload, "nonce", Ecto.UUID.generate())
+    Phoenix.Token.sign(MaraithonWeb.Endpoint, "oauth_state", payload)
   end
 end
