@@ -7,6 +7,8 @@ defmodule Maraithon.Accounts.MagicLinkSender do
 
   require Logger
 
+  alias Maraithon.Accounts.EmailTemplates
+
   @postmark_api_url "https://api.postmarkapp.com/email"
 
   def deliver(email, link) when is_binary(email) and is_binary(link) do
@@ -29,13 +31,15 @@ defmodule Maraithon.Accounts.MagicLinkSender do
   end
 
   defp send_via_postmark(config, email, link) do
+    %{subject: subject, text_body: text_body, html_body: html_body} =
+      EmailTemplates.magic_link(link)
+
     body = %{
       "From" => config.from,
       "To" => email,
-      "Subject" => "Your Maraithon sign-in link",
-      "TextBody" => "Sign in to Maraithon:\n\n#{link}\n\nThis link expires in 15 minutes.",
-      "HtmlBody" =>
-        "<p>Sign in to Maraithon:</p><p><a href=\"#{link}\">#{link}</a></p><p>This link expires in 15 minutes.</p>",
+      "Subject" => subject,
+      "TextBody" => text_body,
+      "HtmlBody" => html_body,
       "MessageStream" =>
         if(config.message_stream == "", do: "outbound", else: config.message_stream)
     }
