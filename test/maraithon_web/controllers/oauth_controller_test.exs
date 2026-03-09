@@ -119,7 +119,7 @@ defmodule MaraithonWeb.OAuthControllerTest do
   # The on_exit callback ensures config is reset after each test to prevent
   # pollution between tests.
   # ----------------------------------------------------------------------------
-  setup do
+  setup %{conn: conn} do
     # Configure OAuth settings for testing
     Application.put_env(:maraithon, :google,
       client_id: "test_google_client_id",
@@ -162,7 +162,7 @@ defmodule MaraithonWeb.OAuthControllerTest do
       Application.put_env(:maraithon, :notion, [])
     end)
 
-    :ok
+    {:ok, conn: log_in_test_user(conn, "oauth@example.com")}
   end
 
   # ============================================================================

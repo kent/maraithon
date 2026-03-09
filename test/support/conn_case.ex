@@ -35,4 +35,23 @@ defmodule MaraithonWeb.ConnCase do
     Maraithon.DataCase.setup_sandbox(tags)
     {:ok, conn: Phoenix.ConnTest.build_conn()}
   end
+
+  def log_in_test_user(conn, email \\ "user@example.com") do
+    {:ok, user} = Maraithon.Accounts.get_or_create_user_by_email(email)
+    {:ok, %{token: token}} = Maraithon.Accounts.create_session_for_user(user)
+
+    conn
+    |> Phoenix.ConnTest.init_test_session(%{})
+    |> Plug.Conn.put_session("user_session_token", token)
+  end
+
+  def log_in_admin_user(conn, email \\ "admin@example.com") do
+    {:ok, user} = Maraithon.Accounts.get_or_create_user_by_email(email)
+    {:ok, user} = Maraithon.Repo.update(Ecto.Changeset.change(user, is_admin: true))
+    {:ok, %{token: token}} = Maraithon.Accounts.create_session_for_user(user)
+
+    conn
+    |> Phoenix.ConnTest.init_test_session(%{})
+    |> Plug.Conn.put_session("user_session_token", token)
+  end
 end

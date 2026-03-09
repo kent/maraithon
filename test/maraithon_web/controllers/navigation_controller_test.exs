@@ -3,7 +3,7 @@ defmodule MaraithonWeb.NavigationControllerTest do
 
   describe "tab pages" do
     test "GET /connectors renders the connectors page", %{conn: conn} do
-      conn = get(conn, "/connectors")
+      conn = conn |> log_in_test_user() |> get("/connectors")
       html = html_response(conn, 200)
 
       assert html =~ "Connectors"
@@ -14,7 +14,7 @@ defmodule MaraithonWeb.NavigationControllerTest do
     end
 
     test "GET /how-it-works renders the guide page", %{conn: conn} do
-      conn = get(conn, "/how-it-works")
+      conn = conn |> log_in_test_user() |> get("/how-it-works")
       html = html_response(conn, 200)
 
       assert html =~ "How it works"
@@ -23,7 +23,7 @@ defmodule MaraithonWeb.NavigationControllerTest do
     end
 
     test "GET /settings renders settings page", %{conn: conn} do
-      conn = get(conn, "/settings")
+      conn = conn |> log_in_admin_user() |> get("/settings")
       html = html_response(conn, 200)
 
       assert html =~ "Settings"
@@ -32,16 +32,16 @@ defmodule MaraithonWeb.NavigationControllerTest do
     end
 
     test "GET /conenctors redirects to /connectors", %{conn: conn} do
-      conn = get(conn, "/conenctors")
+      conn = conn |> log_in_test_user() |> get("/conenctors")
       assert redirected_to(conn) == "/connectors"
     end
   end
 
   describe "connector actions" do
     test "POST /connectors/:provider/disconnect handles unsupported providers", %{conn: conn} do
-      conn = post(conn, "/connectors/invalid/disconnect", %{"user_id" => "kent"})
+      conn = conn |> log_in_test_user() |> post("/connectors/invalid/disconnect", %{})
 
-      assert redirected_to(conn) == "/connectors?user_id=kent"
+      assert redirected_to(conn) == "/connectors"
       assert Phoenix.Flash.get(conn.assigns.flash, :error) == "Unsupported provider"
     end
   end

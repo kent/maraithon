@@ -10,8 +10,11 @@ defmodule Maraithon.Agents do
   @doc """
   List all agents.
   """
-  def list_agents do
+  def list_agents(opts \\ []) do
+    user_id = Keyword.get(opts, :user_id)
+
     Agent
+    |> maybe_filter_user(user_id)
     |> order_by([agent], desc: agent.updated_at, desc: agent.inserted_at)
     |> Repo.all()
   end
@@ -19,8 +22,12 @@ defmodule Maraithon.Agents do
   @doc """
   Get an agent by ID.
   """
-  def get_agent(id) do
-    Repo.get(Agent, id)
+  def get_agent(id, opts \\ []) do
+    user_id = Keyword.get(opts, :user_id)
+
+    Agent
+    |> maybe_filter_user(user_id)
+    |> Repo.get(id)
   end
 
   @doc """
@@ -28,6 +35,12 @@ defmodule Maraithon.Agents do
   """
   def get_agent!(id) do
     Repo.get!(Agent, id)
+  end
+
+  def get_agent_for_user(id, user_id) when is_binary(user_id) do
+    Agent
+    |> where([agent], agent.id == ^id and agent.user_id == ^user_id)
+    |> Repo.one()
   end
 
   @doc """
@@ -66,8 +79,11 @@ defmodule Maraithon.Agents do
   @doc """
   List agents that should be resumed on startup.
   """
-  def list_resumable_agents do
+  def list_resumable_agents(opts \\ []) do
+    user_id = Keyword.get(opts, :user_id)
+
     from(a in Agent, where: a.status in ["running", "degraded"])
+    |> maybe_filter_user(user_id)
     |> Repo.all()
   end
 
@@ -90,5 +106,12 @@ defmodule Maraithon.Agents do
   """
   def mark_degraded(%Agent{} = agent) do
     update_agent(agent, %{status: "degraded"})
+  end
+
+  defp maybe_filter_user(query, nil), do: query
+  defp maybe_filter_user(query, ""), do: query
+
+  defp maybe_filter_user(query, user_id) when is_binary(user_id) do
+    where(query, [agent], agent.user_id == ^user_id)
   end
 end

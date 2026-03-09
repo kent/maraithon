@@ -51,17 +51,18 @@ defmodule Maraithon.Admin do
     activity_limit = Keyword.get(opts, :activity_limit, @default_activity_limit)
     failure_limit = Keyword.get(opts, :failure_limit, @default_failure_limit)
     log_limit = Keyword.get(opts, :log_limit, @default_log_limit)
+    user_id = Keyword.get(opts, :user_id)
     health = Keyword.get_lazy(opts, :health, &Health.check/0)
     recent_logs = recent_logs(log_limit)
 
     db_fetcher =
       Keyword.get(opts, :db_fetcher, fn ->
         %{
-          agents: Agents.list_agents(),
-          total_spend: Spend.get_total_spend(),
-          queue_metrics: queue_metrics(),
-          recent_activity: recent_activity(activity_limit),
-          recent_failures: recent_failures(failure_limit)
+          agents: Agents.list_agents(user_id: user_id),
+          total_spend: Spend.get_total_spend(user_id: user_id),
+          queue_metrics: queue_metrics(user_id: user_id),
+          recent_activity: recent_activity(activity_limit, user_id: user_id),
+          recent_failures: recent_failures(failure_limit, user_id: user_id)
         }
       end)
 
@@ -87,19 +88,21 @@ defmodule Maraithon.Admin do
   @doc """
   Returns queue and delivery counters for effects and scheduled jobs.
   """
-  def queue_metrics do
+  def queue_metrics(opts \\ []) do
+    user_id = Keyword.get(opts, :user_id)
+
     %{
       effects: %{
-        pending: count_effects_by_status("pending"),
-        claimed: count_effects_by_status("claimed"),
-        completed: count_effects_by_status("completed"),
-        failed: count_effects_by_status("failed")
+        pending: count_effects_by_status("pending", user_id),
+        claimed: count_effects_by_status("claimed", user_id),
+        completed: count_effects_by_status("completed", user_id),
+        failed: count_effects_by_status("failed", user_id)
       },
       jobs: %{
-        pending: count_jobs_by_status("pending"),
-        dispatched: count_jobs_by_status("dispatched"),
-        delivered: count_jobs_by_status("delivered"),
-        cancelled: count_jobs_by_status("cancelled")
+        pending: count_jobs_by_status("pending", user_id),
+        dispatched: count_jobs_by_status("dispatched", user_id),
+        delivered: count_jobs_by_status("delivered", user_id),
+        cancelled: count_jobs_by_status("cancelled", user_id)
       }
     }
   end
@@ -107,10 +110,13 @@ defmodule Maraithon.Admin do
   @doc """
   Returns the most recent agent events across the system.
   """
-  def recent_activity(limit \\ @default_activity_limit)
+  def recent_activity(limit \\ @default_activity_limit, opts \\ [])
       when is_integer(limit) and limit > 0 do
+    user_id = Keyword.get(opts, :user_id)
+
     Event
     |> join(:inner, [event], agent in Agent, on: agent.id == event.agent_id)
+    |> maybe_filter_agent_user(user_id)
     |> order_by([event, _agent], desc: event.inserted_at)
     |> limit(^limit)
     |> select([event, agent], %{
@@ -128,10 +134,12 @@ defmodule Maraithon.Admin do
   Returns the most recent operational failures, including failed effects and
   stale dispatched jobs.
   """
-  def recent_failures(limit \\ @default_failure_limit)
+  def recent_failures(limit \\ @default_failure_limit, opts \\ [])
       when is_integer(limit) and limit > 0 do
-    failed_effects = Repo.all(failed_effects_query(limit))
-    stale_jobs = Repo.all(stale_jobs_query(limit))
+    user_id = Keyword.get(opts, :user_id)
+
+    failed_effects = Repo.all(failed_effects_query(limit, user_id))
+    stale_jobs = Repo.all(stale_jobs_query(limit, user_id))
 
     (failed_effects ++ stale_jobs)
     |> Enum.sort_by(&timestamp_or_epoch/1, {:desc, DateTime})
@@ -173,30 +181,43 @@ defmodule Maraithon.Admin do
     effect_limit = Keyword.get(opts, :effect_limit, @default_effect_limit)
     job_limit = Keyword.get(opts, :job_limit, @default_job_limit)
     log_limit = Keyword.get(opts, :log_limit, @default_agent_log_limit)
+    user_id = Keyword.get(opts, :user_id)
     health = Keyword.get_lazy(opts, :health, &Health.check/0)
 
     fetcher =
       Keyword.get(opts, :fetcher, fn ->
-        case Runtime.get_agent_status(agent_id) do
-          {:ok, agent_status} ->
-            {:ok, events} = Runtime.get_events(agent_id, limit: event_limit)
+        agent =
+          case user_id do
+            nil -> Agents.get_agent(agent_id)
+            value -> Agents.get_agent_for_user(agent_id, value)
+          end
 
-            {:ok,
-             %{
-               agent: agent_status,
-               spend: Spend.get_agent_spend(agent_id),
-               events: events,
-               inspection:
-                 agent_inspection(
-                   agent_id,
-                   effect_limit: effect_limit,
-                   job_limit: job_limit,
-                   log_limit: log_limit
-                 )
-             }}
-
-          {:error, :not_found} ->
+        case agent do
+          nil ->
             {:error, :not_found}
+
+          _ ->
+            case Runtime.get_agent_status(agent_id) do
+              {:ok, agent_status} ->
+                {:ok, events} = Runtime.get_events(agent_id, limit: event_limit)
+
+                {:ok,
+                 %{
+                   agent: agent_status,
+                   spend: Spend.get_agent_spend(agent_id),
+                   events: events,
+                   inspection:
+                     agent_inspection(
+                       agent_id,
+                       effect_limit: effect_limit,
+                       job_limit: job_limit,
+                       log_limit: log_limit
+                     )
+                 }}
+
+              {:error, :not_found} ->
+                {:error, :not_found}
+            end
         end
       end)
 
@@ -223,25 +244,30 @@ defmodule Maraithon.Admin do
     FlyLogs.recent_logs(opts)
   end
 
-  defp count_effects_by_status(status) do
+  defp count_effects_by_status(status, user_id) do
     Effect
-    |> where([effect], effect.status == ^status)
+    |> join(:inner, [effect], agent in Agent, on: agent.id == effect.agent_id)
+    |> where([effect, _agent], effect.status == ^status)
+    |> maybe_filter_agent_user(user_id)
     |> Repo.aggregate(:count)
   end
 
-  defp count_jobs_by_status(status) do
+  defp count_jobs_by_status(status, user_id) do
     ScheduledJob
-    |> where([job], job.status == ^status)
+    |> join(:inner, [job], agent in Agent, on: agent.id == job.agent_id)
+    |> where([job, _agent], job.status == ^status)
+    |> maybe_filter_agent_user(user_id)
     |> Repo.aggregate(:count)
   end
 
-  defp failed_effects_query(limit) do
+  defp failed_effects_query(limit, user_id) do
     Effect
     |> join(:inner, [effect], agent in Agent, on: agent.id == effect.agent_id)
     |> where(
       [effect, _agent],
       effect.status == "failed" or (not is_nil(effect.error) and effect.error != "")
     )
+    |> maybe_filter_agent_user(user_id)
     |> order_by([effect, _agent], desc: effect.updated_at)
     |> limit(^limit)
     |> select([effect, agent], %{
@@ -257,7 +283,7 @@ defmodule Maraithon.Admin do
     })
   end
 
-  defp stale_jobs_query(limit) do
+  defp stale_jobs_query(limit, user_id) do
     stale_cutoff = DateTime.add(DateTime.utc_now(), -@stale_dispatch_seconds, :second)
 
     ScheduledJob
@@ -266,6 +292,7 @@ defmodule Maraithon.Admin do
       [job, _agent],
       job.status == "dispatched" and not is_nil(job.claimed_at) and job.claimed_at < ^stale_cutoff
     )
+    |> maybe_filter_agent_user(user_id)
     |> order_by([job, _agent], asc: job.claimed_at)
     |> limit(^limit)
     |> select([job, agent], %{
@@ -384,6 +411,13 @@ defmodule Maraithon.Admin do
   defp format_failure_reason({:exit, reason}), do: "exit: #{inspect(reason)}"
   defp format_failure_reason(%_{} = exception), do: Exception.message(exception)
   defp format_failure_reason(reason), do: inspect(reason)
+
+  defp maybe_filter_agent_user(query, nil), do: query
+  defp maybe_filter_agent_user(query, ""), do: query
+
+  defp maybe_filter_agent_user(query, user_id) when is_binary(user_id) do
+    where(query, [_item, agent], agent.user_id == ^user_id)
+  end
 
   defp count_events(agent_id) do
     Event

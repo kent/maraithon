@@ -17,6 +17,7 @@ defmodule Maraithon.Runtime do
   """
   def start_agent(params) do
     attrs = %{
+      user_id: params["user_id"] || params[:user_id],
       behavior: params["behavior"] || params[:behavior],
       config: params["config"] || params[:config] || %{},
       status: "running",

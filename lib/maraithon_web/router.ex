@@ -4,10 +4,15 @@ defmodule MaraithonWeb.Router do
   pipeline :browser do
     plug :accepts, ["html"]
     plug :fetch_session
+    plug MaraithonWeb.Plugs.FetchCurrentUser
     plug :fetch_live_flash
     plug :put_root_layout, html: {MaraithonWeb.Layouts, :root}
     plug :protect_from_forgery
     plug :put_secure_browser_headers
+  end
+
+  pipeline :require_authenticated_user do
+    plug MaraithonWeb.Plugs.RequireAuthenticatedUser
   end
 
   pipeline :browser_admin do
@@ -27,9 +32,19 @@ defmodule MaraithonWeb.Router do
     get "/", HealthController, :index
   end
 
+  # Public auth routes
+  scope "/", MaraithonWeb do
+    pipe_through :browser
+
+    get "/", HomeController, :index
+    post "/auth/magic-link", SessionController, :create_magic_link
+    get "/auth/magic/:token", SessionController, :consume_magic_link
+    delete "/logout", SessionController, :delete
+  end
+
   # OAuth routes
   scope "/auth", MaraithonWeb do
-    pipe_through :api
+    pipe_through [:browser, :require_authenticated_user]
 
     get "/google", OAuthController, :google
     get "/google/callback", OAuthController, :google_callback
@@ -43,17 +58,31 @@ defmodule MaraithonWeb.Router do
     get "/notion/callback", OAuthController, :notion_callback
   end
 
-  # Web UI - Dashboard
+  # Web UI - authenticated user pages
   scope "/", MaraithonWeb do
-    pipe_through [:browser, :browser_admin]
+    pipe_through [:browser, :require_authenticated_user]
 
-    live "/", DashboardLive, :index
-    live "/admin", DashboardLive, :index
     get "/connectors", ConnectorsController, :index
     post "/connectors/:provider/disconnect", ConnectorsController, :disconnect
     get "/conenctors", ConnectorsController, :legacy_redirect
     get "/how-it-works", HowItWorksController, :index
+  end
+
+  # Web UI - admin-only pages
+  scope "/", MaraithonWeb do
+    pipe_through [:browser, :browser_admin]
+
+    get "/admin", AdminPageController, :index
     get "/settings", SettingsController, :index
+  end
+
+  scope "/", MaraithonWeb do
+    pipe_through :browser
+
+    live_session :authenticated,
+      on_mount: [{MaraithonWeb.LiveUserAuth, :ensure_authenticated}] do
+      live "/dashboard", DashboardLive, :index
+    end
   end
 
   # API v1

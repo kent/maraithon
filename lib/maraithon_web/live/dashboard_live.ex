@@ -1,6 +1,7 @@
 defmodule MaraithonWeb.DashboardLive do
   use MaraithonWeb, :live_view
 
+  alias Maraithon.Accounts
   alias Maraithon.Admin
   alias Maraithon.Agents
   alias Maraithon.Behaviors
@@ -17,6 +18,8 @@ defmodule MaraithonWeb.DashboardLive do
 
   @impl true
   def mount(_params, _session, socket) do
+    user_id = current_user_id(socket)
+
     socket =
       socket
       |> assign(
@@ -51,9 +54,9 @@ defmodule MaraithonWeb.DashboardLive do
         recent_failures: [],
         recent_logs: [],
         fly_logs: empty_fly_logs(),
-        connection_user_id: Connections.default_user_id(),
-        connection_return_to: "/",
-        current_path: "/",
+        connection_user_id: user_id,
+        connection_return_to: "/dashboard",
+        current_path: "/dashboard",
         connections: [],
         raw_connections: [],
         connection_errors: [],
@@ -75,40 +78,49 @@ defmodule MaraithonWeb.DashboardLive do
 
   @impl true
   def handle_params(params, uri, socket) do
-    socket =
-      socket
-      |> assign(:current_path, current_path_from_uri(uri))
-      |> apply_dashboard_params(params, uri)
+    if Accounts.connected_accounts?(current_user_id(socket)) do
+      socket =
+        socket
+        |> assign(:current_path, current_path_from_uri(uri))
+        |> apply_dashboard_params(params, uri)
 
-    case Map.get(params, "id") do
-      id when is_binary(id) ->
-        case refresh_selected_agent(socket, id) do
-          {:ok, socket} ->
-            {:noreply, assign(socket, page_title: "Agent #{String.slice(id, 0, 8)}")}
+      case Map.get(params, "id") do
+        id when is_binary(id) ->
+          case refresh_selected_agent(socket, id) do
+            {:ok, socket} ->
+              {:noreply, assign(socket, page_title: "Agent #{String.slice(id, 0, 8)}")}
 
-          {:not_found, socket} ->
-            {:noreply,
-             socket
-             |> assign(
-               selected_agent: nil,
-               events: [],
-               agent_spend: nil,
-               inspection: empty_inspection(),
-               inspection_errors: []
-             )
-             |> push_navigate(to: connection_home_path(socket, socket.assigns.connection_user_id))}
-        end
+            {:not_found, socket} ->
+              {:noreply,
+               socket
+               |> assign(
+                 selected_agent: nil,
+                 events: [],
+                 agent_spend: nil,
+                 inspection: empty_inspection(),
+                 inspection_errors: []
+               )
+               |> push_navigate(
+                 to: connection_home_path(socket, socket.assigns.connection_user_id)
+               )}
+          end
 
-      _ ->
-        {:noreply,
-         assign(socket,
-           selected_agent: nil,
-           events: [],
-           agent_spend: nil,
-           inspection: empty_inspection(),
-           inspection_errors: [],
-           page_title: "Control Center"
-         )}
+        _ ->
+          {:noreply,
+           assign(socket,
+             selected_agent: nil,
+             events: [],
+             agent_spend: nil,
+             inspection: empty_inspection(),
+             inspection_errors: [],
+             page_title: "Control Center"
+           )}
+      end
+    else
+      {:noreply,
+       socket
+       |> put_flash(:info, "Connect at least one account before launching agents.")
+       |> push_navigate(to: "/connectors")}
     end
   end
 
@@ -134,16 +146,6 @@ defmodule MaraithonWeb.DashboardLive do
   def handle_event("refresh_fly_logs", _params, socket) do
     send(self(), :load_fly_logs)
     {:noreply, put_flash(socket, :info, "Fly logs refresh started")}
-  end
-
-  def handle_event("set_connection_user", %{"connection" => %{"user_id" => raw_user_id}}, socket) do
-    user_id = String.trim(raw_user_id || "")
-
-    if user_id == "" do
-      {:noreply, put_flash(socket, :error, "Connection user ID is required")}
-    else
-      {:noreply, push_patch(socket, to: connection_return_to(socket, user_id))}
-    end
   end
 
   def handle_event("disconnect_connection", %{"provider" => provider}, socket) do
@@ -185,7 +187,7 @@ defmodule MaraithonWeb.DashboardLive do
   end
 
   def handle_event("edit_agent", %{"id" => id}, socket) do
-    case Agents.get_agent(id) do
+    case Agents.get_agent_for_user(id, current_user_id(socket)) do
       nil ->
         {:noreply, socket |> refresh_dashboard() |> put_flash(:error, "Agent not found")}
 
@@ -203,7 +205,7 @@ defmodule MaraithonWeb.DashboardLive do
   def handle_event("launch_agent", %{"launch" => params}, socket) do
     launch = normalize_launch_params(params)
 
-    with {:ok, start_params} <- build_agent_start_params(launch) do
+    with {:ok, start_params} <- build_agent_start_params(launch, current_user_id(socket)) do
       save_agent(socket, launch, start_params)
     else
       {:error, message} when is_binary(message) ->
@@ -226,73 +228,86 @@ defmodule MaraithonWeb.DashboardLive do
   end
 
   def handle_event("start_agent", %{"id" => id}, socket) do
-    case Runtime.start_existing_agent(id) do
-      {:ok, _agent} ->
-        {:noreply,
-         socket
-         |> refresh_dashboard()
-         |> refresh_if_selected(id)
-         |> put_flash(:info, "Agent started")}
+    if agent_owned_by_current_user?(socket, id) do
+      case Runtime.start_existing_agent(id) do
+        {:ok, _agent} ->
+          {:noreply,
+           socket
+           |> refresh_dashboard()
+           |> refresh_if_selected(id)
+           |> put_flash(:info, "Agent started")}
 
-      {:error, :already_running} ->
-        {:noreply, socket |> refresh_dashboard() |> put_flash(:info, "Agent is already running")}
+        {:error, :already_running} ->
+          {:noreply,
+           socket |> refresh_dashboard() |> put_flash(:info, "Agent is already running")}
 
-      {:error, :not_found} ->
-        {:noreply, socket |> refresh_dashboard() |> put_flash(:error, "Agent not found")}
+        {:error, :not_found} ->
+          {:noreply, socket |> refresh_dashboard() |> put_flash(:error, "Agent not found")}
 
-      {:error, reason} ->
-        {:noreply,
-         socket
-         |> refresh_dashboard()
-         |> put_flash(:error, "Failed to start agent: #{inspect(reason)}")}
+        {:error, reason} ->
+          {:noreply,
+           socket
+           |> refresh_dashboard()
+           |> put_flash(:error, "Failed to start agent: #{inspect(reason)}")}
+      end
+    else
+      {:noreply, socket |> refresh_dashboard() |> put_flash(:error, "Agent not found")}
     end
   end
 
   def handle_event("stop_agent", %{"id" => id}, socket) do
-    case Runtime.stop_agent(id, "stopped_from_admin") do
-      {:ok, _} ->
-        {:noreply,
-         socket
-         |> refresh_dashboard()
-         |> refresh_if_selected(id)
-         |> put_flash(:info, "Agent stopped")}
+    if agent_owned_by_current_user?(socket, id) do
+      case Runtime.stop_agent(id, "stopped_from_admin") do
+        {:ok, _} ->
+          {:noreply,
+           socket
+           |> refresh_dashboard()
+           |> refresh_if_selected(id)
+           |> put_flash(:info, "Agent stopped")}
 
-      {:error, :not_found} ->
-        {:noreply, socket |> refresh_dashboard() |> put_flash(:error, "Agent not found")}
+        {:error, :not_found} ->
+          {:noreply, socket |> refresh_dashboard() |> put_flash(:error, "Agent not found")}
+      end
+    else
+      {:noreply, socket |> refresh_dashboard() |> put_flash(:error, "Agent not found")}
     end
   end
 
   def handle_event("delete_agent", %{"id" => id}, socket) do
-    case Runtime.delete_agent(id) do
-      :ok ->
-        socket =
-          socket
-          |> maybe_reset_editor(id)
-          |> refresh_dashboard()
-          |> put_flash(:info, "Agent deleted")
+    if agent_owned_by_current_user?(socket, id) do
+      case Runtime.delete_agent(id) do
+        :ok ->
+          socket =
+            socket
+            |> maybe_reset_editor(id)
+            |> refresh_dashboard()
+            |> put_flash(:info, "Agent deleted")
 
-        if socket.assigns.selected_agent && socket.assigns.selected_agent.id == id do
+          if socket.assigns.selected_agent && socket.assigns.selected_agent.id == id do
+            {:noreply,
+             socket
+             |> assign(
+               selected_agent: nil,
+               events: [],
+               agent_spend: nil,
+               inspection: empty_inspection()
+             )
+             |> push_patch(to: "/dashboard")}
+          else
+            {:noreply, socket}
+          end
+
+        {:error, :not_found} ->
+          {:noreply, socket |> refresh_dashboard() |> put_flash(:error, "Agent not found")}
+
+        {:error, reason} ->
           {:noreply,
            socket
-           |> assign(
-             selected_agent: nil,
-             events: [],
-             agent_spend: nil,
-             inspection: empty_inspection()
-           )
-           |> push_patch(to: "/")}
-        else
-          {:noreply, socket}
-        end
-
-      {:error, :not_found} ->
-        {:noreply, socket |> refresh_dashboard() |> put_flash(:error, "Agent not found")}
-
-      {:error, reason} ->
-        {:noreply,
-         socket
-         |> refresh_dashboard()
-         |> put_flash(:error, "Failed to delete agent: #{inspect(reason)}")}
+           |> refresh_dashboard()
+           |> put_flash(:error, "Failed to delete agent: #{inspect(reason)}")}
+      end
+    else
+      {:noreply, socket |> refresh_dashboard() |> put_flash(:error, "Agent not found")}
     end
   end
 
@@ -302,6 +317,9 @@ defmodule MaraithonWeb.DashboardLive do
     cond do
       socket.assigns.selected_agent == nil ->
         {:noreply, put_flash(socket, :error, "Select an agent first")}
+
+      not agent_owned_by_current_user?(socket, socket.assigns.selected_agent.id) ->
+        {:noreply, put_flash(socket, :error, "Agent not found")}
 
       message == "" ->
         {:noreply, put_flash(socket, :error, "Message cannot be empty")}
@@ -314,7 +332,7 @@ defmodule MaraithonWeb.DashboardLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <Layouts.app flash={@flash} current_path={@current_path}>
+    <Layouts.app flash={@flash} current_path={@current_path} current_user={@current_user}>
       <div class="space-y-6">
       <section class="rounded-2xl bg-gradient-to-r from-slate-900 via-slate-800 to-indigo-900 px-6 py-6 text-white shadow">
         <div class="flex flex-wrap items-start justify-between gap-4">
@@ -391,7 +409,7 @@ defmodule MaraithonWeb.DashboardLive do
             </p>
           </div>
           <.link
-            navigate={"/connectors?user_id=#{@connection_user_id}"}
+            navigate={"/connectors"}
             class="inline-flex items-center rounded-md bg-indigo-600 px-3 py-2 text-sm font-medium text-white hover:bg-indigo-500"
           >
             Open Connectors
@@ -446,7 +464,7 @@ defmodule MaraithonWeb.DashboardLive do
                     <td class="px-4 py-4 align-top">
                       <div class="flex flex-wrap justify-end gap-2">
                         <.link
-                          patch={"/?id=#{agent.id}"}
+                          patch={"/dashboard?id=#{agent.id}"}
                           class="inline-flex items-center rounded-md border border-gray-300 px-2.5 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
                         >
                           Inspect
@@ -1245,7 +1263,7 @@ defmodule MaraithonWeb.DashboardLive do
              )
              |> refresh_dashboard()
              |> put_flash(:info, "Agent #{String.slice(agent.id, 0, 8)} created")
-             |> push_patch(to: "/?id=#{agent.id}")}
+             |> push_patch(to: "/dashboard?id=#{agent.id}")}
 
           {:error, message} when is_binary(message) ->
             {:noreply, assign(socket, launch: launch, launch_error: message)}
@@ -1279,7 +1297,7 @@ defmodule MaraithonWeb.DashboardLive do
              |> refresh_dashboard()
              |> refresh_if_selected(id)
              |> put_flash(:info, "Agent #{String.slice(agent.id, 0, 8)} updated")
-             |> push_patch(to: "/?id=#{agent.id}")}
+             |> push_patch(to: "/dashboard?id=#{agent.id}")}
 
           {:error, message} when is_binary(message) ->
             {:noreply, assign(socket, launch: launch, launch_error: message)}
@@ -1326,9 +1344,11 @@ defmodule MaraithonWeb.DashboardLive do
 
   defp refresh_dashboard(socket, opts \\ []) do
     socket = refresh_connections(socket)
+    user_id = current_user_id(socket)
 
     socket =
       case Admin.safe_control_center_snapshot(
+             user_id: user_id,
              activity_limit: @activity_limit,
              failure_limit: @failure_limit
            ) do
@@ -1374,6 +1394,7 @@ defmodule MaraithonWeb.DashboardLive do
   defp refresh_selected_agent(socket, id, opts \\ []) do
     case Admin.safe_agent_snapshot(
            id,
+           user_id: current_user_id(socket),
            event_limit: @event_limit,
            log_limit: 80,
            health: Keyword.get(opts, :health, socket.assigns.health)
@@ -1505,7 +1526,7 @@ defmodule MaraithonWeb.DashboardLive do
     end)
   end
 
-  defp build_agent_start_params(launch) do
+  defp build_agent_start_params(launch, user_id) when is_binary(user_id) do
     behavior = launch["behavior"]
 
     cond do
@@ -1540,6 +1561,7 @@ defmodule MaraithonWeb.DashboardLive do
 
           {:ok,
            %{
+             "user_id" => user_id,
              "behavior" => behavior,
              "config" => config,
              "budget" => %{"llm_calls" => llm_calls, "tool_calls" => tool_calls}
@@ -1657,7 +1679,7 @@ defmodule MaraithonWeb.DashboardLive do
   defp refresh_connections(socket) do
     case Connections.safe_dashboard_snapshot(
            socket.assigns.connection_user_id,
-           return_to: connection_return_to(socket, socket.assigns.connection_user_id)
+           return_to: connection_return_to(socket)
          ) do
       {:ok, snapshot} ->
         assign(socket,
@@ -1676,22 +1698,12 @@ defmodule MaraithonWeb.DashboardLive do
   end
 
   defp apply_dashboard_params(socket, params, uri) do
-    user_id =
-      case params["user_id"] do
-        value when is_binary(value) ->
-          case String.trim(value) do
-            "" -> Connections.default_user_id()
-            trimmed -> trimmed
-          end
-
-        _ ->
-          Connections.default_user_id()
-      end
+    user_id = current_user_id(socket)
 
     socket =
       assign(socket,
         connection_user_id: user_id,
-        connection_return_to: connection_return_to_from_uri(uri, user_id)
+        connection_return_to: connection_return_to_from_uri(uri)
       )
 
     socket
@@ -1711,48 +1723,32 @@ defmodule MaraithonWeb.DashboardLive do
 
   defp maybe_put_oauth_flash(socket, _params), do: socket
 
-  defp connection_return_to(socket, user_id) do
-    merge_return_to_user_id(socket.assigns.connection_return_to || "/", user_id)
+  defp connection_return_to(socket) do
+    socket.assigns.connection_return_to || "/dashboard"
   end
 
-  defp connection_home_path(socket, user_id) do
+  defp connection_home_path(socket, _user_id) do
     socket.assigns.connection_return_to
     |> URI.parse()
-    |> then(fn uri -> %URI{uri | query: home_query(uri.query, user_id)} end)
+    |> then(fn uri -> %URI{uri | query: home_query(uri.query)} end)
     |> URI.to_string()
   rescue
-    _ -> "/?#{URI.encode_query(%{"user_id" => user_id})}"
+    _ -> "/dashboard"
   end
 
-  defp connection_return_to_from_uri(uri, user_id) do
+  defp connection_return_to_from_uri(uri) do
     uri = URI.parse(uri)
 
     query =
       (uri.query || "")
       |> URI.decode_query()
       |> Map.drop(["oauth_message", "oauth_provider", "oauth_status"])
-      |> Map.put("user_id", user_id)
       |> URI.encode_query()
 
     %URI{path: uri.path || "/", query: query}
     |> URI.to_string()
   rescue
-    _ -> "/?#{URI.encode_query(%{"user_id" => user_id})}"
-  end
-
-  defp merge_return_to_user_id(path, user_id) do
-    uri = URI.parse(path)
-
-    query =
-      (uri.query || "")
-      |> URI.decode_query()
-      |> Map.put("user_id", user_id)
-      |> URI.encode_query()
-
-    %URI{uri | path: uri.path || "/", query: query}
-    |> URI.to_string()
-  rescue
-    _ -> "/?#{URI.encode_query(%{"user_id" => user_id})}"
+    _ -> "/dashboard"
   end
 
   defp current_path_from_uri(uri) when is_binary(uri) do
@@ -1760,21 +1756,28 @@ defmodule MaraithonWeb.DashboardLive do
     |> URI.parse()
     |> Map.get(:path)
     |> case do
-      nil -> "/"
-      "" -> "/"
+      nil -> "/dashboard"
+      "" -> "/dashboard"
       path -> path
     end
   rescue
-    _ -> "/"
+    _ -> "/dashboard"
   end
 
-  defp home_query(query, user_id) do
+  defp home_query(query) do
     (query || "")
     |> URI.decode_query()
     |> Map.drop(["id"])
-    |> Map.put("user_id", user_id)
     |> URI.encode_query()
   end
+
+  defp current_user_id(socket), do: socket.assigns.current_user.id
+
+  defp agent_owned_by_current_user?(socket, agent_id) when is_binary(agent_id) do
+    not is_nil(Agents.get_agent_for_user(agent_id, current_user_id(socket)))
+  end
+
+  defp agent_owned_by_current_user?(_socket, _agent_id), do: false
 
   defp provider_label("google"), do: "Google"
   defp provider_label("github"), do: "GitHub"

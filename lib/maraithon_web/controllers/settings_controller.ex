@@ -1,12 +1,11 @@
 defmodule MaraithonWeb.SettingsController do
   use MaraithonWeb, :controller
 
-  alias Maraithon.Connections
-
   def index(conn, _params) do
     render(conn, :index,
       page_title: "Settings",
       current_path: ~p"/settings",
+      current_user: conn.assigns.current_user,
       runtime_items: runtime_items(),
       security_items: security_items(),
       oauth_items: oauth_items()
@@ -18,7 +17,6 @@ defmodule MaraithonWeb.SettingsController do
     llm_provider = runtime |> Keyword.get(:llm_provider) |> inspect()
 
     [
-      %{name: "Default user ID", value: Connections.default_user_id()},
       %{name: "Endpoint URL", value: MaraithonWeb.Endpoint.url()},
       %{name: "LLM provider module", value: llm_provider},
       %{name: "Anthropic model", value: Keyword.get(runtime, :anthropic_model, "not set")},
@@ -36,19 +34,34 @@ defmodule MaraithonWeb.SettingsController do
 
     [
       %{
-        name: "ADMIN_USERNAME",
+        name: "PRIMARY_ADMIN_EMAIL",
         required?: true,
-        present?: present?(Keyword.get(admin_auth, :username))
+        present?: present?(System.get_env("PRIMARY_ADMIN_EMAIL", ""))
       },
       %{
-        name: "ADMIN_PASSWORD",
+        name: "POSTMARK_SERVER_TOKEN",
         required?: true,
-        present?: present?(Keyword.get(admin_auth, :password))
+        present?: present?(System.get_env("POSTMARK_SERVER_TOKEN", ""))
+      },
+      %{
+        name: "AUTH_EMAIL_FROM",
+        required?: true,
+        present?: present?(System.get_env("AUTH_EMAIL_FROM", ""))
       },
       %{
         name: "API_BEARER_TOKEN",
         required?: true,
         present?: present?(Keyword.get(api_auth, :bearer_token))
+      },
+      %{
+        name: "ADMIN_USERNAME (fallback)",
+        required?: false,
+        present?: present?(Keyword.get(admin_auth, :username))
+      },
+      %{
+        name: "ADMIN_PASSWORD (fallback)",
+        required?: false,
+        present?: present?(Keyword.get(admin_auth, :password))
       },
       %{
         name: "CLOAK_KEY",

@@ -8,7 +8,8 @@ defmodule MaraithonWeb.Endpoint do
     store: :cookie,
     key: "_maraithon_key",
     signing_salt: "cFALZPAm",
-    same_site: "Lax"
+    same_site: "Lax",
+    max_age: 60 * 24 * 60 * 60
   ]
 
   socket "/live", Phoenix.LiveView.Socket,

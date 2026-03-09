@@ -10,12 +10,13 @@ import Config
 admin_username = System.get_env("ADMIN_USERNAME", "")
 admin_password = System.get_env("ADMIN_PASSWORD", "")
 api_bearer_token = System.get_env("API_BEARER_TOKEN", "")
+primary_admin_email = System.get_env("PRIMARY_ADMIN_EMAIL", "")
 
 if config_env() == :prod do
-  if admin_username == "" or admin_password == "" do
+  if primary_admin_email == "" do
     raise """
-    ADMIN_USERNAME and ADMIN_PASSWORD must be set in production.
-    These credentials protect the admin dashboard.
+    PRIMARY_ADMIN_EMAIL must be set in production.
+    This user is granted DB-backed browser admin access.
     """
   end
 

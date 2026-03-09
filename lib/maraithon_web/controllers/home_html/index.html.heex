@@ -1,0 +1,31 @@
+<Layouts.app flash={@flash} show_nav={false}>
+  <section class="mx-auto max-w-lg rounded-2xl border border-slate-200 bg-white p-6 shadow">
+    <p class="text-xs font-semibold uppercase tracking-[0.28em] text-indigo-500">Maraithon</p>
+    <h1 class="mt-2 text-3xl font-semibold tracking-tight text-slate-900">Sign in</h1>
+    <p class="mt-2 text-sm text-slate-600">
+      Enter your email and we'll send a secure magic link.
+    </p>
+
+    <.form for={@form} action={~p"/auth/magic-link"} method="post" class="mt-6 space-y-4">
+      <label for="magic_link_email" class="block text-sm font-medium text-slate-700">
+        Email
+      </label>
+      <input
+        id="magic_link_email"
+        type="email"
+        name="magic_link[email]"
+        value={@form[:email].value}
+        required
+        class="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm"
+      />
+      <div class="flex justify-end">
+        <button
+          type="submit"
+          class="inline-flex items-center rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500"
+        >
+          Send magic link
+        </button>
+      </div>
+    </.form>
+  </section>
+</Layouts.app>

@@ -10,6 +10,7 @@ defmodule Maraithon.Agents.Agent do
   @foreign_key_type :binary_id
 
   schema "agents" do
+    field :user_id, :string
     field :behavior, :string
     field :config, :map, default: %{}
     field :status, :string, default: "stopped"
@@ -20,7 +21,7 @@ defmodule Maraithon.Agents.Agent do
   end
 
   @required_fields [:behavior]
-  @optional_fields [:config, :status, :started_at, :stopped_at]
+  @optional_fields [:user_id, :config, :status, :started_at, :stopped_at]
 
   def changeset(agent, attrs) do
     agent

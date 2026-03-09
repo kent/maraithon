@@ -1,4 +1,4 @@
-<Layouts.app flash={@flash} current_path={@current_path}>
+<Layouts.app flash={@flash} current_path={@current_path} current_user={@current_user}>
   <div class="space-y-6">
     <section class="rounded-2xl bg-gradient-to-r from-slate-900 via-slate-800 to-indigo-900 px-6 py-6 text-white shadow">
       <div class="flex flex-wrap items-start justify-between gap-4">
@@ -12,7 +12,7 @@
           </p>
         </div>
         <div class="rounded-full bg-white/10 px-3 py-2 text-sm font-medium text-indigo-100">
-          user: <%= @connection_user_id %>
+          user: <%= @current_user.email %>
         </div>
       </div>
     </section>
@@ -20,12 +20,20 @@
     <section class="grid grid-cols-1 gap-6 xl:grid-cols-5">
       <div class="overflow-hidden rounded-xl bg-white shadow xl:col-span-2">
         <div class="border-b border-gray-200 px-4 py-4 sm:px-6">
-          <h2 class="text-lg font-medium text-gray-900">Connection Scope</h2>
+          <h2 class="text-lg font-medium text-gray-900">Connection Context</h2>
           <p class="mt-1 text-sm text-gray-500">
-            Choose the control-center user identity for server-side OAuth grants.
+            Connector tokens are scoped to your signed-in Maraithon user.
           </p>
         </div>
         <div class="space-y-4 px-4 py-5 sm:px-6">
+          <div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-3">
+            <div class="text-xs font-medium uppercase tracking-wide text-slate-500">Account</div>
+            <div class="mt-2 text-sm font-medium text-slate-900"><%= @current_user.email %></div>
+            <div class="mt-1 text-xs text-slate-600">
+              User ID: <span class="font-mono"><%= @connection_user_id %></span>
+            </div>
+          </div>
+
           <%= if @connection_errors != [] do %>
             <div class="rounded-md border border-amber-200 bg-amber-50 px-3 py-3">
               <%= for error <- @connection_errors do %>
@@ -36,30 +44,6 @@
               <% end %>
             </div>
           <% end %>
-
-          <form action={~p"/connectors"} method="get" class="space-y-3">
-            <div>
-              <label for="connection_user_id" class="block text-sm font-medium text-gray-700">
-                Control-Center User ID
-              </label>
-              <input
-                id="connection_user_id"
-                type="text"
-                name="user_id"
-                value={@connection_user_id}
-                placeholder="kent"
-                class="mt-1 block w-full rounded-md border-gray-300 text-sm shadow-sm"
-              />
-            </div>
-            <div class="flex justify-end">
-              <button
-                type="submit"
-                class="inline-flex items-center rounded-md border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
-              >
-                Load User
-              </button>
-            </div>
-          </form>
 
           <div class="rounded-lg bg-slate-50 p-3">
             <div class="text-xs font-medium uppercase tracking-wide text-slate-500">
@@ -161,12 +145,9 @@
                       <%= if provider[:disconnectable?] do %>
                         <form action={~p"/connectors/#{provider.provider}/disconnect"} method="post">
                           <input type="hidden" name="_csrf_token" value={get_csrf_token()} />
-                          <input type="hidden" name="user_id" value={@connection_user_id} />
                           <button
                             type="submit"
-                            onclick={
-                              "return confirm(\"Disconnect #{provider.label} for #{@connection_user_id}?\")"
-                            }
+                            onclick={"return confirm(\"Disconnect #{provider.label}?\")"}
                             class="inline-flex items-center rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs font-medium text-red-700 hover:bg-red-100"
                           >
                             <%= provider.disconnect_label %>

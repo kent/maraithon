@@ -6,18 +6,25 @@ defmodule MaraithonWeb.AdminNavigation do
   use MaraithonWeb, :html
 
   @tabs [
-    %{label: "Dashboard", path: "/"},
+    %{label: "Dashboard", path: "/dashboard"},
     %{label: "Connectors", path: "/connectors"},
-    %{label: "How it works", path: "/how-it-works"},
-    %{label: "Settings", path: "/settings"}
+    %{label: "How it works", path: "/how-it-works"}
   ]
 
-  attr :current_path, :string, default: "/"
+  attr :current_path, :string, default: "/dashboard"
+  attr :current_user, :map, default: nil
 
   def admin_tabs(assigns) do
+    tabs =
+      if admin_user?(assigns.current_user) do
+        @tabs ++ [%{label: "Settings", path: "/settings"}]
+      else
+        @tabs
+      end
+
     assigns =
       assigns
-      |> assign(:tabs, @tabs)
+      |> assign(:tabs, tabs)
       |> assign(:normalized_path, normalize_path(assigns.current_path))
 
     ~H"""
@@ -41,7 +48,19 @@ defmodule MaraithonWeb.AdminNavigation do
             </div>
           </div>
           <div class="hidden md:block">
-            <div class="ml-4 flex items-center md:ml-6">
+            <div class="ml-4 flex items-center gap-4 md:ml-6">
+              <%= if @current_user do %>
+                <span class="text-sm text-indigo-100"><%= @current_user.email %></span>
+                <.form for={%{}} action={~p"/logout"} method="post">
+                  <input type="hidden" name="_method" value="delete" />
+                  <button
+                    type="submit"
+                    class="rounded-md border border-indigo-300 px-2.5 py-1 text-xs font-medium text-white hover:bg-indigo-500"
+                  >
+                    Logout
+                  </button>
+                </.form>
+              <% end %>
               <span class="text-sm text-indigo-200">Long-lived LLM Agent Runtime</span>
             </div>
           </div>
@@ -51,20 +70,20 @@ defmodule MaraithonWeb.AdminNavigation do
     """
   end
 
-  defp normalize_path(nil), do: "/"
+  defp normalize_path(nil), do: "/dashboard"
 
   defp normalize_path(path) when is_binary(path) do
     path
     |> String.split("?", parts: 2)
     |> List.first()
     |> case do
-      nil -> "/"
-      "" -> "/"
+      nil -> "/dashboard"
+      "" -> "/dashboard"
       value -> value
     end
   end
 
-  defp normalize_path(_path), do: "/"
+  defp normalize_path(_path), do: "/dashboard"
 
   defp tab_link_class(current_path, tab_path) do
     base = "rounded-md px-3 py-2 text-sm font-medium"
@@ -76,6 +95,9 @@ defmodule MaraithonWeb.AdminNavigation do
     end
   end
 
-  defp active_tab?(path, "/"), do: path in ["/", "/admin"]
+  defp active_tab?(path, "/dashboard"), do: path in ["/dashboard", "/admin"]
   defp active_tab?(path, tab_path), do: path == tab_path
+
+  defp admin_user?(%{is_admin: true}), do: true
+  defp admin_user?(_), do: false
 end

@@ -10,6 +10,7 @@ defmodule Maraithon.Spend do
   """
 
   import Ecto.Query
+  alias Maraithon.Agents.Agent
   alias Maraithon.Repo
   alias Maraithon.Events.Event
 
@@ -77,12 +78,11 @@ defmodule Maraithon.Spend do
   @doc """
   Get total spend across all agents.
   """
-  def get_total_spend do
+  def get_total_spend(opts \\ []) do
+    user_id = Keyword.get(opts, :user_id)
+
     events =
-      from(e in Event,
-        where: e.event_type == "effect_completed",
-        select: e.payload
-      )
+      total_spend_query(user_id)
       |> Repo.all()
 
     Enum.reduce(events, initial_spend(), fn payload, acc ->
@@ -109,5 +109,25 @@ defmodule Maraithon.Spend do
       output_tokens: 0,
       llm_calls: 0
     }
+  end
+
+  defp total_spend_query(nil) do
+    from(e in Event,
+      where: e.event_type == "effect_completed",
+      select: e.payload
+    )
+  end
+
+  defp total_spend_query("") do
+    total_spend_query(nil)
+  end
+
+  defp total_spend_query(user_id) when is_binary(user_id) do
+    from(e in Event,
+      join: a in Agent,
+      on: a.id == e.agent_id,
+      where: e.event_type == "effect_completed" and a.user_id == ^user_id,
+      select: e.payload
+    )
   end
 end

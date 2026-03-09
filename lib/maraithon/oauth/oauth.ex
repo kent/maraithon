@@ -6,6 +6,7 @@ defmodule Maraithon.OAuth do
   """
 
   import Ecto.Query
+  alias Maraithon.ConnectedAccounts
   alias Maraithon.Repo
   alias Maraithon.OAuth.Token
 
@@ -27,16 +28,34 @@ defmodule Maraithon.OAuth do
       metadata: Map.get(token_data, :metadata, %{})
     }
 
-    case get_token(user_id, provider) do
-      nil ->
-        %Token{}
-        |> Token.changeset(attrs)
-        |> Repo.insert()
+    result =
+      case get_token(user_id, provider) do
+        nil ->
+          %Token{}
+          |> Token.changeset(attrs)
+          |> Repo.insert()
 
-      existing ->
-        existing
-        |> Token.changeset(attrs)
-        |> Repo.update()
+        existing ->
+          existing
+          |> Token.changeset(attrs)
+          |> Repo.update()
+      end
+
+    case result do
+      {:ok, _token} = ok ->
+        _ =
+          ConnectedAccounts.upsert_from_oauth(user_id, provider, %{
+            access_token: attrs.access_token,
+            refresh_token: attrs.refresh_token,
+            expires_at: attrs.expires_at,
+            scopes: attrs.scopes,
+            metadata: attrs.metadata
+          })
+
+        ok
+
+      error ->
+        error
     end
   end
 
@@ -101,7 +120,14 @@ defmodule Maraithon.OAuth do
         revoke_provider_token(token)
 
         # Delete from database
-        Repo.delete(token)
+        case Repo.delete(token) do
+          {:ok, _deleted} = ok ->
+            _ = ConnectedAccounts.mark_disconnected(user_id, provider)
+            ok
+
+          error ->
+            error
+        end
     end
   end
 

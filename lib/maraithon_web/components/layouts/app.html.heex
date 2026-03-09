@@ -1,5 +1,10 @@
 <div class="min-h-full">
-  <MaraithonWeb.AdminNavigation.admin_tabs current_path={assigns[:current_path]} />
+  <%= if Map.get(assigns, :show_nav, true) do %>
+    <MaraithonWeb.AdminNavigation.admin_tabs
+      current_path={assigns[:current_path]}
+      current_user={assigns[:current_user]}
+    />
+  <% end %>
 
   <main>
     <div class="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">

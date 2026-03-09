@@ -4,8 +4,8 @@ defmodule MaraithonWeb.ConnectorsController do
   alias Maraithon.Connections
 
   def index(conn, params) do
-    user_id = normalize_user_id(params["user_id"])
-    return_to = ~p"/connectors?user_id=#{user_id}"
+    user_id = conn.assigns.current_user.id
+    return_to = ~p"/connectors"
 
     {snapshot, degraded?} =
       case Connections.safe_dashboard_snapshot(user_id, return_to: return_to) do
@@ -21,6 +21,7 @@ defmodule MaraithonWeb.ConnectorsController do
     render(conn, :index,
       page_title: "Connectors",
       current_path: ~p"/connectors",
+      current_user: conn.assigns.current_user,
       connection_user_id: user_id,
       providers: snapshot.providers,
       raw_connections: snapshot.raw_tokens,
@@ -28,8 +29,8 @@ defmodule MaraithonWeb.ConnectorsController do
     )
   end
 
-  def disconnect(conn, %{"provider" => provider} = params) do
-    user_id = normalize_user_id(params["user_id"])
+  def disconnect(conn, %{"provider" => provider}) do
+    user_id = conn.assigns.current_user.id
 
     conn =
       case Connections.disconnect(user_id, provider) do
@@ -50,31 +51,12 @@ defmodule MaraithonWeb.ConnectorsController do
           )
       end
 
-    redirect(conn, to: ~p"/connectors?user_id=#{user_id}")
+    redirect(conn, to: ~p"/connectors")
   end
 
-  def legacy_redirect(conn, params) do
-    user_id =
-      case Map.get(params, "user_id") do
-        value when is_binary(value) and value != "" -> value
-        _ -> nil
-      end
-
-    if is_nil(user_id) do
-      redirect(conn, to: ~p"/connectors")
-    else
-      redirect(conn, to: ~p"/connectors?user_id=#{user_id}")
-    end
+  def legacy_redirect(conn, _params) do
+    redirect(conn, to: ~p"/connectors")
   end
-
-  defp normalize_user_id(value) when is_binary(value) do
-    case String.trim(value) do
-      "" -> Connections.default_user_id()
-      user_id -> user_id
-    end
-  end
-
-  defp normalize_user_id(_value), do: Connections.default_user_id()
 
   defp maybe_put_oauth_flash(conn, %{"oauth_status" => "connected", "oauth_message" => message})
        when is_binary(message) do

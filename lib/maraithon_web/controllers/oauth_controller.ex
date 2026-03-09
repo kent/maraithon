@@ -24,7 +24,7 @@ defmodule MaraithonWeb.OAuthController do
   GET /auth/google?scopes=calendar,gmail&user_id=xxx
   """
   def google(conn, params) do
-    with {:ok, user_id} <- required_param(params, "user_id", "user_id is required"),
+    with {:ok, user_id} <- resolve_user_id(conn, params),
          {:ok, services} <- google_services(params["scopes"]),
          {:ok, return_to} <- optional_return_to(params) do
       state = encode_google_state(user_id, services, return_to)
@@ -42,7 +42,10 @@ defmodule MaraithonWeb.OAuthController do
   def google_callback(conn, %{"code" => code, "state" => state}) do
     case decode_google_state(state) do
       {:ok, user_id, services, state_payload} ->
-        handle_google_tokens(conn, code, user_id, services, state_payload)
+        case ensure_user_matches(conn, user_id) do
+          :ok -> handle_google_tokens(conn, code, user_id, services, state_payload)
+          {:error, reason} -> bad_request(conn, reason)
+        end
 
       {:error, reason} ->
         Logger.warning("Invalid OAuth state", reason: inspect(reason))
@@ -70,7 +73,7 @@ defmodule MaraithonWeb.OAuthController do
   GET /auth/github?user_id=xxx
   """
   def github(conn, params) do
-    with {:ok, user_id} <- required_param(params, "user_id", "user_id is required"),
+    with {:ok, user_id} <- resolve_user_id(conn, params),
          {:ok, return_to} <- optional_return_to(params) do
       {code_verifier, code_challenge} = pkce_pair()
 
@@ -99,7 +102,10 @@ defmodule MaraithonWeb.OAuthController do
   def github_callback(conn, %{"code" => code, "state" => state}) do
     case decode_provider_state(state, "github") do
       {:ok, user_id, state_payload} ->
-        handle_github_tokens(conn, code, user_id, state_payload)
+        case ensure_user_matches(conn, user_id) do
+          :ok -> handle_github_tokens(conn, code, user_id, state_payload)
+          {:error, reason} -> bad_request(conn, reason)
+        end
 
       {:error, _reason} ->
         bad_request(conn, "Invalid state parameter")
@@ -118,7 +124,7 @@ defmodule MaraithonWeb.OAuthController do
   GET /auth/slack?user_id=xxx
   """
   def slack(conn, params) do
-    with {:ok, user_id} <- required_param(params, "user_id", "user_id is required"),
+    with {:ok, user_id} <- resolve_user_id(conn, params),
          {:ok, return_to} <- optional_return_to(params) do
       state = encode_provider_state("slack", user_id, %{"return_to" => return_to})
       auth_url = Slack.authorize_url(Slack.default_scopes(), state)
@@ -134,7 +140,10 @@ defmodule MaraithonWeb.OAuthController do
   def slack_callback(conn, %{"code" => code, "state" => state}) do
     case decode_provider_state(state, "slack") do
       {:ok, user_id, state_payload} ->
-        handle_slack_tokens(conn, code, user_id, state_payload)
+        case ensure_user_matches(conn, user_id) do
+          :ok -> handle_slack_tokens(conn, code, user_id, state_payload)
+          {:error, reason} -> bad_request(conn, reason)
+        end
 
       {:error, _reason} ->
         bad_request(conn, "Invalid state parameter")
@@ -153,7 +162,7 @@ defmodule MaraithonWeb.OAuthController do
   GET /auth/linear?user_id=xxx
   """
   def linear(conn, params) do
-    with {:ok, user_id} <- required_param(params, "user_id", "user_id is required"),
+    with {:ok, user_id} <- resolve_user_id(conn, params),
          {:ok, return_to} <- optional_return_to(params) do
       state = encode_provider_state("linear", user_id, %{"return_to" => return_to})
       auth_url = Linear.authorize_url(Linear.default_scopes(), state)
@@ -169,7 +178,10 @@ defmodule MaraithonWeb.OAuthController do
   def linear_callback(conn, %{"code" => code, "state" => state}) do
     case decode_provider_state(state, "linear") do
       {:ok, user_id, state_payload} ->
-        handle_linear_tokens(conn, code, user_id, state_payload)
+        case ensure_user_matches(conn, user_id) do
+          :ok -> handle_linear_tokens(conn, code, user_id, state_payload)
+          {:error, reason} -> bad_request(conn, reason)
+        end
 
       {:error, _reason} ->
         bad_request(conn, "Invalid state parameter")
@@ -188,7 +200,7 @@ defmodule MaraithonWeb.OAuthController do
   GET /auth/notion?user_id=xxx
   """
   def notion(conn, params) do
-    with {:ok, user_id} <- required_param(params, "user_id", "user_id is required"),
+    with {:ok, user_id} <- resolve_user_id(conn, params),
          {:ok, return_to} <- optional_return_to(params) do
       state = encode_provider_state("notion", user_id, %{"return_to" => return_to})
       auth_url = Notion.authorize_url(state)
@@ -205,7 +217,10 @@ defmodule MaraithonWeb.OAuthController do
   def notion_callback(conn, %{"code" => code, "state" => state}) do
     case decode_provider_state(state, "notion") do
       {:ok, user_id, state_payload} ->
-        handle_notion_tokens(conn, code, user_id, state_payload)
+        case ensure_user_matches(conn, user_id) do
+          :ok -> handle_notion_tokens(conn, code, user_id, state_payload)
+          {:error, reason} -> bad_request(conn, reason)
+        end
 
       {:error, _reason} ->
         bad_request(conn, "Invalid state parameter")
@@ -528,6 +543,21 @@ defmodule MaraithonWeb.OAuthController do
 
       _ ->
         {:error, message}
+    end
+  end
+
+  defp resolve_user_id(conn, params) do
+    with {:ok, user_id} <- required_param(params, "user_id", "user_id is required"),
+         :ok <- ensure_user_matches(conn, user_id) do
+      {:ok, user_id}
+    end
+  end
+
+  defp ensure_user_matches(conn, _user_id) do
+    if conn.assigns[:current_user] do
+      :ok
+    else
+      {:error, "Authentication required"}
     end
   end
 

@@ -118,8 +118,23 @@ defmodule MaraithonWeb.DashboardLiveTest do
 
   alias Maraithon.Agents
   alias Maraithon.Effects.Effect
+  alias Maraithon.OAuth
   alias Maraithon.Runtime
   alias Maraithon.Runtime.ScheduledJob
+
+  @user_email "user@example.com"
+
+  setup %{conn: conn} do
+    conn = log_in_test_user(conn, @user_email)
+
+    {:ok, _token} =
+      OAuth.store_tokens(@user_email, "github", %{
+        access_token: "dashboard-test-token",
+        scopes: ["repo"]
+      })
+
+    {:ok, conn: conn}
+  end
 
   # ============================================================================
   # INITIAL MOUNT TESTS
@@ -134,7 +149,7 @@ defmodule MaraithonWeb.DashboardLiveTest do
     This is the "empty state" - what new users see before creating agents.
     """
     test "renders dashboard with no agents", %{conn: conn} do
-      {:ok, view, html} = live(conn, "/")
+      {:ok, view, html} = live(conn, "/dashboard")
 
       assert html =~ "Dashboard"
       assert html =~ "Total Agents"
@@ -148,7 +163,7 @@ defmodule MaraithonWeb.DashboardLiveTest do
     test "renders the LiveView bootstrap script", %{conn: conn} do
       html =
         conn
-        |> get("/")
+        |> get("/dashboard")
         |> html_response(200)
 
       assert html =~ "new window.LiveView.LiveSocket"
@@ -161,14 +176,14 @@ defmodule MaraithonWeb.DashboardLiveTest do
     """
     test "renders agents list", %{conn: conn} do
       {:ok, _agent} =
-        Agents.create_agent(%{
+        create_agent(%{
           behavior: "prompt_agent",
           config: %{},
           status: "running",
           started_at: DateTime.utc_now()
         })
 
-      {:ok, view, html} = live(conn, "/")
+      {:ok, view, html} = live(conn, "/dashboard")
 
       assert html =~ "prompt_agent"
       refute html =~ "No agents yet"
@@ -179,7 +194,7 @@ defmodule MaraithonWeb.DashboardLiveTest do
     Verifies that admin-specific monitoring panels are rendered.
     """
     test "renders health and logs sections", %{conn: conn} do
-      {:ok, view, _html} = live(conn, "/")
+      {:ok, view, _html} = live(conn, "/dashboard")
 
       assert has_element?(view, "h2", "Connectors")
       assert has_element?(view, "h2", "Health & Monitoring")
@@ -190,7 +205,7 @@ defmodule MaraithonWeb.DashboardLiveTest do
     end
 
     test "shows connectors are available from the dedicated tab", %{conn: conn} do
-      {:ok, _view, html} = live(conn, "/")
+      {:ok, _view, html} = live(conn, "/dashboard")
 
       assert html =~
                "Connected Accounts and OAuth configuration now live in the dedicated Connectors tab."
@@ -211,7 +226,7 @@ defmodule MaraithonWeb.DashboardLiveTest do
         Maraithon.LogBuffer.clear()
       end)
 
-      {:ok, _view, html} = live(conn, "/")
+      {:ok, _view, html} = live(conn, "/dashboard")
 
       assert html =~ "Raw Logs"
       assert html =~ "runtime booted"
@@ -235,7 +250,7 @@ defmodule MaraithonWeb.DashboardLiveTest do
         receive_timeout_ms: 1_000
       )
 
-      {:ok, _view, html} = live(conn, "/")
+      {:ok, _view, html} = live(conn, "/dashboard")
 
       assert html =~ "Fly.io Platform Logs"
       assert html =~ "Configure `FLY_API_TOKEN` and `FLY_LOG_APPS`"
@@ -244,7 +259,7 @@ defmodule MaraithonWeb.DashboardLiveTest do
 
   describe "launch agent form" do
     test "launches an agent from the admin UI", %{conn: conn} do
-      {:ok, view, _html} = live(conn, "/")
+      {:ok, view, _html} = live(conn, "/dashboard")
 
       _html =
         view
@@ -279,7 +294,7 @@ defmodule MaraithonWeb.DashboardLiveTest do
 
     test "updates a stopped agent from the admin UI", %{conn: conn} do
       {:ok, agent} =
-        Agents.create_agent(%{
+        create_agent(%{
           behavior: "prompt_agent",
           config: %{
             "name" => "before-edit",
@@ -292,7 +307,7 @@ defmodule MaraithonWeb.DashboardLiveTest do
           status: "stopped"
         })
 
-      {:ok, view, _html} = live(conn, "/")
+      {:ok, view, _html} = live(conn, "/dashboard")
 
       view
       |> element("button[phx-click=edit_agent][phx-value-id=\"#{agent.id}\"]")
@@ -332,13 +347,13 @@ defmodule MaraithonWeb.DashboardLiveTest do
 
     test "deletes a stopped agent from the admin UI", %{conn: conn} do
       {:ok, agent} =
-        Agents.create_agent(%{
+        create_agent(%{
           behavior: "prompt_agent",
           config: %{"name" => "delete-me"},
           status: "stopped"
         })
 
-      {:ok, view, _html} = live(conn, "/")
+      {:ok, view, _html} = live(conn, "/dashboard")
 
       _html =
         view
@@ -365,14 +380,14 @@ defmodule MaraithonWeb.DashboardLiveTest do
     """
     test "shows agent details when id param provided", %{conn: conn} do
       {:ok, agent} =
-        Agents.create_agent(%{
+        create_agent(%{
           behavior: "watchdog_summarizer",
           config: %{"budget" => %{"llm_calls" => 100, "tool_calls" => 50}},
           status: "running",
           started_at: DateTime.utc_now()
         })
 
-      {:ok, view, html} = live(conn, "/?id=#{agent.id}")
+      {:ok, view, html} = live(conn, "/dashboard?id=#{agent.id}")
 
       assert html =~ "Agent Details"
       assert html =~ "watchdog_summarizer"
@@ -385,10 +400,10 @@ defmodule MaraithonWeb.DashboardLiveTest do
     Users shouldn't see an error page - they're redirected to dashboard root.
     """
     test "redirects to root for non-existent agent id", %{conn: conn} do
-      result = live(conn, "/?id=#{Ecto.UUID.generate()}")
+      result = live(conn, "/dashboard?id=#{Ecto.UUID.generate()}")
 
       # Should redirect back to root
-      assert {:error, {:live_redirect, %{to: "/?user_id=operator"}}} = result
+      assert {:error, {:live_redirect, %{to: "/dashboard?"}}} = result
     end
 
     @doc """
@@ -397,14 +412,14 @@ defmodule MaraithonWeb.DashboardLiveTest do
     """
     test "shows events for selected agent", %{conn: conn} do
       {:ok, agent} =
-        Agents.create_agent(%{
+        create_agent(%{
           behavior: "prompt_agent",
           config: %{"budget" => %{"llm_calls" => 100, "tool_calls" => 50}},
           status: "running",
           started_at: DateTime.utc_now()
         })
 
-      {:ok, _view, html} = live(conn, "/?id=#{agent.id}")
+      {:ok, _view, html} = live(conn, "/dashboard?id=#{agent.id}")
 
       assert html =~ "Recent Events"
     end
@@ -415,14 +430,14 @@ defmodule MaraithonWeb.DashboardLiveTest do
     """
     test "shows agent spend", %{conn: conn} do
       {:ok, agent} =
-        Agents.create_agent(%{
+        create_agent(%{
           behavior: "prompt_agent",
           config: %{"budget" => %{"llm_calls" => 100, "tool_calls" => 50}},
           status: "running",
           started_at: DateTime.utc_now()
         })
 
-      {:ok, _view, html} = live(conn, "/?id=#{agent.id}")
+      {:ok, _view, html} = live(conn, "/dashboard?id=#{agent.id}")
 
       assert html =~ "Agent Spend"
       assert html =~ "LLM Calls"
@@ -444,11 +459,11 @@ defmodule MaraithonWeb.DashboardLiveTest do
     This simulates an agent being created while the user is viewing the dashboard.
     """
     test "refreshes data periodically", %{conn: conn} do
-      {:ok, view, _html} = live(conn, "/")
+      {:ok, view, _html} = live(conn, "/dashboard")
 
       # Create an agent after initial load
       {:ok, _agent} =
-        Agents.create_agent(%{
+        create_agent(%{
           behavior: "prompt_agent",
           config: %{},
           status: "running",
@@ -470,14 +485,14 @@ defmodule MaraithonWeb.DashboardLiveTest do
     """
     test "refreshes selected agent data", %{conn: conn} do
       {:ok, agent} =
-        Agents.create_agent(%{
+        create_agent(%{
           behavior: "prompt_agent",
           config: %{"budget" => %{"llm_calls" => 100, "tool_calls" => 50}},
           status: "running",
           started_at: DateTime.utc_now()
         })
 
-      {:ok, view, _html} = live(conn, "/?id=#{agent.id}")
+      {:ok, view, _html} = live(conn, "/dashboard?id=#{agent.id}")
 
       # Trigger refresh
       send(view.pid, :refresh)
@@ -495,14 +510,14 @@ defmodule MaraithonWeb.DashboardLiveTest do
     """
     test "clears selected agent if agent not found during refresh", %{conn: conn} do
       {:ok, agent} =
-        Agents.create_agent(%{
+        create_agent(%{
           behavior: "prompt_agent",
           config: %{"budget" => %{"llm_calls" => 100, "tool_calls" => 50}},
           status: "running",
           started_at: DateTime.utc_now()
         })
 
-      {:ok, view, _html} = live(conn, "/?id=#{agent.id}")
+      {:ok, view, _html} = live(conn, "/dashboard?id=#{agent.id}")
 
       # Delete the agent
       Maraithon.Repo.delete(agent)
@@ -532,14 +547,14 @@ defmodule MaraithonWeb.DashboardLiveTest do
     """
     test "shows green badge for running agents", %{conn: conn} do
       {:ok, _agent} =
-        Agents.create_agent(%{
+        create_agent(%{
           behavior: "prompt_agent",
           config: %{},
           status: "running",
           started_at: DateTime.utc_now()
         })
 
-      {:ok, _view, html} = live(conn, "/")
+      {:ok, _view, html} = live(conn, "/dashboard")
 
       assert html =~ "text-green-600"
     end
@@ -559,14 +574,14 @@ defmodule MaraithonWeb.DashboardLiveTest do
     """
     test "formats times correctly in event list", %{conn: conn} do
       {:ok, agent} =
-        Agents.create_agent(%{
+        create_agent(%{
           behavior: "prompt_agent",
           config: %{"budget" => %{"llm_calls" => 100, "tool_calls" => 50}},
           status: "running",
           started_at: DateTime.utc_now()
         })
 
-      {:ok, _view, html} = live(conn, "/?id=#{agent.id}")
+      {:ok, _view, html} = live(conn, "/dashboard?id=#{agent.id}")
 
       # Should show time in HH:MM:SS format
       assert html =~ ~r/\d{2}:\d{2}:\d{2}/
@@ -587,14 +602,14 @@ defmodule MaraithonWeb.DashboardLiveTest do
     """
     test "clicking an agent updates the URL and shows details", %{conn: conn} do
       {:ok, agent} =
-        Agents.create_agent(%{
+        create_agent(%{
           behavior: "prompt_agent",
           config: %{"budget" => %{"llm_calls" => 100, "tool_calls" => 50}},
           status: "running",
           started_at: DateTime.utc_now()
         })
 
-      {:ok, view, _html} = live(conn, "/")
+      {:ok, view, _html} = live(conn, "/dashboard")
 
       # Click on the agent link
       html =
@@ -604,7 +619,7 @@ defmodule MaraithonWeb.DashboardLiveTest do
 
       assert html =~ "Agent Details"
       assert html =~ agent.id
-      assert_patch(view, "/?id=#{agent.id}")
+      assert_patch(view, "/dashboard?id=#{agent.id}")
     end
   end
 
@@ -622,7 +637,7 @@ defmodule MaraithonWeb.DashboardLiveTest do
     """
     test "shows stopped badge", %{conn: conn} do
       {:ok, _agent} =
-        Agents.create_agent(%{
+        create_agent(%{
           behavior: "prompt_agent",
           config: %{},
           status: "stopped",
@@ -630,7 +645,7 @@ defmodule MaraithonWeb.DashboardLiveTest do
           stopped_at: DateTime.utc_now()
         })
 
-      {:ok, _view, html} = live(conn, "/")
+      {:ok, _view, html} = live(conn, "/dashboard")
 
       assert html =~ "text-gray-500" or html =~ "stopped"
     end
@@ -641,14 +656,14 @@ defmodule MaraithonWeb.DashboardLiveTest do
     """
     test "shows degraded badge", %{conn: conn} do
       {:ok, _agent} =
-        Agents.create_agent(%{
+        create_agent(%{
           behavior: "prompt_agent",
           config: %{},
           status: "degraded",
           started_at: DateTime.utc_now()
         })
 
-      {:ok, _view, html} = live(conn, "/")
+      {:ok, _view, html} = live(conn, "/dashboard")
 
       # Degraded status should be shown
       assert html =~ "degraded" or html =~ "text-amber"
@@ -669,7 +684,7 @@ defmodule MaraithonWeb.DashboardLiveTest do
     """
     test "shows events list", %{conn: conn} do
       {:ok, agent} =
-        Agents.create_agent(%{
+        create_agent(%{
           behavior: "prompt_agent",
           config: %{"budget" => %{"llm_calls" => 100, "tool_calls" => 50}},
           status: "running",
@@ -680,7 +695,7 @@ defmodule MaraithonWeb.DashboardLiveTest do
       {:ok, _event} =
         Maraithon.Events.append(agent.id, "test_event", %{message: "test"})
 
-      {:ok, _view, html} = live(conn, "/?id=#{agent.id}")
+      {:ok, _view, html} = live(conn, "/dashboard?id=#{agent.id}")
 
       assert html =~ "Recent Events"
       assert html =~ "test_event"
@@ -690,7 +705,7 @@ defmodule MaraithonWeb.DashboardLiveTest do
       Maraithon.LogBuffer.clear()
 
       {:ok, agent} =
-        Agents.create_agent(%{
+        create_agent(%{
           behavior: "prompt_agent",
           config: %{
             "name" => "inspected-agent",
@@ -736,7 +751,7 @@ defmodule MaraithonWeb.DashboardLiveTest do
         Maraithon.LogBuffer.clear()
       end)
 
-      {:ok, _view, html} = live(conn, "/?id=#{agent.id}")
+      {:ok, _view, html} = live(conn, "/dashboard?id=#{agent.id}")
 
       assert html =~ "Effect Queue"
       assert html =~ "tool_call"
@@ -762,7 +777,7 @@ defmodule MaraithonWeb.DashboardLiveTest do
     """
     test "displays nil started_at correctly", %{conn: conn} do
       {:ok, agent} =
-        Agents.create_agent(%{
+        create_agent(%{
           behavior: "prompt_agent",
           config: %{"budget" => %{"llm_calls" => 100, "tool_calls" => 50}},
           status: "stopped"
@@ -773,7 +788,7 @@ defmodule MaraithonWeb.DashboardLiveTest do
       |> Ecto.Changeset.change(%{started_at: nil})
       |> Maraithon.Repo.update!()
 
-      {:ok, _view, html} = live(conn, "/?id=#{agent.id}")
+      {:ok, _view, html} = live(conn, "/dashboard?id=#{agent.id}")
 
       assert html =~ "Started"
       assert html =~ "N/A"
@@ -794,7 +809,7 @@ defmodule MaraithonWeb.DashboardLiveTest do
     """
     test "shows correct count of running agents", %{conn: conn} do
       {:ok, _running1} =
-        Agents.create_agent(%{
+        create_agent(%{
           behavior: "prompt_agent",
           config: %{},
           status: "running",
@@ -802,7 +817,7 @@ defmodule MaraithonWeb.DashboardLiveTest do
         })
 
       {:ok, _running2} =
-        Agents.create_agent(%{
+        create_agent(%{
           behavior: "watchdog_summarizer",
           config: %{},
           status: "running",
@@ -810,17 +825,22 @@ defmodule MaraithonWeb.DashboardLiveTest do
         })
 
       {:ok, _stopped} =
-        Agents.create_agent(%{
+        create_agent(%{
           behavior: "prompt_agent",
           config: %{},
           status: "stopped"
         })
 
-      {:ok, _view, html} = live(conn, "/")
+      {:ok, _view, html} = live(conn, "/dashboard")
 
       # Should show 2 running agents in the Running stat card
       assert html =~ "Running"
       assert html =~ "Total Agents"
     end
+  end
+
+  defp create_agent(attrs) do
+    attrs = Map.put_new(attrs, :user_id, @user_email)
+    Agents.create_agent(attrs)
   end
 end

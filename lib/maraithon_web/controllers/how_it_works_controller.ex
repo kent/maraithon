@@ -5,6 +5,7 @@ defmodule MaraithonWeb.HowItWorksController do
     render(conn, :index,
       page_title: "How it works",
       current_path: ~p"/how-it-works",
+      current_user: conn.assigns.current_user,
       stages: stages(),
       principles: principles()
     )

@@ -12,6 +12,7 @@ defmodule Maraithon.Application do
       # Encryption vault (must start before Repo for encrypted fields)
       Maraithon.Vault,
       Maraithon.Repo,
+      Maraithon.Accounts.AdminBootstrap,
       {DNSCluster, query: Application.get_env(:maraithon, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: Maraithon.PubSub},
       Maraithon.LogBuffer,

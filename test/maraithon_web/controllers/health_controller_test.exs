@@ -37,7 +37,7 @@ defmodule MaraithonWeb.HealthControllerTest do
     test "requires basic auth when configured", %{conn: conn} do
       Application.put_env(:maraithon, :admin_auth, username: "admin", password: "secret")
 
-      conn = get(conn, "/")
+      conn = get(conn, "/settings")
 
       assert response(conn, 401)
       assert get_resp_header(conn, "www-authenticate") == ["Basic realm=\"Application\""]
@@ -51,9 +51,9 @@ defmodule MaraithonWeb.HealthControllerTest do
       conn =
         conn
         |> put_req_header("authorization", auth_value)
-        |> get("/")
+        |> get("/settings")
 
-      assert html_response(conn, 200) =~ "Dashboard"
+      assert html_response(conn, 200) =~ "Settings"
     end
   end
 
