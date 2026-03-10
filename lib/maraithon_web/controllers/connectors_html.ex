@@ -17,8 +17,9 @@ defmodule MaraithonWeb.ConnectorsHTML do
   def setup_completion_text(%{setup_status: :configured}), do: "Connector configured"
   def setup_completion_text(_provider), do: "Connector setup required"
 
-  def connection_primary_action(%{provider: "google", status: :connected}),
-    do: "Update Google Access"
+  def connection_primary_action(%{provider: "google", status: status})
+      when status in [:connected, :partial],
+      do: "Add Google Account"
 
   def connection_primary_action(%{provider: "google"}), do: "Connect Google"
 

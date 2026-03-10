@@ -34,6 +34,36 @@
           <p :for={detail <- @provider.details}><%= detail %></p>
         </div>
 
+        <%= if @provider[:accounts] && @provider.accounts != [] do %>
+          <div class="mt-5 rounded-lg border border-slate-200 bg-slate-50 p-4">
+            <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Connected Accounts</p>
+            <div class="mt-3 space-y-2">
+              <%= for account <- @provider.accounts do %>
+                <div class="flex flex-wrap items-center justify-between gap-2 rounded-md border border-slate-200 bg-white px-3 py-2">
+                  <div>
+                    <p class="text-sm font-medium text-slate-800"><%= account.account %></p>
+                    <p class="mt-1 text-xs text-slate-500">
+                      Updated <%= format_datetime(account.updated_at) %>
+                    </p>
+                  </div>
+                  <form action={~p"/connectors/#{@provider.provider}/disconnect"} method="post">
+                    <input type="hidden" name="_csrf_token" value={get_csrf_token()} />
+                    <input type="hidden" name="return_to" value={~p"/connectors/#{@provider.provider}"} />
+                    <input type="hidden" name="provider_key" value={account.provider} />
+                    <input type="hidden" name="account_label" value={account.account} />
+                    <button
+                      type="submit"
+                      class="inline-flex items-center rounded-md border border-rose-200 bg-rose-50 px-2.5 py-1.5 text-xs font-medium text-rose-700 hover:bg-rose-100"
+                    >
+                      Disconnect
+                    </button>
+                  </form>
+                </div>
+              <% end %>
+            </div>
+          </div>
+        <% end %>
+
         <div class="mt-5 rounded-lg border border-slate-200 bg-slate-50 p-4">
           <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Stored Grant</p>
           <%= if @token do %>

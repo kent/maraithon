@@ -79,6 +79,17 @@ defmodule Maraithon.OAuth.TokenTest do
       assert changeset.valid?
     end
 
+    test "validates provider - google with account suffix" do
+      changeset =
+        Token.changeset(%Token{}, %{
+          user_id: "user_123",
+          provider: "google:founder@example.com",
+          access_token: "token"
+        })
+
+      assert changeset.valid?
+    end
+
     test "validates provider - slack with team_id" do
       changeset =
         Token.changeset(%Token{}, %{

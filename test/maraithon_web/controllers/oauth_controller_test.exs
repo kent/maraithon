@@ -698,6 +698,63 @@ defmodule MaraithonWeb.OAuthControllerTest do
       assert response["user_id"] == "user_456"
       assert response["services"] == ["calendar"]
     end
+
+    test "stores Google tokens under account-specific provider when identity is available", %{
+      conn: conn
+    } do
+      bypass = Bypass.open()
+
+      Application.put_env(:maraithon, :google,
+        client_id: "test_google_client_id",
+        client_secret: "test_google_client_secret",
+        redirect_uri: "http://localhost:4000/auth/google/callback",
+        token_url: "http://localhost:#{bypass.port}/token",
+        userinfo_url: "http://localhost:#{bypass.port}/userinfo"
+      )
+
+      Bypass.expect_once(bypass, "POST", "/token", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{
+            "access_token" => "google_access_token",
+            "refresh_token" => "google_refresh_token",
+            "expires_in" => 3600,
+            "scope" =>
+              "https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/userinfo.email",
+            "token_type" => "Bearer"
+          })
+        )
+      end)
+
+      Bypass.expect_once(bypass, "GET", "/userinfo", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{
+            "email" => "Founder@Example.com",
+            "name" => "Founder",
+            "sub" => "google-sub-123"
+          })
+        )
+      end)
+
+      state = signed_google_state("user_999", ["calendar"])
+      conn = get(conn, "/auth/google/callback", %{code: "valid_code", state: state})
+      response = json_response(conn, 200)
+
+      assert response["status"] == "connected"
+      assert response["user_id"] == "user_999"
+
+      token = Maraithon.OAuth.get_token("user_999", "google:founder@example.com")
+      assert token
+      assert token.access_token == "google_access_token"
+      assert get_in(token.metadata, ["account_email"]) == "founder@example.com"
+      assert get_in(token.metadata, ["account_name"]) == "Founder"
+      assert get_in(token.metadata, ["account_sub"]) == "google-sub-123"
+    end
   end
 
   describe "GET /auth/slack/callback with successful token exchange" do

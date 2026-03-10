@@ -66,11 +66,12 @@ defmodule Maraithon.Connections do
       |> Enum.sort_by(&provider_sort_key/1)
 
     token_by_provider = Map.new(tokens, &{&1.provider, &1})
+    google_tokens = Enum.filter(tokens, &google_provider?(&1.provider))
     slack_tokens = Enum.filter(tokens, &slack_provider?(&1.provider))
     telegram_account = ConnectedAccounts.get(user_id, "telegram")
 
     providers = [
-      google_card(user_id, token_by_provider["google"], return_to),
+      google_card(user_id, google_tokens, return_to),
       github_card(user_id, token_by_provider["github"], return_to),
       slack_card(user_id, slack_tokens, return_to),
       telegram_card(user_id, telegram_account, return_to),
@@ -91,7 +92,23 @@ defmodule Maraithon.Connections do
   @doc """
   Disconnects a provider grant for the given control-center user.
   """
-  def disconnect(user_id, provider) when provider in ["github", "google", "linear", "notion"] do
+  def disconnect(user_id, "google") when is_binary(user_id) do
+    google_providers =
+      OAuth.list_user_tokens(user_id)
+      |> Enum.map(& &1.provider)
+      |> Enum.filter(&google_provider?/1)
+      |> Enum.uniq()
+
+    case google_providers do
+      [] ->
+        {:error, :no_token}
+
+      providers ->
+        revoke_many(user_id, providers)
+    end
+  end
+
+  def disconnect(user_id, "google:" <> _ = provider) when is_binary(user_id) do
     OAuth.revoke(user_id, provider)
   end
 
@@ -107,19 +124,7 @@ defmodule Maraithon.Connections do
         {:error, :no_token}
 
       providers ->
-        errors =
-          Enum.reduce(providers, [], fn provider, acc ->
-            case OAuth.revoke(user_id, provider) do
-              {:ok, _deleted} -> acc
-              {:error, :no_token} -> acc
-              {:error, reason} -> [{provider, reason} | acc]
-            end
-          end)
-
-        case Enum.reverse(errors) do
-          [] -> {:ok, %{revoked: length(providers)}}
-          failures -> {:error, {:partial_disconnect, failures}}
-        end
+        revoke_many(user_id, providers)
     end
   end
 
@@ -127,12 +132,34 @@ defmodule Maraithon.Connections do
     ConnectedAccounts.mark_disconnected(user_id, "telegram")
   end
 
+  def disconnect(user_id, provider)
+      when is_binary(user_id) and is_binary(provider) and
+             provider in ["github", "linear", "notion"] do
+    OAuth.revoke(user_id, provider)
+  end
+
   def disconnect(_user_id, _provider), do: {:error, :unsupported_provider}
+
+  defp revoke_many(user_id, providers) when is_binary(user_id) and is_list(providers) do
+    errors =
+      Enum.reduce(providers, [], fn provider, acc ->
+        case OAuth.revoke(user_id, provider) do
+          {:ok, _deleted} -> acc
+          {:error, :no_token} -> acc
+          {:error, reason} -> [{provider, reason} | acc]
+        end
+      end)
+
+    case Enum.reverse(errors) do
+      [] -> {:ok, %{revoked: length(providers)}}
+      failures -> {:error, {:partial_disconnect, failures}}
+    end
+  end
 
   defp fallback_snapshot(user_id, return_to, reason) do
     providers =
       [
-        google_card(user_id, nil, return_to),
+        google_card(user_id, [], return_to),
         github_card(user_id, nil, return_to),
         slack_card(user_id, [], return_to),
         telegram_card(user_id, nil, return_to),
@@ -156,28 +183,30 @@ defmodule Maraithon.Connections do
     }
   end
 
-  defp google_card(user_id, token, return_to) do
+  defp google_card(user_id, tokens, return_to) when is_list(tokens) do
+    configured? = Google.configured?()
+    primary_token = primary_google_token(tokens)
+    account_entries = google_account_entries(tokens)
+    granted_scope_count = tokens |> Enum.flat_map(&token_scopes/1) |> Enum.uniq() |> length()
+
     services =
       Enum.map(@google_services, fn service ->
         required_scopes = Google.scopes_for([service.id])
-        connected? = google_service_connected?(token, required_scopes)
+        connected? = Enum.any?(tokens, &google_service_connected?(&1, required_scopes))
 
         %{
           id: service.id,
           label: service.label,
           description: service.description,
-          status: google_service_status(token, connected?),
+          status: google_service_status(configured?, tokens, connected?),
           connect_url: auth_url("/auth/google", user_id, return_to, scopes: service.id)
         }
       end)
 
-    configured? = Google.configured?()
-    google_scopes = token_scope_set(token)
-
     status =
       cond do
         not configured? -> :not_configured
-        is_nil(token) -> :disconnected
+        tokens == [] -> :disconnected
         Enum.all?(services, &(&1.status == :connected)) -> :connected
         true -> :partial
       end
@@ -189,16 +218,21 @@ defmodule Maraithon.Connections do
       description: "Server-side OAuth for Gmail, Calendar, and Contacts.",
       status: status,
       configured?: configured?,
-      updated_at: token && token.updated_at,
-      disconnectable?: not is_nil(token),
+      updated_at: latest_updated_at(tokens),
+      disconnectable?: tokens != [],
       connect_url:
         auth_url("/auth/google", user_id, return_to, scopes: "gmail,calendar,contacts"),
       disconnect_label: "Disconnect Google",
       details:
-        google_details(token, [
-          "Granted #{MapSet.size(google_scopes)} Google OAuth scopes"
+        google_details(primary_token, [
+          if(account_entries != [],
+            do:
+              "Connected accounts: #{account_entries |> Enum.map(& &1.account) |> Enum.join(", ")}"
+          ),
+          "Granted #{granted_scope_count} Google OAuth scopes"
         ]),
-      services: services
+      services: services,
+      accounts: account_entries
     }
     |> enrich_provider_setup()
   end
@@ -412,9 +446,10 @@ defmodule Maraithon.Connections do
     MapSet.subset?(MapSet.new(required_scopes), token_scope_set(token))
   end
 
-  defp google_service_status(nil, _connected?), do: :disconnected
-  defp google_service_status(_token, true), do: :connected
-  defp google_service_status(_token, false), do: :missing_scope
+  defp google_service_status(false, _tokens, _connected?), do: :not_configured
+  defp google_service_status(true, [], _connected?), do: :disconnected
+  defp google_service_status(true, _tokens, true), do: :connected
+  defp google_service_status(true, _tokens, false), do: :missing_scope
 
   defp provider_status(false, _token), do: :not_configured
   defp provider_status(true, nil), do: :disconnected
@@ -488,6 +523,64 @@ defmodule Maraithon.Connections do
   defp normalize_list(list) when is_list(list), do: list
   defp normalize_list(_value), do: []
 
+  defp google_account_entries(tokens) when is_list(tokens) do
+    tokens
+    |> Enum.filter(&google_provider?(&1.provider))
+    |> Enum.map(fn token ->
+      %{
+        provider: token.provider,
+        account: google_account_label(token),
+        updated_at: token.updated_at
+      }
+    end)
+    |> Enum.sort_by(&timestamp_sort_value(&1.updated_at), :desc)
+  end
+
+  defp primary_google_token(tokens) when is_list(tokens) do
+    Enum.find(tokens, &(&1.provider == "google")) ||
+      Enum.max_by(tokens, &timestamp_sort_value(&1.updated_at), fn -> nil end)
+  end
+
+  defp google_account_label(%Token{} = token) do
+    normalize_text(metadata_value(token, ["account_email"])) ||
+      normalize_text(metadata_value(token, ["email"])) ||
+      google_provider_suffix(token.provider) ||
+      "Google account"
+  end
+
+  defp google_account_label(_token), do: "Google account"
+
+  defp google_provider_suffix("google"), do: nil
+
+  defp google_provider_suffix(provider) when is_binary(provider) do
+    case String.split(provider, ":", parts: 2) do
+      ["google", suffix] ->
+        normalize_text(suffix)
+
+      _ ->
+        nil
+    end
+  end
+
+  defp google_provider_suffix(_provider), do: nil
+
+  defp normalize_text(value) when is_binary(value) do
+    case String.trim(value) do
+      "" -> nil
+      text -> text
+    end
+  end
+
+  defp normalize_text(_value), do: nil
+
+  defp google_provider?("google"), do: true
+
+  defp google_provider?(provider) when is_binary(provider) do
+    String.starts_with?(provider, "google:")
+  end
+
+  defp google_provider?(_provider), do: false
+
   defp slack_provider?(provider) when is_binary(provider) do
     String.starts_with?(provider, "slack:")
   end
@@ -547,7 +640,7 @@ defmodule Maraithon.Connections do
 
   defp provider_sort_key(%Token{provider: provider}) do
     cond do
-      provider == "google" -> 0
+      google_provider?(provider) -> 0
       provider == "github" -> 1
       slack_provider?(provider) -> 2
       provider == "linear" -> 3

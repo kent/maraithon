@@ -23,10 +23,12 @@ defmodule Maraithon.OAuth.Google do
   @default_auth_url "https://accounts.google.com/o/oauth2/v2/auth"
   @default_token_url "https://oauth2.googleapis.com/token"
   @default_revoke_url "https://oauth2.googleapis.com/revoke"
+  @default_userinfo_url "https://www.googleapis.com/oauth2/v3/userinfo"
 
   @scope_calendar "https://www.googleapis.com/auth/calendar.readonly"
   @scope_gmail "https://www.googleapis.com/auth/gmail.readonly"
   @scope_contacts "https://www.googleapis.com/auth/contacts.readonly"
+  @scope_userinfo_email "https://www.googleapis.com/auth/userinfo.email"
 
   @doc """
   Returns true when Google OAuth is configured for interactive connects.
@@ -44,6 +46,13 @@ defmodule Maraithon.OAuth.Google do
     |> Enum.map(&scope_for/1)
     |> Enum.reject(&is_nil/1)
     |> Enum.uniq()
+  end
+
+  @doc """
+  Scopes used to identify which Google account granted OAuth.
+  """
+  def identity_scopes do
+    [@scope_userinfo_email]
   end
 
   defp scope_for("calendar"), do: @scope_calendar
@@ -152,6 +161,28 @@ defmodule Maraithon.OAuth.Google do
     end
   end
 
+  @doc """
+  Fetches the granted Google account profile.
+  """
+  def userinfo(access_token) when is_binary(access_token) do
+    case api_request(:get, userinfo_url(), access_token) do
+      {:ok, response} when is_map(response) ->
+        {:ok,
+         %{
+           email: response["email"],
+           name: response["name"],
+           sub: response["sub"],
+           picture: response["picture"]
+         }}
+
+      {:ok, _} ->
+        {:error, :unexpected_userinfo_response}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
   # ===========================================================================
   # Private Functions
   # ===========================================================================
@@ -179,6 +210,11 @@ defmodule Maraithon.OAuth.Google do
   defp revoke_url do
     config = Application.get_env(:maraithon, :google, [])
     Keyword.get(config, :revoke_url, @default_revoke_url)
+  end
+
+  defp userinfo_url do
+    config = Application.get_env(:maraithon, :google, [])
+    Keyword.get(config, :userinfo_url, @default_userinfo_url)
   end
 
   defp parse_token_response(response) do

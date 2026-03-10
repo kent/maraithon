@@ -64,6 +64,11 @@ defmodule Maraithon.OAuth do
 
   Returns nil if no token exists.
   """
+  def get_token(user_id, "google") do
+    Repo.get_by(Token, user_id: user_id, provider: "google") ||
+      latest_google_account_token(user_id)
+  end
+
   def get_token(user_id, provider) do
     Repo.get_by(Token, user_id: user_id, provider: provider)
   end
@@ -192,24 +197,11 @@ defmodule Maraithon.OAuth do
   end
 
   defp do_refresh(%Token{provider: "google"} = token) do
-    case Maraithon.OAuth.Google.refresh_token(token.refresh_token) do
-      {:ok, new_tokens} ->
-        store_tokens(token.user_id, "google", %{
-          access_token: new_tokens.access_token,
-          refresh_token: token.refresh_token,
-          expires_in: new_tokens.expires_in,
-          scopes: token.scopes,
-          metadata: token.metadata
-        })
+    refresh_google_token(token, "google")
+  end
 
-      {:error, reason} ->
-        Logger.warning("Failed to refresh Google token",
-          user_id: token.user_id,
-          reason: inspect(reason)
-        )
-
-        {:error, reason}
-    end
+  defp do_refresh(%Token{provider: "google:" <> _ = provider} = token) do
+    refresh_google_token(token, provider)
   end
 
   defp do_refresh(%Token{provider: "notion"} = token) do
@@ -295,6 +287,27 @@ defmodule Maraithon.OAuth do
     {:error, {:unknown_provider, provider}}
   end
 
+  defp refresh_google_token(token, provider) do
+    case Maraithon.OAuth.Google.refresh_token(token.refresh_token) do
+      {:ok, new_tokens} ->
+        store_tokens(token.user_id, provider, %{
+          access_token: new_tokens.access_token,
+          refresh_token: token.refresh_token,
+          expires_in: new_tokens.expires_in,
+          scopes: token.scopes,
+          metadata: token.metadata
+        })
+
+      {:error, reason} ->
+        Logger.warning("Failed to refresh Google token",
+          user_id: token.user_id,
+          reason: inspect(reason)
+        )
+
+        {:error, reason}
+    end
+  end
+
   defp revoke_provider_token(%Token{provider: "google", access_token: access_token}) do
     Maraithon.OAuth.Google.revoke_token(access_token)
   end
@@ -312,10 +325,15 @@ defmodule Maraithon.OAuth do
   end
 
   defp revoke_provider_token(%Token{provider: provider, access_token: access_token}) do
-    if is_binary(provider) and String.starts_with?(provider, "slack:") do
-      Maraithon.OAuth.Slack.revoke_token(access_token)
-    else
-      :ok
+    cond do
+      is_binary(provider) and String.starts_with?(provider, "google:") ->
+        Maraithon.OAuth.Google.revoke_token(access_token)
+
+      is_binary(provider) and String.starts_with?(provider, "slack:") ->
+        Maraithon.OAuth.Slack.revoke_token(access_token)
+
+      true ->
+        :ok
     end
   end
 
@@ -338,4 +356,13 @@ defmodule Maraithon.OAuth do
 
   defp put_metadata_if_present(metadata, _key, nil), do: metadata
   defp put_metadata_if_present(metadata, key, value), do: Map.put(metadata, key, value)
+
+  defp latest_google_account_token(user_id) when is_binary(user_id) do
+    Token
+    |> where([t], t.user_id == ^user_id)
+    |> where([t], like(t.provider, "google:%"))
+    |> order_by([t], desc: t.updated_at)
+    |> limit(1)
+    |> Repo.one()
+  end
 end

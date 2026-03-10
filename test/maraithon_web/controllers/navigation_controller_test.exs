@@ -47,6 +47,35 @@ defmodule MaraithonWeb.NavigationControllerTest do
       assert html =~ "Workspaces: Agora"
     end
 
+    test "GET /connectors renders Google account rows for each connected email", %{conn: conn} do
+      user_id = "google-multi@example.com"
+      {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+      {:ok, _first} =
+        OAuth.store_tokens(user_id, "google:founder@example.com", %{
+          access_token: "google-token-1",
+          scopes: [
+            "https://www.googleapis.com/auth/gmail.readonly",
+            "https://www.googleapis.com/auth/calendar.readonly"
+          ],
+          metadata: %{"account_email" => "founder@example.com"}
+        })
+
+      {:ok, _second} =
+        OAuth.store_tokens(user_id, "google:ops@example.com", %{
+          access_token: "google-token-2",
+          scopes: ["https://www.googleapis.com/auth/contacts.readonly"],
+          metadata: %{"account_email" => "ops@example.com"}
+        })
+
+      conn = conn |> log_in_test_user(user_id) |> get("/connectors")
+      html = html_response(conn, 200)
+
+      assert html =~ "founder@example.com"
+      assert html =~ "ops@example.com"
+      assert html =~ "Disconnect"
+    end
+
     test "GET /connectors/:provider renders provider details", %{conn: conn} do
       conn = conn |> log_in_test_user() |> get("/connectors/github")
       html = html_response(conn, 200)
@@ -123,6 +152,39 @@ defmodule MaraithonWeb.NavigationControllerTest do
 
       assert redirected_to(conn) == "/connectors"
       assert Phoenix.Flash.get(conn.assigns.flash, :error) == "Unknown connector: unknown"
+    end
+
+    test "POST /connectors/google/disconnect can remove a specific Google account", %{conn: conn} do
+      user_id = "google-disconnect@example.com"
+      {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+      {:ok, _first} =
+        OAuth.store_tokens(user_id, "google:founder@example.com", %{
+          access_token: "google-token-1",
+          metadata: %{"account_email" => "founder@example.com"}
+        })
+
+      {:ok, _second} =
+        OAuth.store_tokens(user_id, "google:ops@example.com", %{
+          access_token: "google-token-2",
+          metadata: %{"account_email" => "ops@example.com"}
+        })
+
+      conn =
+        conn
+        |> log_in_test_user(user_id)
+        |> post("/connectors/google/disconnect", %{
+          "provider_key" => "google:ops@example.com",
+          "account_label" => "ops@example.com"
+        })
+
+      assert redirected_to(conn) == "/connectors"
+
+      assert Phoenix.Flash.get(conn.assigns.flash, :info) ==
+               "Google account ops@example.com disconnected"
+
+      assert OAuth.get_token(user_id, "google:ops@example.com") == nil
+      assert OAuth.get_token(user_id, "google:founder@example.com")
     end
   end
 end

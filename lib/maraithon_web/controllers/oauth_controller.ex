@@ -28,7 +28,7 @@ defmodule MaraithonWeb.OAuthController do
          {:ok, services} <- google_services(params["scopes"]),
          {:ok, return_to} <- optional_return_to(params) do
       state = encode_google_state(user_id, services, return_to)
-      auth_url = Google.authorize_url(Google.scopes_for(services), state)
+      auth_url = Google.authorize_url(google_authorize_scopes(services), state)
 
       redirect(conn, external: auth_url)
     else
@@ -484,13 +484,15 @@ defmodule MaraithonWeb.OAuthController do
   defp handle_google_tokens(conn, code, user_id, services, state_payload) do
     case Google.exchange_code(code) do
       {:ok, tokens} ->
-        existing = OAuth.get_token(user_id, "google")
+        account_identity = google_account_identity(tokens.access_token)
+        provider = google_provider(account_identity)
+        existing = existing_google_token_for_provider(user_id, provider)
         granted_scopes = split_scope_string(tokens.scope)
 
         scopes =
           existing_google_scopes(existing)
           |> Enum.concat(
-            if(granted_scopes == [], do: Google.scopes_for(services), else: granted_scopes)
+            if(granted_scopes == [], do: google_authorize_scopes(services), else: granted_scopes)
           )
           |> Enum.uniq()
 
@@ -506,7 +508,12 @@ defmodule MaraithonWeb.OAuthController do
           refresh_token: tokens.refresh_token || (existing && existing.refresh_token),
           expires_in: tokens.expires_in,
           scopes: scopes,
-          metadata: %{"services" => services}
+          metadata:
+            %{"services" => services}
+            |> maybe_put_map_value("account_email", account_identity[:email])
+            |> maybe_put_map_value("account_name", account_identity[:name])
+            |> maybe_put_map_value("account_sub", account_identity[:sub])
+            |> maybe_put_map_value("account_picture", account_identity[:picture])
         }
 
         watch_results = setup_watches(user_id, services, tokens.access_token)
@@ -521,10 +528,10 @@ defmodule MaraithonWeb.OAuthController do
         store_tokens_and_respond(
           conn,
           user_id,
-          "google",
+          provider,
           token_data,
           payload,
-          success_message("google", Enum.join(services, ", ")),
+          success_message("google", google_success_details(account_identity, services)),
           state_payload["return_to"]
         )
 
@@ -783,6 +790,96 @@ defmodule MaraithonWeb.OAuthController do
       Enum.all?(required, &(&1 in scopes))
     end)
   end
+
+  defp google_authorize_scopes(services) when is_list(services) do
+    services
+    |> Google.scopes_for()
+    |> Kernel.++(Google.identity_scopes())
+    |> Enum.uniq()
+  end
+
+  defp google_account_identity(access_token) when is_binary(access_token) do
+    case Google.userinfo(access_token) do
+      {:ok, profile} ->
+        %{
+          email: normalize_google_email(profile.email),
+          name: normalize_optional_text(profile.name),
+          sub: normalize_optional_text(profile.sub),
+          picture: normalize_optional_text(profile.picture)
+        }
+
+      {:error, reason} ->
+        Logger.warning("Google account identity lookup failed", reason: inspect(reason))
+        %{}
+    end
+  end
+
+  defp google_account_identity(_), do: %{}
+
+  defp google_provider(%{email: email}) when is_binary(email) and email != "",
+    do: "google:#{email}"
+
+  defp google_provider(%{sub: sub}) when is_binary(sub) and sub != "" do
+    "google:sub-#{sanitize_google_provider_value(sub)}"
+  end
+
+  defp google_provider(_), do: "google"
+
+  defp existing_google_token_for_provider(user_id, provider)
+       when is_binary(user_id) and is_binary(provider) do
+    OAuth.list_user_tokens(user_id)
+    |> Enum.find(&(&1.provider == provider))
+  end
+
+  defp existing_google_token_for_provider(_user_id, _provider), do: nil
+
+  defp google_success_details(account_identity, services) when is_map(account_identity) do
+    services_label = Enum.join(services, ", ")
+
+    case account_identity[:email] do
+      email when is_binary(email) and email != "" ->
+        "#{email} · #{services_label}"
+
+      _ ->
+        services_label
+    end
+  end
+
+  defp normalize_google_email(value) when is_binary(value) do
+    value
+    |> String.trim()
+    |> String.downcase()
+    |> case do
+      "" -> nil
+      email -> email
+    end
+  end
+
+  defp normalize_google_email(_), do: nil
+
+  defp normalize_optional_text(value) when is_binary(value) do
+    case String.trim(value) do
+      "" -> nil
+      text -> text
+    end
+  end
+
+  defp normalize_optional_text(_), do: nil
+
+  defp sanitize_google_provider_value(value) when is_binary(value) do
+    value
+    |> String.trim()
+    |> String.downcase()
+    |> String.replace(~r/[^a-z0-9._-]+/u, "-")
+    |> case do
+      "" -> "account"
+      normalized -> normalized
+    end
+  end
+
+  defp maybe_put_map_value(map, _key, nil), do: map
+  defp maybe_put_map_value(map, _key, ""), do: map
+  defp maybe_put_map_value(map, key, value), do: Map.put(map, key, value)
 
   defp oauth_result_url(return_to, provider, status, message) do
     uri = URI.parse(return_to)

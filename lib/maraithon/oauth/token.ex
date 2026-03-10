@@ -56,11 +56,20 @@ defmodule Maraithon.OAuth.Token do
   end
 
   # Validates the provider field
-  # Allowed formats: "google", "github", "notion", "slack:{team_id}", "whatsapp", "linear"
+  # Allowed formats:
+  #   - "google"
+  #   - "google:{account_id}"
+  #   - "github"
+  #   - "notion"
+  #   - "slack:{team_id}"
+  #   - "slack:{team_id}:user:{user_id}"
+  #   - "whatsapp"
+  #   - "linear"
   defp validate_provider(changeset) do
     validate_change(changeset, :provider, fn :provider, provider ->
       cond do
         provider == "google" -> []
+        String.starts_with?(provider, "google:") -> []
         provider == "github" -> []
         provider == "notion" -> []
         provider == "whatsapp" -> []
