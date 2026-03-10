@@ -18,6 +18,9 @@ defmodule Maraithon.LLM.MockProviderTest do
       assert is_integer(response.tokens_in)
       assert is_integer(response.tokens_out)
       assert response.finish_reason == "stop"
+      assert response.usage.input_tokens == response.tokens_in
+      assert response.usage.output_tokens == response.tokens_out
+      assert response.usage.total_tokens == response.tokens_in + response.tokens_out
     end
 
     test "returns code review response for review prompts" do

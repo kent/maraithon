@@ -5,6 +5,8 @@ defmodule Maraithon.LLM.MockProvider do
 
   @behaviour Maraithon.LLM.Adapter
 
+  alias Maraithon.Spend
+
   require Logger
 
   @impl true
@@ -17,13 +19,17 @@ defmodule Maraithon.LLM.MockProvider do
     messages = params["messages"] || []
     last_message = List.last(messages) || %{}
     user_content = last_message["content"] || ""
+    model = "mock-v1"
+    tokens_in = String.length(user_content)
+    tokens_out = 50
 
     response = %{
       content: generate_mock_response(user_content),
-      model: "mock-v1",
-      tokens_in: String.length(user_content),
-      tokens_out: 50,
-      finish_reason: "stop"
+      model: model,
+      tokens_in: tokens_in,
+      tokens_out: tokens_out,
+      finish_reason: "stop",
+      usage: Spend.calculate_cost(model, tokens_in, tokens_out)
     }
 
     {:ok, response}

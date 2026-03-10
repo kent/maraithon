@@ -15,11 +15,19 @@ defmodule MaraithonWeb.SettingsController do
   defp runtime_items do
     runtime = Application.get_env(:maraithon, Maraithon.Runtime, [])
     llm_provider = runtime |> Keyword.get(:llm_provider) |> inspect()
+    llm_provider_name = Keyword.get(runtime, :llm_provider_name, "mock")
 
     [
       %{name: "Endpoint URL", value: MaraithonWeb.Endpoint.url()},
+      %{name: "LLM provider", value: llm_provider_name},
       %{name: "LLM provider module", value: llm_provider},
+      %{name: "Active LLM model", value: Keyword.get(runtime, :llm_model, "not set")},
       %{name: "Anthropic model", value: Keyword.get(runtime, :anthropic_model, "not set")},
+      %{name: "OpenAI model", value: Keyword.get(runtime, :openai_model, "not set")},
+      %{
+        name: "OpenAI reasoning effort",
+        value: Keyword.get(runtime, :openai_reasoning_effort, "not set")
+      },
       %{name: "Tool timeout (ms)", value: to_string(Keyword.get(runtime, :tool_timeout_ms, 0))},
       %{
         name: "Heartbeat interval (ms)",

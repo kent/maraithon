@@ -14,7 +14,8 @@ defmodule Maraithon.LLM.Adapter do
           model: String.t(),
           tokens_in: integer(),
           tokens_out: integer(),
-          finish_reason: String.t()
+          finish_reason: String.t(),
+          usage: map()
         }
 
   @callback complete(params()) :: {:ok, response()} | {:error, term()}

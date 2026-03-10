@@ -12,7 +12,7 @@ defmodule Maraithon.LLM.AnthropicProvider do
 
   @impl true
   def complete(params) do
-    api_key = Maraithon.LLM.api_key()
+    api_key = Maraithon.LLM.anthropic_api_key()
 
     unless api_key do
       {:error, "ANTHROPIC_API_KEY not configured"}
@@ -22,7 +22,7 @@ defmodule Maraithon.LLM.AnthropicProvider do
   end
 
   defp do_complete(params, api_key) do
-    model = params["model"] || Maraithon.LLM.model()
+    model = params["model"] || Maraithon.LLM.anthropic_model()
     messages = params["messages"] || []
     max_tokens = params["max_tokens"] || 2048
     temperature = params["temperature"] || 0.7

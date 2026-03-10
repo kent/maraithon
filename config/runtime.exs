@@ -61,12 +61,45 @@ config :maraithon, MaraithonWeb.Endpoint, http: [ip: {0, 0, 0, 0, 0, 0, 0, 0}, p
 # LLM Provider Configuration
 anthropic_api_key = System.get_env("ANTHROPIC_API_KEY")
 anthropic_model = System.get_env("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
+openai_api_key = System.get_env("OPENAI_API_KEY")
+openai_model = System.get_env("OPENAI_MODEL", "gpt-5.4")
+openai_reasoning_effort = System.get_env("OPENAI_REASONING_EFFORT", "high")
+configured_llm_provider = System.get_env("LLM_PROVIDER", "") |> String.trim() |> String.downcase()
+
+llm_provider_name =
+  cond do
+    configured_llm_provider in ["mock", "anthropic", "openai"] ->
+      configured_llm_provider
+
+    anthropic_api_key not in [nil, ""] ->
+      "anthropic"
+
+    openai_api_key not in [nil, ""] ->
+      "openai"
+
+    true ->
+      "mock"
+  end
 
 llm_provider =
-  if anthropic_api_key do
-    Maraithon.LLM.AnthropicProvider
-  else
-    Maraithon.LLM.MockProvider
+  case llm_provider_name do
+    "anthropic" -> Maraithon.LLM.AnthropicProvider
+    "openai" -> Maraithon.LLM.OpenAIProvider
+    _ -> Maraithon.LLM.MockProvider
+  end
+
+llm_model =
+  case llm_provider_name do
+    "anthropic" -> anthropic_model
+    "openai" -> openai_model
+    _ -> anthropic_model
+  end
+
+llm_api_key =
+  case llm_provider_name do
+    "anthropic" -> anthropic_api_key
+    "openai" -> openai_api_key
+    _ -> nil
   end
 
 # Timing configuration (can be overridden via env vars)
@@ -84,9 +117,15 @@ tool_allowed_paths =
 
 config :maraithon, Maraithon.Runtime,
   # LLM settings
+  llm_provider_name: llm_provider_name,
   llm_provider: llm_provider,
+  llm_model: llm_model,
+  llm_api_key: llm_api_key,
   anthropic_api_key: anthropic_api_key,
   anthropic_model: anthropic_model,
+  openai_api_key: openai_api_key,
+  openai_model: openai_model,
+  openai_reasoning_effort: openai_reasoning_effort,
   # Timing
   heartbeat_interval_ms: heartbeat_interval_ms,
   checkpoint_interval_ms: checkpoint_interval_ms,
