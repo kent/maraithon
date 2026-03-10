@@ -9,9 +9,9 @@ defmodule Maraithon.Behaviors do
     "repo_planner" => Maraithon.Behaviors.RepoPlanner,
     "github_product_planner" => Maraithon.Behaviors.GitHubProductPlanner,
     "prompt_agent" => Maraithon.Behaviors.PromptAgent,
-    "inbox_calendar_advisor" => Maraithon.Behaviors.InboxCalendarAdvisor,
+    "inbox_calendar_advisor" => Maraithon.Behaviors.FounderFollowthroughAgent,
     "slack_followthrough_agent" => Maraithon.Behaviors.SlackFollowthroughAgent,
-    "founder_followthrough_agent" => Maraithon.Behaviors.InboxCalendarAdvisor
+    "founder_followthrough_agent" => Maraithon.Behaviors.FounderFollowthroughAgent
   }
 
   @doc """

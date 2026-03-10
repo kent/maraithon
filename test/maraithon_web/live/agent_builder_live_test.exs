@@ -41,6 +41,8 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
       assert html =~ "Founder Followthrough Agent"
       assert html =~ "Google Gmail"
       assert html =~ "Google Calendar"
+      assert html =~ "Slack Channels"
+      assert html =~ "Slack Personal DMs"
       assert html =~ "Blocked"
       assert html =~ "Resolve the highlighted blockers before launch."
     end

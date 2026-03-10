@@ -23,13 +23,15 @@ defmodule Maraithon.BehaviorsTest do
     test "returns module for existing behavior" do
       assert Behaviors.get("prompt_agent") == Maraithon.Behaviors.PromptAgent
       assert Behaviors.get("codebase_advisor") == Maraithon.Behaviors.CodebaseAdvisor
-      assert Behaviors.get("inbox_calendar_advisor") == Maraithon.Behaviors.InboxCalendarAdvisor
+
+      assert Behaviors.get("inbox_calendar_advisor") ==
+               Maraithon.Behaviors.FounderFollowthroughAgent
 
       assert Behaviors.get("slack_followthrough_agent") ==
                Maraithon.Behaviors.SlackFollowthroughAgent
 
       assert Behaviors.get("founder_followthrough_agent") ==
-               Maraithon.Behaviors.InboxCalendarAdvisor
+               Maraithon.Behaviors.FounderFollowthroughAgent
     end
 
     test "returns nil for non-existing behavior" do

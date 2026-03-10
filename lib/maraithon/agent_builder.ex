@@ -120,19 +120,20 @@ defmodule Maraithon.AgentBuilder do
       label: "Founder Followthrough Agent",
       category: "Workflow",
       summary:
-        "Tracks commitments from Gmail and Calendar, verifies whether follow-through happened, and escalates only high-confidence unresolved items.",
+        "Tracks commitments across Gmail, Calendar, and Slack, verifies whether follow-through happened, and escalates only high-confidence unresolved items.",
       inputs: [
         "Gmail threads where you promised something, agreed on deadlines, or owe a reply",
         "Calendar meetings likely to create follow-up work, especially customer, investor, hiring, and planning meetings",
-        "Recent sent email used as evidence to verify whether follow-through already happened"
+        "Slack channel, thread, and DM messages where commitments were made and may still be unresolved",
+        "Recent sent email and Slack follow-up evidence used to verify whether follow-through already happened"
       ],
       outputs: [
         "Telegram-ready nudges for unresolved commitments",
-        "Post-meeting reminders when owners and next steps are still missing",
+        "Post-meeting and post-thread reminders when owners and next steps are still missing",
         "Structured commitment records with commitment, person, source, deadline, status, evidence, and next_action"
       ],
       fields:
-        ~w(email_scan_limit event_scan_limit prep_window_hours max_insights_per_cycle min_confidence),
+        ~w(email_scan_limit event_scan_limit prep_window_hours team_id channel_scan_limit dm_scan_limit lookback_hours max_insights_per_cycle min_confidence),
       defaults: %{
         "prompt" => "",
         "tools" => "",
@@ -141,6 +142,10 @@ defmodule Maraithon.AgentBuilder do
         "email_scan_limit" => "14",
         "event_scan_limit" => "12",
         "prep_window_hours" => "36",
+        "team_id" => "",
+        "channel_scan_limit" => "80",
+        "dm_scan_limit" => "50",
+        "lookback_hours" => "48",
         "max_insights_per_cycle" => "5",
         "min_confidence" => "0.72"
       },
@@ -160,10 +165,28 @@ defmodule Maraithon.AgentBuilder do
           label: "Google Calendar",
           description: "Needed to inspect important meetings and infer missing follow-ups.",
           required?: true
+        },
+        %{
+          kind: :provider_service,
+          provider: "slack",
+          service: "channels",
+          label: "Slack Channels",
+          description: "Needed to detect explicit promises and open loops in channel context.",
+          required?: true
+        },
+        %{
+          kind: :provider_service,
+          provider: "slack",
+          service: "dms",
+          label: "Slack Personal DMs",
+          description:
+            "Needed to detect private reply debt and unresolved commitments in direct messages.",
+          required?: true
         }
       ],
       suggestions: [
         "Keep scan limits focused so the agent escalates only the strongest unresolved commitments.",
+        "Set `team_id` when multiple Slack workspaces are connected and you want one workspace per founder agent.",
         "Use `prep_window_hours` as a meeting follow-up window for how far back to inspect unresolved actions.",
         "Raise `min_confidence` if you want even fewer Telegram interruptions."
       ]
@@ -568,6 +591,12 @@ defmodule Maraithon.AgentBuilder do
            parse_positive_integer(launch["event_scan_limit"], "Event scan limit"),
          {:ok, prep_window_hours} <-
            parse_positive_integer(launch["prep_window_hours"], "Prep window hours"),
+         {:ok, channel_scan_limit} <-
+           parse_positive_integer(launch["channel_scan_limit"], "Channel scan limit"),
+         {:ok, dm_scan_limit} <-
+           parse_positive_integer(launch["dm_scan_limit"], "DM scan limit"),
+         {:ok, lookback_hours} <-
+           parse_positive_integer(launch["lookback_hours"], "Lookback window"),
          {:ok, max_insights_per_cycle} <-
            parse_positive_integer(launch["max_insights_per_cycle"], "Max insights per cycle"),
          {:ok, min_confidence} <-
@@ -579,9 +608,14 @@ defmodule Maraithon.AgentBuilder do
          "email_scan_limit" => email_scan_limit,
          "event_scan_limit" => event_scan_limit,
          "prep_window_hours" => prep_window_hours,
+         "team_id" => empty_to_nil(launch["team_id"]),
+         "channel_scan_limit" => channel_scan_limit,
+         "dm_scan_limit" => dm_scan_limit,
+         "lookback_hours" => lookback_hours,
          "max_insights_per_cycle" => max_insights_per_cycle,
          "min_confidence" => min_confidence
        }}
+      |> drop_nil_values()
     end
   end
 
@@ -789,6 +823,10 @@ defmodule Maraithon.AgentBuilder do
       "email_scan_limit",
       "event_scan_limit",
       "prep_window_hours",
+      "team_id",
+      "channel_scan_limit",
+      "dm_scan_limit",
+      "lookback_hours",
       "max_insights_per_cycle",
       "min_confidence"
     ]

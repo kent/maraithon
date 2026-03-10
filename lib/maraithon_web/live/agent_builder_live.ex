@@ -1075,12 +1075,20 @@ defmodule MaraithonWeb.AgentBuilderLive do
       %{
         title: "Scan coverage",
         body:
-          "Checks up to #{launch["email_scan_limit"]} inbox emails, recent sent mail, and #{launch["event_scan_limit"]} calendar events each cycle."
+          "Checks up to #{launch["email_scan_limit"]} inbox emails, #{launch["event_scan_limit"]} calendar events, #{launch["channel_scan_limit"]} Slack channel messages, and #{launch["dm_scan_limit"]} Slack DM messages each cycle."
+      },
+      %{
+        title: "Workspace scope",
+        body:
+          if(launch["team_id"] == "",
+            do: "Scanning all connected Slack teams for unresolved commitments.",
+            else: "Scoped to Slack team #{launch["team_id"]}."
+          )
       },
       %{
         title: "Insight tuning",
         body:
-          "Follow-up window: #{launch["prep_window_hours"]}h, max insights: #{launch["max_insights_per_cycle"]}, minimum confidence: #{launch["min_confidence"]}."
+          "Email/calendar follow-up window: #{launch["prep_window_hours"]}h. Slack lookback: #{launch["lookback_hours"]}h. Max insights: #{launch["max_insights_per_cycle"]}, minimum confidence: #{launch["min_confidence"]}."
       }
     ]
   end
@@ -1151,7 +1159,8 @@ defmodule MaraithonWeb.AgentBuilderLive do
     [
       %{
         title: "Stored records",
-        body: "Each insight stores a structured commitment record with evidence and next action."
+        body:
+          "Each insight stores a structured commitment record with evidence and next action, unified across Gmail, Calendar, and Slack sources."
       }
     ]
   end
@@ -1211,7 +1220,11 @@ defmodule MaraithonWeb.AgentBuilderLive do
         [
           %{label: "Email scan limit", value: launch["email_scan_limit"]},
           %{label: "Event scan limit", value: launch["event_scan_limit"]},
-          %{label: "Follow-up window", value: launch["prep_window_hours"] <> " h"}
+          %{
+            label: "Slack team",
+            value: if(launch["team_id"] == "", do: "All connected teams", else: launch["team_id"])
+          },
+          %{label: "Slack DM scan", value: launch["dm_scan_limit"]}
         ]
 
       "slack_followthrough_agent" ->
