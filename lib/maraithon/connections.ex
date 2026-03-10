@@ -524,14 +524,26 @@ defmodule Maraithon.Connections do
     tokens
     |> Enum.map(& &1.updated_at)
     |> Enum.reject(&is_nil/1)
-    |> case do
-      [] ->
-        nil
+    |> Enum.max_by(&timestamp_sort_value/1, fn -> nil end)
+  end
 
-      values ->
-        Enum.max_by(values, &DateTime.to_unix/1, fn -> nil end)
+  defp timestamp_sort_value(%DateTime{} = value), do: DateTime.to_unix(value, :microsecond)
+
+  defp timestamp_sort_value(%NaiveDateTime{} = value) do
+    case DateTime.from_naive(value, "Etc/UTC") do
+      {:ok, datetime} -> DateTime.to_unix(datetime, :microsecond)
+      {:error, _reason} -> 0
     end
   end
+
+  defp timestamp_sort_value(value) when is_binary(value) do
+    case DateTime.from_iso8601(value) do
+      {:ok, datetime, _offset} -> DateTime.to_unix(datetime, :microsecond)
+      {:error, _reason} -> 0
+    end
+  end
+
+  defp timestamp_sort_value(_value), do: 0
 
   defp provider_sort_key(%Token{provider: provider}) do
     cond do

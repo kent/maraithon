@@ -3,6 +3,7 @@ defmodule MaraithonWeb.NavigationControllerTest do
 
   alias Maraithon.Accounts
   alias Maraithon.ConnectedAccounts
+  alias Maraithon.OAuth
 
   describe "tab pages" do
     test "GET /connectors renders the connectors page", %{conn: conn} do
@@ -14,6 +15,36 @@ defmodule MaraithonWeb.NavigationControllerTest do
       assert html =~ "Google Workspace"
       assert html =~ "Slack"
       assert html =~ "View"
+    end
+
+    test "GET /connectors renders with connected Slack tokens", %{conn: conn} do
+      user_id = "slack-connectors@example.com"
+      {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+      {:ok, _bot} =
+        OAuth.store_tokens(user_id, "slack:T12345", %{
+          access_token: "xoxb-test-token",
+          scopes: ["channels:read", "im:read"],
+          metadata: %{"team_id" => "T12345", "team_name" => "Agora"}
+        })
+
+      {:ok, _user_token} =
+        OAuth.store_tokens(user_id, "slack:T12345:user:U99999", %{
+          access_token: "xoxp-test-token",
+          scopes: ["search:read", "im:read"],
+          metadata: %{
+            "team_id" => "T12345",
+            "team_name" => "Agora",
+            "slack_user_id" => "U99999"
+          }
+        })
+
+      conn = conn |> log_in_test_user(user_id) |> get("/connectors")
+      html = html_response(conn, 200)
+
+      assert html =~ "Slack"
+      assert html =~ "Agora"
+      assert html =~ "Workspaces: Agora"
     end
 
     test "GET /connectors/:provider renders provider details", %{conn: conn} do
