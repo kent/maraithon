@@ -135,5 +135,22 @@ defmodule Maraithon.InsightNotificationsTest do
       assert updated_profile.score_threshold > profile_before.score_threshold
       assert dismissed.status == "dismissed"
     end
+
+    test "uses ai-derived telegram fit score when deciding whether to send", %{
+      user_id: user_id,
+      insight: insight
+    } do
+      insight
+      |> Ecto.Changeset.change(metadata: %{"telegram_fit_score" => 0.41})
+      |> Repo.update!()
+
+      result = InsightNotifications.dispatch_telegram_batch(batch_size: 10)
+
+      assert result.staged == 0
+      assert result.sent == 0
+
+      assert Repo.get_by(Delivery, insight_id: insight.id, user_id: user_id, channel: "telegram") ==
+               nil
+    end
   end
 end

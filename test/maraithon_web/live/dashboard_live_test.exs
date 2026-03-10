@@ -118,6 +118,7 @@ defmodule MaraithonWeb.DashboardLiveTest do
 
   alias Maraithon.Agents
   alias Maraithon.Effects.Effect
+  alias Maraithon.Insights
   alias Maraithon.OAuth
   alias Maraithon.Runtime.ScheduledJob
 
@@ -187,6 +188,45 @@ defmodule MaraithonWeb.DashboardLiveTest do
       assert html =~ "prompt_agent"
       refute html =~ "No agents yet"
       assert has_element?(view, "div", "prompt_agent")
+    end
+
+    test "renders enriched insight context and ideas", %{conn: conn} do
+      {:ok, agent} =
+        create_agent(%{
+          behavior: "inbox_calendar_advisor",
+          config: %{},
+          status: "running",
+          started_at: DateTime.utc_now()
+        })
+
+      {:ok, _insights} =
+        Insights.record_many(@user_email, agent.id, [
+          %{
+            "source" => "gmail",
+            "category" => "reply_urgent",
+            "title" => "Reply to the customer escalation",
+            "summary" => "A renewal thread needs a same-day response from the account team.",
+            "recommended_action" =>
+              "Reply now, confirm the owner, and send a timeline for the next update.",
+            "priority" => 93,
+            "confidence" => 0.9,
+            "dedupe_key" => "dashboard:enriched:1",
+            "metadata" => %{
+              "why_now" => "The customer asked for an update before today's review call.",
+              "follow_up_ideas" => [
+                "Pull the latest status from support before replying.",
+                "Write down the two risks you need covered on the call."
+              ]
+            }
+          }
+        ])
+
+      {:ok, _view, html} = live(conn, "/dashboard")
+
+      assert html =~ "Why now"
+      assert html =~ "The customer asked for an update before today&#39;s review call."
+      assert html =~ "Pull the latest status from support before replying."
+      assert html =~ "Write down the two risks you need covered on the call."
     end
 
     @doc """

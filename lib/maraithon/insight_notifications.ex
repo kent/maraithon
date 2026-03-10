@@ -362,17 +362,46 @@ defmodule Maraithon.InsightNotifications do
   defp parse_feedback_data(_), do: {:error, :invalid_callback_data}
 
   defp insight_score(%Insight{} = insight) do
-    confidence = clamp(insight.confidence || 0.0, 0.0, 1.0)
-    priority = clamp((insight.priority || 0) / 100, 0.0, 1.0)
+    case read_float(insight.metadata || %{}, "telegram_fit_score") do
+      value when is_float(value) ->
+        clamp(value, 0.0, 1.0)
 
-    clamp(0.65 * confidence + 0.35 * priority, 0.0, 1.0)
+      nil ->
+        confidence = clamp(insight.confidence || 0.0, 0.0, 1.0)
+        priority = clamp((insight.priority || 0) / 100, 0.0, 1.0)
+
+        clamp(0.65 * confidence + 0.35 * priority, 0.0, 1.0)
+    end
   end
 
   defp render_message(%Delivery{insight: insight, score: score, threshold: threshold}) do
+    metadata = insight.metadata || %{}
+    why_now = read_string(metadata, "why_now")
+    follow_up_ideas = read_string_list(metadata, "follow_up_ideas")
+
     due_text =
       case insight.due_at do
         %DateTime{} = due_at -> "\nDue: #{Calendar.strftime(due_at, "%Y-%m-%d %H:%M UTC")}"
         _ -> ""
+      end
+
+    why_now_text =
+      case why_now do
+        nil -> ""
+        value -> "\n\n<b>Why now:</b> #{safe(value)}"
+      end
+
+    ideas_text =
+      case follow_up_ideas do
+        [] ->
+          ""
+
+        ideas ->
+          rendered =
+            ideas
+            |> Enum.map_join("\n", fn idea -> "- #{safe(idea)}" end)
+
+          "\n\n<b>Ideas:</b>\n#{rendered}"
       end
 
     """
@@ -381,7 +410,7 @@ defmodule Maraithon.InsightNotifications do
 
     #{safe(insight.summary)}
 
-    <b>Action:</b> #{safe(insight.recommended_action)}#{due_text}
+    <b>Action:</b> #{safe(insight.recommended_action)}#{due_text}#{why_now_text}#{ideas_text}
 
     score=#{Float.round(score, 2)} threshold=#{Float.round(threshold, 2)}
     """
@@ -472,6 +501,44 @@ defmodule Maraithon.InsightNotifications do
     case fetch(map, key) do
       value when is_map(value) -> value
       _ -> %{}
+    end
+  end
+
+  defp read_float(map, key) when is_map(map) and is_binary(key) do
+    case fetch(map, key) do
+      value when is_float(value) ->
+        value
+
+      value when is_integer(value) ->
+        value / 1
+
+      value when is_binary(value) ->
+        case Float.parse(value) do
+          {parsed, ""} -> parsed
+          _ -> nil
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  defp read_string_list(map, key) when is_map(map) and is_binary(key) do
+    case fetch(map, key) do
+      values when is_list(values) ->
+        values
+        |> Enum.map(fn
+          value when is_binary(value) ->
+            value = String.trim(value)
+            if value == "", do: nil, else: value
+
+          _ ->
+            nil
+        end)
+        |> Enum.reject(&is_nil/1)
+
+      _ ->
+        []
     end
   end
 

@@ -13,6 +13,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
 
   alias Maraithon.Connectors.Gmail
   alias Maraithon.Connectors.GoogleCalendar
+  alias Maraithon.InsightFeedback
   alias Maraithon.Insights
 
   require Logger
@@ -23,6 +24,8 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
   @default_prep_window_hours 24
   @default_max_insights_per_cycle 6
   @default_min_confidence 0.55
+  @max_follow_up_ideas 3
+  @max_attendee_preview 4
 
   @urgent_terms [
     "urgent",
@@ -101,6 +104,8 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
         {:idle, state}
 
       true ->
+        feedback_context = InsightFeedback.prompt_context(state.user_id)
+
         candidates =
           case context[:event] do
             %{payload: payload} ->
@@ -119,7 +124,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
             "messages" => [
               %{
                 "role" => "user",
-                "content" => build_llm_prompt(candidates, context.timestamp)
+                "content" => build_llm_prompt(candidates, context.timestamp, feedback_context)
               }
             ],
             "max_tokens" => 1_600,
@@ -250,41 +255,74 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
     subject = read_string(email, "subject", "(no subject)")
     snippet = read_string(email, "snippet", "")
     from = read_string(email, "from", "unknown sender")
-    body = String.downcase("#{subject} #{snippet}")
+    to = read_string(email, "to", "")
+    thread_id = read_string(email, "thread_id", nil)
+    labels = read_list(email, "labels") |> Enum.map(&to_string/1)
+
+    body =
+      String.downcase(
+        Enum.join(
+          Enum.reject([subject, snippet, from, to, Enum.join(labels, " ")], &blank?/1),
+          " "
+        )
+      )
+
     message_id = read_string(email, "message_id", Ecto.UUID.generate())
     occurred_at = read_datetime(email, "internal_date")
+    age_hours = hours_since(occurred_at)
+    recipient_count = recipient_count(to)
+    urgent_matches = matched_terms(body, @urgent_terms)
+    angry_matches = matched_terms(body, @angry_terms)
+    context_brief = email_context_brief(from, to, labels, age_hours, recipient_count)
+
+    base_metadata =
+      compact_map(%{
+        "from" => from,
+        "to" => to,
+        "subject" => subject,
+        "snippet" => snippet,
+        "labels" => labels,
+        "thread_id" => thread_id,
+        "age_hours" => age_hours,
+        "recipient_count" => recipient_count,
+        "context_brief" => context_brief,
+        "signals" =>
+          email_signals(labels, age_hours, recipient_count, urgent_matches, angry_matches)
+      })
 
     []
-    |> maybe_add(contains_any?(body, @urgent_terms), fn ->
+    |> maybe_add(urgent_matches != [], fn ->
       %{
         source: "gmail",
         source_id: message_id,
         source_occurred_at: occurred_at,
         category: "reply_urgent",
         title: "Reply soon: #{truncate(subject, 90)}",
-        summary: "Email from #{from} appears time-sensitive.",
-        recommended_action: "Reply today and acknowledge the request.",
+        summary: "Email from #{from} appears time-sensitive. #{context_brief}",
+        recommended_action:
+          "Reply today, acknowledge the request, and propose a concrete next step or timeline.",
         priority: 88,
         confidence: 0.82,
         due_at: DateTime.add(DateTime.utc_now(), 4, :hour),
         dedupe_key: "email:#{message_id}:reply_urgent",
-        metadata: %{"from" => from, "subject" => subject, "snippet" => snippet}
+        metadata: base_metadata
       }
     end)
-    |> maybe_add(contains_any?(body, @angry_terms), fn ->
+    |> maybe_add(angry_matches != [], fn ->
       %{
         source: "gmail",
         source_id: message_id,
         source_occurred_at: occurred_at,
         category: "tone_risk",
         title: "Tone risk in email: #{truncate(subject, 80)}",
-        summary: "Message language suggests potential frustration or escalation risk.",
-        recommended_action: "Respond calmly, confirm understanding, and propose next steps.",
+        summary: "Message language suggests frustration or escalation risk. #{context_brief}",
+        recommended_action:
+          "Respond calmly, confirm the concern, and offer one specific next step with timing.",
         priority: 80,
         confidence: 0.74,
         due_at: DateTime.add(DateTime.utc_now(), 6, :hour),
         dedupe_key: "email:#{message_id}:tone_risk",
-        metadata: %{"from" => from, "subject" => subject, "snippet" => snippet}
+        metadata: base_metadata
       }
     end)
     |> Enum.map(&normalize_candidate(&1, state))
@@ -294,11 +332,57 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
 
   defp calendar_candidates(event, state) when is_map(event) do
     summary = read_string(event, "summary", "(untitled event)")
+    description = read_string(event, "description", "")
+    location = read_string(event, "location", "")
+    organizer = read_string(event, "organizer", "")
     event_id = read_string(event, "event_id", Ecto.UUID.generate())
     start_at = read_datetime(event, "start")
     attendees = read_list(event, "attendees")
-    body = String.downcase(summary)
+    attendee_preview = attendee_preview(attendees)
+    response_counts = attendee_response_counts(attendees)
+    hours_until_start = hours_until(start_at)
+
+    body =
+      String.downcase(
+        Enum.join(
+          Enum.reject([summary, description, location, organizer, attendee_preview], &blank?/1),
+          " "
+        )
+      )
+
     attendee_count = length(attendees)
+
+    context_brief =
+      calendar_context_brief(
+        organizer,
+        location,
+        attendee_count,
+        response_counts,
+        hours_until_start,
+        description
+      )
+
+    base_metadata =
+      compact_map(%{
+        "summary" => summary,
+        "description_excerpt" => non_empty_truncated(description, 180),
+        "location" => location,
+        "organizer" => organizer,
+        "attendee_count" => attendee_count,
+        "attendee_preview" => attendee_preview,
+        "response_counts" => response_counts,
+        "hours_until_start" => hours_until_start,
+        "start" => to_iso8601(start_at),
+        "context_brief" => context_brief,
+        "signals" =>
+          calendar_signals(
+            location,
+            organizer,
+            attendee_count,
+            response_counts,
+            hours_until_start
+          )
+      })
 
     important? = contains_any?(body, @important_event_terms) or attendee_count >= 5
     prep_soon? = needs_prep?(start_at, body, state.prep_window_hours)
@@ -311,13 +395,14 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
         source_occurred_at: start_at,
         category: "event_important",
         title: "Important event: #{truncate(summary, 90)}",
-        summary: "This event looks high-impact based on content and attendee profile.",
-        recommended_action: "Review agenda and align on desired outcomes.",
+        summary: "This event looks high-impact. #{context_brief}",
+        recommended_action:
+          "Review the agenda, decision owner, and unresolved questions before the meeting.",
         priority: 78,
         confidence: if(attendee_count >= 5, do: 0.8, else: 0.7),
         due_at: due_at_before(start_at, 2),
         dedupe_key: "calendar:#{event_id}:event_important",
-        metadata: %{"summary" => summary, "attendee_count" => attendee_count}
+        metadata: base_metadata
       }
     end)
     |> maybe_add(prep_soon?, fn ->
@@ -327,13 +412,14 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
         source_occurred_at: start_at,
         category: "event_prep_needed",
         title: "Prep needed: #{truncate(summary, 90)}",
-        summary: "This upcoming event likely needs preparation.",
-        recommended_action: "Set prep time and gather notes/docs before the meeting.",
+        summary: "This upcoming event likely needs preparation. #{context_brief}",
+        recommended_action:
+          "Block prep time, gather the relevant docs, and draft the top outcomes to drive.",
         priority: 84,
         confidence: 0.79,
         due_at: due_at_before(start_at, 3),
         dedupe_key: "calendar:#{event_id}:event_prep_needed",
-        metadata: %{"summary" => summary, "start" => to_iso8601(start_at)}
+        metadata: base_metadata
       }
     end)
     |> Enum.map(&normalize_candidate(&1, state))
@@ -412,6 +498,11 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
       if confidence < min_confidence do
         nil
       else
+        telegram_fit_score = clamp(read_float(item, "telegram_fit_score", confidence), 0.0, 1.0)
+        telegram_fit_reason = read_string(item, "telegram_fit_reason", nil)
+        why_now = read_string(item, "why_now", nil)
+        follow_up_ideas = read_string_list(item, "follow_up_ideas", @max_follow_up_ideas)
+
         base
         |> Map.put("title", read_string(item, "title", base["title"]))
         |> Map.put("summary", read_string(item, "summary", base["summary"]))
@@ -424,32 +515,61 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
           clamp(read_integer(item, "priority", read_integer(base, "priority", 50)), 0, 100)
         )
         |> Map.put("confidence", confidence)
+        |> Map.update("metadata", %{}, fn metadata ->
+          metadata
+          |> stringify_keys()
+          |> Map.put("telegram_fit_score", telegram_fit_score)
+          |> maybe_put("telegram_fit_reason", telegram_fit_reason)
+          |> maybe_put("why_now", why_now)
+          |> maybe_put_list("follow_up_ideas", follow_up_ideas)
+          |> Map.put("feedback_tuned", true)
+        end)
       end
     end
   end
 
   defp merge_llm_item(_item, _by_key, _min_confidence), do: nil
 
-  defp build_llm_prompt(candidates, timestamp) do
+  defp build_llm_prompt(candidates, timestamp, feedback_context) do
     candidates_json = Jason.encode!(candidates)
+    feedback_json = Jason.encode!(feedback_context[:recent_feedback] || [])
+    threshold_json = Jason.encode!(feedback_context[:threshold_profile] || %{})
 
     """
-    You are an executive assistant analyzing inbox and calendar signals.
+    You are an executive assistant analyzing inbox and calendar signals for Telegram delivery.
     Current time: #{DateTime.to_iso8601(timestamp)}
+
+    Telegram threshold profile JSON:
+    #{threshold_json}
+
+    Recent Telegram feedback JSON:
+    #{feedback_json}
 
     Input candidates JSON:
     #{candidates_json}
 
     Task:
     - Improve clarity and actionability for each candidate.
+    - Learn the user's interruption preferences from the Helpful / Not Helpful history above.
+    - Prefer candidates that resemble helpful examples and avoid candidates that resemble not_helpful examples.
+    - Use metadata.context_brief, metadata.signals, sender/recipient details, organizer, location, description_excerpt, attendee response counts, and timing hints to make the output concrete.
     - Keep category and dedupe_key unchanged.
     - Keep confidence between 0 and 1.
+    - Estimate telegram_fit_score between 0 and 1, where 1 means "this user should definitely get this in Telegram now".
+    - Make summary specific in 1 to 2 sentences: explain the stake, who is involved, and timing.
+    - Make recommended_action specific: include the immediate next step and, when useful, one or two supporting ideas in plain language.
+    - Return a short why_now string and a short follow_up_ideas list with concrete suggestions.
     - Drop low-value candidates by omitting them.
 
     Return ONLY valid JSON array. Each item must include:
-    dedupe_key, title, summary, recommended_action, priority, confidence
+    dedupe_key, title, summary, recommended_action, priority, confidence, telegram_fit_score, telegram_fit_reason, why_now, follow_up_ideas
     """
   end
+
+  defp maybe_put(map, _key, nil), do: map
+  defp maybe_put(map, key, value), do: Map.put(map, key, value)
+  defp maybe_put_list(map, _key, []), do: map
+  defp maybe_put_list(map, key, value), do: Map.put(map, key, value)
 
   defp dedupe_candidates(candidates) do
     candidates
@@ -627,9 +747,193 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
 
   defp truncate(value, _max), do: value
 
+  defp non_empty_truncated(value, max) when is_binary(value) do
+    value = String.trim(value)
+    if value == "", do: nil, else: truncate(value, max)
+  end
+
+  defp non_empty_truncated(_, _max), do: nil
+
+  defp blank?(value) when is_binary(value), do: String.trim(value) == ""
+  defp blank?(nil), do: true
+  defp blank?(_), do: false
+
   defp clamp(value, min, _max) when value < min, do: min
   defp clamp(value, _min, max) when value > max, do: max
   defp clamp(value, _min, _max), do: value
+
+  defp hours_since(%DateTime{} = datetime) do
+    DateTime.diff(DateTime.utc_now(), datetime, :hour)
+  end
+
+  defp hours_since(_), do: nil
+
+  defp hours_until(%DateTime{} = datetime) do
+    DateTime.diff(datetime, DateTime.utc_now(), :hour)
+  end
+
+  defp hours_until(_), do: nil
+
+  defp recipient_count(value) when is_binary(value) do
+    value
+    |> String.split(~r/[;,]/, trim: true)
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
+    |> length()
+  end
+
+  defp recipient_count(_), do: 0
+
+  defp matched_terms(text, terms) when is_binary(text) do
+    text = String.downcase(text)
+
+    terms
+    |> Enum.filter(&String.contains?(text, &1))
+    |> Enum.uniq()
+  end
+
+  defp email_context_brief(from, to, labels, age_hours, recipient_count) do
+    []
+    |> maybe_append("Sent by #{from}", present?(from))
+    |> maybe_append("to #{truncate(to, 80)}", present?(to))
+    |> maybe_append("labels #{Enum.join(labels, ", ")}", labels != [])
+    |> maybe_append("#{age_hours}h old", is_integer(age_hours) and age_hours >= 0)
+    |> maybe_append("#{recipient_count} recipients", recipient_count > 1)
+    |> Enum.join(". ")
+    |> suffix_period()
+  end
+
+  defp email_signals(labels, age_hours, recipient_count, urgent_matches, angry_matches) do
+    []
+    |> maybe_append("Unread inbox item", "UNREAD" in labels)
+    |> maybe_append("Marked important", "IMPORTANT" in labels)
+    |> maybe_append("Has urgent terms: #{Enum.join(urgent_matches, ", ")}", urgent_matches != [])
+    |> maybe_append("Has tone-risk terms: #{Enum.join(angry_matches, ", ")}", angry_matches != [])
+    |> maybe_append("Aging thread at #{age_hours}h", is_integer(age_hours) and age_hours >= 12)
+    |> maybe_append("Multiple recipients: #{recipient_count}", recipient_count > 2)
+  end
+
+  defp attendee_preview(attendees) when is_list(attendees) do
+    attendees
+    |> Enum.take(@max_attendee_preview)
+    |> Enum.map(fn attendee ->
+      read_string(attendee, "display_name", nil) || read_string(attendee, "email", "unknown")
+    end)
+    |> Enum.reject(&blank?/1)
+    |> Enum.join(", ")
+  end
+
+  defp attendee_preview(_), do: nil
+
+  defp attendee_response_counts(attendees) when is_list(attendees) do
+    counts =
+      Enum.reduce(
+        attendees,
+        %{"accepted" => 0, "tentative" => 0, "declined" => 0, "needs_action" => 0},
+        fn attendee, acc ->
+          status = read_string(attendee, "response_status", "needs_action")
+
+          if Map.has_key?(acc, status) do
+            Map.update!(acc, status, &(&1 + 1))
+          else
+            acc
+          end
+        end
+      )
+
+    compact_map(counts)
+  end
+
+  defp attendee_response_counts(_), do: %{}
+
+  defp calendar_context_brief(
+         organizer,
+         location,
+         attendee_count,
+         response_counts,
+         hours_until_start,
+         description
+       ) do
+    accepted = Map.get(response_counts, "accepted", 0)
+    tentative = Map.get(response_counts, "tentative", 0)
+    declined = Map.get(response_counts, "declined", 0)
+
+    []
+    |> maybe_append("Organized by #{organizer}", present?(organizer))
+    |> maybe_append("Location #{location}", present?(location))
+    |> maybe_append("#{attendee_count} attendees", attendee_count > 0)
+    |> maybe_append(
+      "#{accepted} accepted / #{tentative} tentative / #{declined} declined",
+      response_counts != %{}
+    )
+    |> maybe_append(
+      "Starts in #{hours_until_start}h",
+      is_integer(hours_until_start) and hours_until_start >= 0
+    )
+    |> maybe_append("Description: #{truncate(description, 120)}", present?(description))
+    |> Enum.join(". ")
+    |> suffix_period()
+  end
+
+  defp calendar_signals(location, organizer, attendee_count, response_counts, hours_until_start) do
+    []
+    |> maybe_append("High-attendee meeting", attendee_count >= 5)
+    |> maybe_append("Organizer #{organizer}", present?(organizer))
+    |> maybe_append("Location #{location}", present?(location))
+    |> maybe_append("Response mix #{inspect(response_counts)}", response_counts != %{})
+    |> maybe_append(
+      "Starts soon in #{hours_until_start}h",
+      is_integer(hours_until_start) and hours_until_start in 0..6
+    )
+  end
+
+  defp read_string_list(attrs, key, limit)
+       when is_map(attrs) and is_binary(key) and is_integer(limit) do
+    case fetch_attr(attrs, key) do
+      values when is_list(values) ->
+        values
+        |> Enum.map(&normalize_string/1)
+        |> Enum.reject(&is_nil/1)
+        |> Enum.take(limit)
+
+      value when is_binary(value) ->
+        value
+        |> String.split(~r/\r?\n|;/, trim: true)
+        |> Enum.map(&normalize_string/1)
+        |> Enum.reject(&is_nil/1)
+        |> Enum.take(limit)
+
+      _ ->
+        []
+    end
+  end
+
+  defp maybe_append(list, _value, false), do: list
+  defp maybe_append(list, value, true), do: list ++ [value]
+
+  defp present?(value) when is_binary(value), do: String.trim(value) != ""
+  defp present?(_), do: false
+
+  defp suffix_period(""), do: ""
+
+  defp suffix_period(value) when is_binary(value) do
+    value = String.trim(value)
+
+    cond do
+      value == "" -> ""
+      String.ends_with?(value, ".") -> value
+      true -> value <> "."
+    end
+  end
+
+  defp compact_map(map) when is_map(map) do
+    Enum.reduce(map, %{}, fn
+      {_key, nil}, acc -> acc
+      {_key, []}, acc -> acc
+      {_key, ""}, acc -> acc
+      {key, value}, acc -> Map.put(acc, key, value)
+    end)
+  end
 
   defp stringify_keys(map) when is_map(map) do
     Enum.reduce(map, %{}, fn

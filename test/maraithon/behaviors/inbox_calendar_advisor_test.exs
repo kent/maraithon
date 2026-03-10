@@ -1,12 +1,16 @@
 defmodule Maraithon.Behaviors.InboxCalendarAdvisorTest do
   use Maraithon.DataCase, async: true
 
+  alias Maraithon.Accounts
   alias Maraithon.Agents
   alias Maraithon.Behaviors.InboxCalendarAdvisor
+  alias Maraithon.InsightNotifications.Delivery
   alias Maraithon.Insights
+  alias Maraithon.Repo
 
   setup do
     user_id = "advisor-user@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
 
     {:ok, agent} =
       Agents.create_agent(%{
@@ -38,9 +42,12 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisorTest do
           "messages" => [
             %{
               "message_id" => "msg-1",
+              "thread_id" => "thread-1",
               "subject" => "Urgent: customer escalation",
               "snippet" => "Need response ASAP",
               "from" => "ceo@example.com",
+              "to" => "ops@example.com, success@example.com",
+              "labels" => ["INBOX", "IMPORTANT", "UNREAD"],
               "internal_date" => DateTime.utc_now()
             }
           ]
@@ -55,6 +62,111 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisorTest do
       assert is_map(params)
       assert params["temperature"] == 0.2
       assert length(new_state.pending_candidates) >= 1
+      prompt = get_in(params, ["messages", Access.at(0), "content"])
+      assert prompt =~ "thread-1"
+      assert prompt =~ "IMPORTANT"
+      assert prompt =~ "ops@example.com"
+    end
+
+    test "includes Telegram feedback context in the llm prompt", %{
+      user_id: user_id,
+      agent: agent,
+      context: context
+    } do
+      {:ok, [prior_insight]} =
+        Insights.record_many(user_id, agent.id, [
+          %{
+            "source" => "gmail",
+            "category" => "reply_urgent",
+            "title" => "Customer escalation follow-up",
+            "summary" => "The user previously wanted fast escalation notices.",
+            "recommended_action" => "Reply with a same-day update.",
+            "priority" => 92,
+            "confidence" => 0.9,
+            "dedupe_key" => "feedback:prior:1"
+          }
+        ])
+
+      Repo.insert!(
+        Delivery.changeset(%Delivery{}, %{
+          insight_id: prior_insight.id,
+          user_id: user_id,
+          channel: "telegram",
+          destination: "12345",
+          score: 0.91,
+          threshold: 0.78,
+          status: "feedback_helpful",
+          feedback: "helpful",
+          feedback_at: DateTime.utc_now()
+        })
+      )
+
+      state = InboxCalendarAdvisor.init(%{"user_id" => user_id})
+
+      payload = %{
+        "source" => "gmail",
+        "data" => %{
+          "messages" => [
+            %{
+              "message_id" => "msg-feedback",
+              "subject" => "Urgent: board prep",
+              "snippet" => "Need an agenda today",
+              "from" => "ceo@example.com",
+              "internal_date" => DateTime.utc_now()
+            }
+          ]
+        }
+      }
+
+      {:effect, {:llm_call, params}, _new_state} =
+        InboxCalendarAdvisor.handle_wakeup(state, %{context | event: %{payload: payload}})
+
+      prompt = get_in(params, ["messages", Access.at(0), "content"])
+
+      assert prompt =~ "Recent Telegram feedback JSON"
+      assert prompt =~ "Customer escalation follow-up"
+      assert prompt =~ "telegram_fit_score"
+    end
+
+    test "includes calendar context in the llm prompt", %{context: context} do
+      state = InboxCalendarAdvisor.init(%{"user_id" => context.user_id})
+
+      payload = %{
+        "source" => "google_calendar",
+        "data" => %{
+          "events" => [
+            %{
+              "event_id" => "evt-1",
+              "summary" => "Customer QBR",
+              "description" => "Discuss renewals, risks, and open escalations.",
+              "location" => "Zoom",
+              "organizer" => "vp@example.com",
+              "start" => DateTime.add(DateTime.utc_now(), 2, :hour),
+              "attendees" => [
+                %{
+                  "email" => "vp@example.com",
+                  "display_name" => "VP",
+                  "response_status" => "accepted"
+                },
+                %{
+                  "email" => "ae@example.com",
+                  "display_name" => "AE",
+                  "response_status" => "tentative"
+                }
+              ]
+            }
+          ]
+        }
+      }
+
+      {:effect, {:llm_call, params}, _new_state} =
+        InboxCalendarAdvisor.handle_wakeup(state, %{context | event: %{payload: payload}})
+
+      prompt = get_in(params, ["messages", Access.at(0), "content"])
+
+      assert prompt =~ "Zoom"
+      assert prompt =~ "vp@example.com"
+      assert prompt =~ "response_counts"
     end
 
     test "returns idle when user id missing", %{context: context} do
@@ -96,9 +208,17 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisorTest do
               "dedupe_key" => dedupe_key,
               "title" => "Reply to ops today",
               "summary" => "This looks time-sensitive and should be acknowledged quickly.",
-              "recommended_action" => "Reply now and confirm next steps.",
+              "recommended_action" =>
+                "Reply now, confirm next steps, and suggest a same-day checkpoint if needed.",
               "priority" => 95,
-              "confidence" => 0.91
+              "confidence" => 0.91,
+              "telegram_fit_score" => 0.93,
+              "telegram_fit_reason" => "User tends to value urgent email follow-ups in Telegram.",
+              "why_now" => "The sender is asking for a same-day response on an active thread.",
+              "follow_up_ideas" => [
+                "Draft the reply with a clear owner and ETA.",
+                "Flag any blockers before the next customer touchpoint."
+              ]
             }
           ])
       }
@@ -118,6 +238,15 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisorTest do
       assert stored.title == "Reply to ops today"
       assert stored.priority == 95
       assert stored.category in ["reply_urgent", "tone_risk"]
+      assert stored.metadata["telegram_fit_score"] == 0.93
+      assert stored.metadata["telegram_fit_reason"] =~ "urgent email"
+      assert stored.metadata["feedback_tuned"] == true
+      assert stored.metadata["why_now"] =~ "same-day response"
+
+      assert stored.metadata["follow_up_ideas"] == [
+               "Draft the reply with a clear owner and ETA.",
+               "Flag any blockers before the next customer touchpoint."
+             ]
     end
   end
 end

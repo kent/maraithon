@@ -489,6 +489,24 @@ defmodule MaraithonWeb.DashboardLive do
                   <p class="mt-2 text-sm text-indigo-700">
                     <span class="font-medium">Action:</span> <%= insight.recommended_action %>
                   </p>
+                  <% why_now = insight_why_now(insight) %>
+                  <%= if why_now do %>
+                    <p class="mt-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                      Why now
+                    </p>
+                    <p class="mt-1 text-sm text-slate-600"><%= why_now %></p>
+                  <% end %>
+                  <% ideas = insight_follow_up_ideas(insight) %>
+                  <%= if ideas != [] do %>
+                    <p class="mt-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                      Ideas
+                    </p>
+                    <ul class="mt-1 space-y-1 text-sm text-slate-600">
+                      <%= for idea <- ideas do %>
+                        <li>- <%= idea %></li>
+                      <% end %>
+                    </ul>
+                  <% end %>
                 </div>
                 <div class="flex flex-wrap gap-2">
                   <button
@@ -1833,6 +1851,52 @@ defmodule MaraithonWeb.DashboardLive do
   defp format_confidence(value) when is_float(value), do: "#{Float.round(value * 100, 0)}%"
   defp format_confidence(value) when is_integer(value), do: "#{value}%"
   defp format_confidence(_), do: "n/a"
+
+  defp insight_why_now(insight) do
+    case insight_metadata_value(insight, "why_now") do
+      value when is_binary(value) ->
+        value = String.trim(value)
+        if value == "", do: nil, else: value
+
+      _ ->
+        nil
+    end
+  end
+
+  defp insight_follow_up_ideas(insight) do
+    case insight_metadata_value(insight, "follow_up_ideas") do
+      values when is_list(values) ->
+        values
+        |> Enum.map(fn
+          value when is_binary(value) ->
+            value = String.trim(value)
+            if value == "", do: nil, else: value
+
+          _ ->
+            nil
+        end)
+        |> Enum.reject(&is_nil/1)
+
+      _ ->
+        []
+    end
+  end
+
+  defp insight_metadata_value(%{metadata: metadata}, key)
+       when is_map(metadata) and is_binary(key) do
+    case Map.fetch(metadata, key) do
+      {:ok, value} ->
+        value
+
+      :error ->
+        Enum.find_value(metadata, fn
+          {map_key, value} when is_atom(map_key) -> if Atom.to_string(map_key) == key, do: value
+          _ -> nil
+        end)
+    end
+  end
+
+  defp insight_metadata_value(_insight, _key), do: nil
 
   defp agent_name(config), do: config["name"] || "unnamed_agent"
 
