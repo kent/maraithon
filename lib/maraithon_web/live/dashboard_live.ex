@@ -456,7 +456,7 @@ defmodule MaraithonWeb.DashboardLive do
             <div>
               <h2 class="text-lg font-medium text-gray-900">Actionable Insights</h2>
               <p class="mt-1 text-sm text-gray-500">
-                Email and calendar recommendations from long-running advisor agents.
+                Open-loop recommendations from long-running Gmail, Calendar, and Slack advisors.
               </p>
             </div>
             <span class="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700">
@@ -485,6 +485,9 @@ defmodule MaraithonWeb.DashboardLive do
                     </span>
                   </div>
                   <p class="mt-2 text-sm font-semibold text-slate-900"><%= insight.title %></p>
+                  <p class="mt-1 text-xs text-slate-500">
+                    from <%= insight_source_label(insight.source) %> · account <%= insight_account_label(insight) %>
+                  </p>
                   <p class="mt-1 text-sm text-slate-600"><%= insight.summary %></p>
                   <p class="mt-2 text-sm text-indigo-700">
                     <span class="font-medium">Action:</span> <%= insight.recommended_action %>
@@ -1828,6 +1831,15 @@ defmodule MaraithonWeb.DashboardLive do
   defp insight_category_label("product_opportunity"), do: "Roadmap"
   defp insight_category_label(_), do: "Insight"
 
+  defp insight_source_label("gmail"), do: "Gmail"
+  defp insight_source_label("calendar"), do: "Google Calendar"
+  defp insight_source_label("google_calendar"), do: "Google Calendar"
+  defp insight_source_label("slack"), do: "Slack"
+  defp insight_source_label("github"), do: "GitHub"
+  defp insight_source_label("telegram"), do: "Telegram"
+  defp insight_source_label(source) when is_binary(source) and source != "", do: source
+  defp insight_source_label(_), do: "system"
+
   defp insight_category_class("reply_urgent"),
     do: "rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800"
 
@@ -1864,6 +1876,21 @@ defmodule MaraithonWeb.DashboardLive do
   defp format_confidence(value) when is_float(value), do: "#{Float.round(value * 100, 0)}%"
   defp format_confidence(value) when is_integer(value), do: "#{value}%"
   defp format_confidence(_), do: "n/a"
+
+  defp insight_account_label(insight) do
+    metadata_account =
+      insight_metadata_value(insight, "account") ||
+        insight_metadata_value(insight, "account_email") ||
+        insight_metadata_value(insight, "user_id")
+
+    case normalized_text(metadata_account) do
+      nil ->
+        normalized_text(Map.get(insight, :user_id)) || "unknown"
+
+      value ->
+        value
+    end
+  end
 
   defp insight_why_now(insight) do
     case insight_metadata_value(insight, "why_now") do
@@ -1910,6 +1937,15 @@ defmodule MaraithonWeb.DashboardLive do
   end
 
   defp insight_metadata_value(_insight, _key), do: nil
+
+  defp normalized_text(value) when is_binary(value) do
+    case String.trim(value) do
+      "" -> nil
+      text -> text
+    end
+  end
+
+  defp normalized_text(_value), do: nil
 
   defp agent_name(config), do: config["name"] || "unnamed_agent"
 

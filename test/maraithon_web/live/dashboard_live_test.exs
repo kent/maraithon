@@ -224,6 +224,7 @@ defmodule MaraithonWeb.DashboardLiveTest do
       {:ok, _view, html} = live(conn, "/dashboard")
 
       assert html =~ "Why now"
+      assert html =~ "from Gmail · account user@example.com"
       assert html =~ "The customer asked for an update before today&#39;s review call."
       assert html =~ "Pull the latest status from support before replying."
       assert html =~ "Write down the two risks you need covered on the call."
