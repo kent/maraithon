@@ -100,6 +100,12 @@ defmodule MaraithonWeb.SettingsController do
         :client_secret
       ),
       oauth_item(
+        "Slack",
+        Application.get_env(:maraithon, :slack, []),
+        :client_id,
+        :client_secret
+      ),
+      oauth_item(
         "Notion",
         Application.get_env(:maraithon, :notion, []),
         :client_id,

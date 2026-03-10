@@ -725,11 +725,21 @@ defmodule MaraithonWeb.OAuthControllerTest do
           Jason.encode!(%{
             "ok" => true,
             "access_token" => "xoxb-slack-access-token",
+            "refresh_token" => "xoxe-refresh-bot",
+            "expires_in" => 43_200,
             "token_type" => "bot",
             "scope" => "chat:write,users:read",
             "team" => %{"id" => "T12345", "name" => "Test Team"},
             "bot_user_id" => "U12345",
-            "app_id" => "A12345"
+            "app_id" => "A12345",
+            "authed_user" => %{
+              "id" => "U99999",
+              "access_token" => "xoxp-user-access-token",
+              "refresh_token" => "xoxe-refresh-user",
+              "expires_in" => 43_200,
+              "scope" => "search:read,im:history",
+              "token_type" => "user"
+            }
           })
         )
       end)
@@ -744,6 +754,17 @@ defmodule MaraithonWeb.OAuthControllerTest do
       assert response["user_id"] == "user_789"
       assert response["team_id"] == "T12345"
       assert response["team_name"] == "Test Team"
+      assert response["user_scopes_connected"] == true
+
+      bot_token = Maraithon.OAuth.get_token("user_789", "slack:T12345")
+      user_token = Maraithon.OAuth.get_token("user_789", "slack:T12345:user:U99999")
+
+      assert bot_token.access_token == "xoxb-slack-access-token"
+      assert bot_token.refresh_token == "xoxe-refresh-bot"
+      assert "chat:write" in (bot_token.scopes || [])
+      assert user_token.access_token == "xoxp-user-access-token"
+      assert user_token.refresh_token == "xoxe-refresh-user"
+      assert "search:read" in (user_token.scopes || [])
     end
   end
 

@@ -12,6 +12,7 @@ defmodule MaraithonWeb.NavigationControllerTest do
       assert html =~ "Connectors"
       assert html =~ "Apps"
       assert html =~ "Google Workspace"
+      assert html =~ "Slack"
       assert html =~ "View"
     end
 
@@ -22,6 +23,16 @@ defmodule MaraithonWeb.NavigationControllerTest do
       assert html =~ "Connector Detail"
       assert html =~ "GitHub"
       assert html =~ "OAuth Setup"
+    end
+
+    test "GET /connectors/slack renders slack setup details", %{conn: conn} do
+      conn = conn |> log_in_test_user() |> get("/connectors/slack")
+      html = html_response(conn, 200)
+
+      assert html =~ "Slack"
+      assert html =~ "OAuth Setup"
+      assert html =~ "SLACK_SIGNING_SECRET"
+      assert html =~ "/webhooks/slack"
     end
 
     test "GET /connectors/telegram shows connected chat details without linked copy", %{

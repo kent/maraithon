@@ -127,7 +127,14 @@ defmodule MaraithonWeb.OAuthController do
     with {:ok, user_id} <- resolve_user_id(conn, params),
          {:ok, return_to} <- optional_return_to(params) do
       state = encode_provider_state("slack", user_id, %{"return_to" => return_to})
-      auth_url = Slack.authorize_url(Slack.default_scopes(), state)
+
+      auth_url =
+        Slack.authorize_url(
+          Slack.default_scopes(),
+          state,
+          user_scopes: Slack.default_user_scopes()
+        )
+
       redirect(conn, external: auth_url)
     else
       {:error, reason} -> bad_request(conn, reason)
@@ -284,36 +291,56 @@ defmodule MaraithonWeb.OAuthController do
   defp handle_slack_tokens(conn, code, user_id, state_payload) do
     case Slack.exchange_code(code) do
       {:ok, tokens} ->
-        token_data = %{
+        provider = "slack:#{tokens.team_id}"
+
+        bot_token_data = %{
           access_token: tokens.access_token,
+          refresh_token: tokens.refresh_token,
+          expires_in: tokens.expires_in,
           scopes: split_scope_string(tokens.scope),
           metadata: %{
             team_id: tokens.team_id,
             team_name: tokens.team_name,
             bot_user_id: tokens.bot_user_id,
-            app_id: tokens.app_id
+            app_id: tokens.app_id,
+            authed_user_id: tokens.authed_user && tokens.authed_user.id
           }
         }
 
-        provider = "slack:#{tokens.team_id}"
+        with {:ok, _token} <- OAuth.store_tokens(user_id, provider, bot_token_data),
+             :ok <- store_slack_user_token(user_id, tokens) do
+          payload = %{
+            status: "connected",
+            user_id: user_id,
+            team_id: tokens.team_id,
+            team_name: tokens.team_name,
+            topic: "slack:#{tokens.team_id}",
+            user_scopes_connected: slack_user_token_present?(tokens)
+          }
 
-        payload = %{
-          status: "connected",
-          user_id: user_id,
-          team_id: tokens.team_id,
-          team_name: tokens.team_name,
-          topic: "slack:#{tokens.team_id}"
-        }
+          respond_success(
+            conn,
+            state_payload["return_to"],
+            "slack",
+            success_message("slack", tokens.team_name),
+            payload
+          )
+        else
+          {:error, changeset} ->
+            Logger.warning("Failed to store Slack OAuth tokens",
+              user_id: user_id,
+              provider: provider,
+              error: inspect(changeset)
+            )
 
-        store_tokens_and_respond(
-          conn,
-          user_id,
-          provider,
-          token_data,
-          payload,
-          success_message("slack", tokens.team_name),
-          state_payload["return_to"]
-        )
+            respond_error(
+              conn,
+              state_payload["return_to"],
+              "slack",
+              "Failed to store tokens",
+              :internal_server_error
+            )
+        end
 
       {:error, reason} ->
         token_exchange_failed(
@@ -324,6 +351,41 @@ defmodule MaraithonWeb.OAuthController do
           state_payload["return_to"]
         )
     end
+  end
+
+  defp store_slack_user_token(user_id, tokens) do
+    authed_user = tokens.authed_user
+    user_access_token = authed_user && authed_user.access_token
+    authed_user_id = authed_user && authed_user.id
+
+    if is_binary(user_access_token) and is_binary(authed_user_id) and is_binary(tokens.team_id) do
+      provider = "slack:#{tokens.team_id}:user:#{authed_user_id}"
+
+      user_token_data = %{
+        access_token: user_access_token,
+        refresh_token: authed_user.refresh_token,
+        expires_in: authed_user.expires_in,
+        scopes: split_scope_string(authed_user.scope),
+        metadata: %{
+          team_id: tokens.team_id,
+          team_name: tokens.team_name,
+          slack_user_id: authed_user_id,
+          token_type: authed_user.token_type
+        }
+      }
+
+      case OAuth.store_tokens(user_id, provider, user_token_data) do
+        {:ok, _token} -> :ok
+        {:error, reason} -> {:error, reason}
+      end
+    else
+      :ok
+    end
+  end
+
+  defp slack_user_token_present?(tokens) do
+    authed_user = tokens.authed_user
+    is_map(authed_user) and is_binary(authed_user.access_token) and is_binary(authed_user.id)
   end
 
   defp handle_linear_tokens(conn, code, user_id, state_payload) do

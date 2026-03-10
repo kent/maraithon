@@ -41,6 +41,27 @@ defmodule Maraithon.Connectors.SlackTest do
       assert event.data.text == "Hello world"
     end
 
+    test "routes dm messages to dm topic" do
+      params = %{
+        "type" => "event_callback",
+        "team_id" => "T12345",
+        "event" => %{
+          "type" => "message",
+          "channel" => "D99999",
+          "user" => "U12345",
+          "text" => "DM hello",
+          "ts" => "1234567890.123456"
+        }
+      }
+
+      conn = conn(:post, "/webhooks/slack", params)
+
+      {:ok, topic, event} = Slack.handle_webhook(conn, params)
+
+      assert topic == "slack:T12345:dm:U12345"
+      assert event.type == "message"
+    end
+
     test "parses app_mention event" do
       params = %{
         "type" => "event_callback",

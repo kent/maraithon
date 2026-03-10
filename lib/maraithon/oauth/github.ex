@@ -127,19 +127,17 @@ defmodule Maraithon.OAuth.GitHub do
   """
   def api_request(method, path, access_token, body \\ nil)
       when method in [:get, :post, :delete] and is_binary(path) and is_binary(access_token) do
-    url = "#{api_base_url()}#{path}"
+    request(method, path, body, [
+      {"authorization", "Bearer #{access_token}"}
+    ])
+  end
 
-    headers = [
-      {"accept", "application/vnd.github+json"},
-      {"authorization", "Bearer #{access_token}"},
-      {"x-github-api-version", @github_api_version}
-    ]
-
-    case method do
-      :get -> HTTP.get(url, headers)
-      :post -> HTTP.post_json(url, body || %{}, headers)
-      :delete -> HTTP.delete(url, headers)
-    end
+  @doc """
+  Makes an unauthenticated request to the GitHub REST API.
+  Useful for public repository access when the user has not linked GitHub.
+  """
+  def public_api_request(method, path, body \\ nil) when method in [:get, :post, :delete] do
+    request(method, path, body, [])
   end
 
   defp primary_email(access_token) do
@@ -188,6 +186,22 @@ defmodule Maraithon.OAuth.GitHub do
   defp api_base_url do
     Application.get_env(:maraithon, :github, [])
     |> Keyword.get(:api_base_url, @default_api_base_url)
+  end
+
+  defp request(method, path, body, extra_headers) do
+    url = "#{api_base_url()}#{path}"
+
+    headers =
+      [
+        {"accept", "application/vnd.github+json"},
+        {"x-github-api-version", @github_api_version}
+      ] ++ extra_headers
+
+    case method do
+      :get -> HTTP.get(url, headers)
+      :post -> HTTP.post_json(url, body || %{}, headers)
+      :delete -> HTTP.delete(url, headers)
+    end
   end
 
   defp basic_auth(client_id, client_secret) do

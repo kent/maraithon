@@ -10,6 +10,8 @@ defmodule Maraithon.BehaviorsTest do
       assert Behaviors.exists?("watchdog_summarizer")
       assert Behaviors.exists?("repo_planner")
       assert Behaviors.exists?("inbox_calendar_advisor")
+      assert Behaviors.exists?("slack_followthrough_agent")
+      assert Behaviors.exists?("founder_followthrough_agent")
     end
 
     test "returns false for non-existing behaviors" do
@@ -22,6 +24,12 @@ defmodule Maraithon.BehaviorsTest do
       assert Behaviors.get("prompt_agent") == Maraithon.Behaviors.PromptAgent
       assert Behaviors.get("codebase_advisor") == Maraithon.Behaviors.CodebaseAdvisor
       assert Behaviors.get("inbox_calendar_advisor") == Maraithon.Behaviors.InboxCalendarAdvisor
+
+      assert Behaviors.get("slack_followthrough_agent") ==
+               Maraithon.Behaviors.SlackFollowthroughAgent
+
+      assert Behaviors.get("founder_followthrough_agent") ==
+               Maraithon.Behaviors.InboxCalendarAdvisor
     end
 
     test "returns nil for non-existing behavior" do
@@ -51,6 +59,8 @@ defmodule Maraithon.BehaviorsTest do
       assert "watchdog_summarizer" in behaviors
       assert "repo_planner" in behaviors
       assert "inbox_calendar_advisor" in behaviors
+      assert "slack_followthrough_agent" in behaviors
+      assert "founder_followthrough_agent" in behaviors
     end
   end
 end

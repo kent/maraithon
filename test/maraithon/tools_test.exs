@@ -34,6 +34,10 @@ defmodule Maraithon.ToolsTest do
       assert "google_calendar_list_events" in tools
       assert "github_create_issue_comment" in tools
       assert "slack_post_message" in tools
+      assert "slack_list_conversations" in tools
+      assert "slack_list_messages" in tools
+      assert "slack_get_thread_replies" in tools
+      assert "slack_search_messages" in tools
       assert "linear_create_comment" in tools
       assert "linear_create_issue" in tools
       assert "linear_update_issue_state" in tools
@@ -50,6 +54,7 @@ defmodule Maraithon.ToolsTest do
       assert Tools.exists?("gmail_list_recent")
       assert Tools.exists?("google_calendar_list_events")
       assert Tools.exists?("github_create_issue_comment")
+      assert Tools.exists?("slack_list_messages")
       assert Tools.exists?("notaui_list_tasks")
     end
 

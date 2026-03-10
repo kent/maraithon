@@ -56,7 +56,7 @@ defmodule MaraithonWeb.ConnectorsController do
           current_path: ~p"/connectors",
           current_user: conn.assigns.current_user,
           provider: provider_card,
-          token: Enum.find(snapshot.raw_tokens, &(&1.provider == provider)),
+          token: token_for_provider(snapshot.raw_tokens, provider),
           connection_errors: snapshot.errors
         )
     end
@@ -118,8 +118,19 @@ defmodule MaraithonWeb.ConnectorsController do
 
   defp provider_label("google"), do: "Google"
   defp provider_label("github"), do: "GitHub"
+  defp provider_label("slack"), do: "Slack"
   defp provider_label("telegram"), do: "Telegram"
   defp provider_label("linear"), do: "Linear"
   defp provider_label("notion"), do: "Notion"
   defp provider_label(provider), do: provider
+
+  defp token_for_provider(tokens, "slack") when is_list(tokens) do
+    Enum.find(tokens, fn token ->
+      is_binary(token.provider) and String.match?(token.provider, ~r/^slack:[^:]+$/)
+    end)
+  end
+
+  defp token_for_provider(tokens, provider) when is_list(tokens) and is_binary(provider) do
+    Enum.find(tokens, &(&1.provider == provider))
+  end
 end

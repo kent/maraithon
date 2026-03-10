@@ -215,12 +215,14 @@ defmodule MaraithonWeb.AdminControllerTest do
       previous_github = Application.get_env(:maraithon, :github, [])
       previous_linear = Application.get_env(:maraithon, :linear, [])
       previous_notion = Application.get_env(:maraithon, :notion, [])
+      previous_slack = Application.get_env(:maraithon, :slack, [])
 
       on_exit(fn ->
         Application.put_env(:maraithon, :google, previous_google)
         Application.put_env(:maraithon, :github, previous_github)
         Application.put_env(:maraithon, :linear, previous_linear)
         Application.put_env(:maraithon, :notion, previous_notion)
+        Application.put_env(:maraithon, :slack, previous_slack)
       end)
 
       Application.put_env(:maraithon, :google,
@@ -252,6 +254,13 @@ defmodule MaraithonWeb.AdminControllerTest do
         redirect_uri: "https://maraithon.fly.dev/auth/notion/callback"
       )
 
+      Application.put_env(:maraithon, :slack,
+        client_id: "slack-client",
+        client_secret: "slack-secret",
+        redirect_uri: "https://maraithon.fly.dev/auth/slack/callback",
+        signing_secret: "slack-signing"
+      )
+
       {:ok, _token} =
         OAuth.store_tokens("kent", "github", %{
           access_token: "github-token",
@@ -264,7 +273,7 @@ defmodule MaraithonWeb.AdminControllerTest do
       response = json_response(conn, 200)
       assert response["user_id"] == "kent"
       assert response["connected_count"] >= 1
-      assert length(response["providers"]) == 5
+      assert length(response["providers"]) == 6
       assert Enum.any?(response["raw_tokens"], &(&1["provider"] == "github"))
 
       github =
@@ -292,6 +301,15 @@ defmodule MaraithonWeb.AdminControllerTest do
              )
 
       assert Enum.any?(google["callback_urls"], &(&1["label"] == "Gmail Pub/Sub push callback"))
+
+      slack =
+        Enum.find(response["providers"], fn provider ->
+          provider["provider"] == "slack"
+        end)
+
+      assert slack["logo"] == "slack"
+      assert Enum.any?(slack["callback_urls"], &(&1["url"] =~ "/webhooks/slack"))
+      assert Enum.any?(slack["env_requirements"], &(&1["name"] == "SLACK_SIGNING_SECRET"))
     end
   end
 

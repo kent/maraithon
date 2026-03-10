@@ -10,7 +10,16 @@ defmodule Maraithon.Insights.Insight do
   @foreign_key_type :binary_id
 
   @statuses ["new", "acknowledged", "dismissed", "snoozed"]
-  @categories ["reply_urgent", "tone_risk", "event_important", "event_prep_needed", "general"]
+  @categories [
+    "reply_urgent",
+    "tone_risk",
+    "event_important",
+    "event_prep_needed",
+    "commitment_unresolved",
+    "meeting_follow_up",
+    "product_opportunity",
+    "general"
+  ]
 
   schema "insights" do
     field :user_id, :string

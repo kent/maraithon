@@ -22,11 +22,31 @@ defmodule Maraithon.OAuth.SlackTest do
     test "returns default scopes" do
       scopes = Slack.default_scopes()
 
+      assert "app_mentions:read" in scopes
       assert "channels:history" in scopes
       assert "channels:read" in scopes
+      assert "groups:history" in scopes
+      assert "im:history" in scopes
+      assert "mpim:history" in scopes
       assert "chat:write" in scopes
       assert "users:read" in scopes
       assert "reactions:read" in scopes
+    end
+  end
+
+  describe "default_user_scopes/0" do
+    test "returns default user scopes for personal access" do
+      scopes = Slack.default_user_scopes()
+
+      assert "im:history" in scopes
+      assert "mpim:history" in scopes
+      assert "search:read" in scopes
+    end
+  end
+
+  describe "configured?/0" do
+    test "returns true when oauth config is complete" do
+      assert Slack.configured?()
     end
   end
 
@@ -41,6 +61,7 @@ defmodule Maraithon.OAuth.SlackTest do
       assert url =~ "redirect_uri="
       assert url =~ "state=test_state_123"
       assert url =~ "scope="
+      assert url =~ "user_scope="
     end
 
     test "generates URL with custom scopes" do
@@ -51,6 +72,18 @@ defmodule Maraithon.OAuth.SlackTest do
 
       assert url =~ "scope=channels%3Ahistory%2Cchat%3Awrite"
       assert url =~ "state=custom_state"
+    end
+
+    test "allows overriding user scopes" do
+      state = "custom_user_scope"
+
+      url =
+        Slack.authorize_url(["channels:history"], state,
+          user_scopes: ["search:read", "im:history"]
+        )
+
+      assert url =~ "scope=channels%3Ahistory"
+      assert url =~ "user_scope=search%3Aread%2Cim%3Ahistory"
     end
   end
 
@@ -128,6 +161,45 @@ defmodule Maraithon.OAuth.SlackTest do
       result = Slack.exchange_code("bad_code")
 
       assert {:error, {:slack_error, "invalid_code"}} = result
+    end
+  end
+
+  describe "refresh_token/1" do
+    test "refreshes slack access token" do
+      bypass = Bypass.open()
+
+      Application.put_env(:maraithon, :slack,
+        client_id: "test_client_id",
+        client_secret: "test_client_secret",
+        token_url: "http://localhost:#{bypass.port}/api/oauth.v2.access"
+      )
+
+      Bypass.expect_once(bypass, "POST", "/api/oauth.v2.access", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        params = URI.decode_query(body)
+
+        assert params["grant_type"] == "refresh_token"
+        assert params["refresh_token"] == "refresh-token-1"
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{
+            "ok" => true,
+            "access_token" => "xoxb-refreshed",
+            "refresh_token" => "refresh-token-2",
+            "expires_in" => 43_200,
+            "scope" => "channels:history",
+            "token_type" => "bot"
+          })
+        )
+      end)
+
+      assert {:ok, refreshed} = Slack.refresh_token("refresh-token-1")
+      assert refreshed.access_token == "xoxb-refreshed"
+      assert refreshed.refresh_token == "refresh-token-2"
+      assert refreshed.expires_in == 43_200
     end
   end
 

@@ -540,7 +540,7 @@ defmodule MaraithonWeb.DashboardLive do
 
           <%= if @insights == [] do %>
             <div class="px-4 py-10 text-center text-sm text-slate-500 sm:px-6">
-              No actionable insights yet. Start an <span class="font-medium">inbox_calendar_advisor</span> agent and connect Google services.
+              No actionable insights yet. Start a <span class="font-medium">founder_followthrough_agent</span>, <span class="font-medium">inbox_calendar_advisor</span>, or <span class="font-medium">slack_followthrough_agent</span> and connect the required services.
             </div>
           <% end %>
         </div>
@@ -1813,6 +1813,7 @@ defmodule MaraithonWeb.DashboardLive do
 
   defp provider_label("google"), do: "Google"
   defp provider_label("github"), do: "GitHub"
+  defp provider_label("slack"), do: "Slack"
   defp provider_label("telegram"), do: "Telegram"
   defp provider_label("linear"), do: "Linear"
   defp provider_label("notion"), do: "Notion"
@@ -1822,6 +1823,9 @@ defmodule MaraithonWeb.DashboardLive do
   defp insight_category_label("tone_risk"), do: "Tone Risk"
   defp insight_category_label("event_important"), do: "Important Event"
   defp insight_category_label("event_prep_needed"), do: "Prep Needed"
+  defp insight_category_label("commitment_unresolved"), do: "Commitment Due"
+  defp insight_category_label("meeting_follow_up"), do: "Meeting Follow-Up"
+  defp insight_category_label("product_opportunity"), do: "Roadmap"
   defp insight_category_label(_), do: "Insight"
 
   defp insight_category_class("reply_urgent"),
@@ -1835,6 +1839,15 @@ defmodule MaraithonWeb.DashboardLive do
 
   defp insight_category_class("event_prep_needed"),
     do: "rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700"
+
+  defp insight_category_class("commitment_unresolved"),
+    do: "rounded-full bg-rose-100 px-2 py-0.5 text-xs font-medium text-rose-700"
+
+  defp insight_category_class("meeting_follow_up"),
+    do: "rounded-full bg-sky-100 px-2 py-0.5 text-xs font-medium text-sky-700"
+
+  defp insight_category_class("product_opportunity"),
+    do: "rounded-full bg-cyan-100 px-2 py-0.5 text-xs font-medium text-cyan-800"
 
   defp insight_category_class(_),
     do: "rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700"

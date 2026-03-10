@@ -60,7 +60,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisorTest do
         InboxCalendarAdvisor.handle_wakeup(state, context)
 
       assert is_map(params)
-      assert params["temperature"] == 0.2
+      assert params["temperature"] == 0.15
       assert length(new_state.pending_candidates) >= 1
       prompt = get_in(params, ["messages", Access.at(0), "content"])
       assert prompt =~ "thread-1"
@@ -141,7 +141,8 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisorTest do
               "description" => "Discuss renewals, risks, and open escalations.",
               "location" => "Zoom",
               "organizer" => "vp@example.com",
-              "start" => DateTime.add(DateTime.utc_now(), 2, :hour),
+              "start" => DateTime.add(DateTime.utc_now(), -2, :hour),
+              "end" => DateTime.add(DateTime.utc_now(), -1, :hour),
               "attendees" => [
                 %{
                   "email" => "vp@example.com",
@@ -237,11 +238,14 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisorTest do
       [stored | _] = Insights.list_open_for_user(user_id)
       assert stored.title == "Reply to ops today"
       assert stored.priority == 95
-      assert stored.category in ["reply_urgent", "tone_risk"]
+      assert stored.category in ["reply_urgent", "commitment_unresolved", "meeting_follow_up"]
       assert stored.metadata["telegram_fit_score"] == 0.93
       assert stored.metadata["telegram_fit_reason"] =~ "urgent email"
       assert stored.metadata["feedback_tuned"] == true
       assert stored.metadata["why_now"] =~ "same-day response"
+      assert stored.metadata["record"]["status"] == "unresolved"
+      assert is_binary(stored.metadata["record"]["commitment"])
+      assert stored.metadata["record"]["next_action"] =~ "Reply"
 
       assert stored.metadata["follow_up_ideas"] == [
                "Draft the reply with a clear owner and ETA.",

@@ -6,7 +6,7 @@ defmodule Maraithon.Connections do
   alias Maraithon.ConnectedAccounts
   alias Maraithon.Connectors.Telegram
   alias Maraithon.OAuth
-  alias Maraithon.OAuth.{GitHub, Google, Linear, Notion, Token}
+  alias Maraithon.OAuth.{GitHub, Google, Linear, Notion, Slack, Token}
 
   @google_services [
     %{
@@ -66,11 +66,13 @@ defmodule Maraithon.Connections do
       |> Enum.sort_by(&provider_sort_key/1)
 
     token_by_provider = Map.new(tokens, &{&1.provider, &1})
+    slack_tokens = Enum.filter(tokens, &slack_provider?(&1.provider))
     telegram_account = ConnectedAccounts.get(user_id, "telegram")
 
     providers = [
       google_card(user_id, token_by_provider["google"], return_to),
       github_card(user_id, token_by_provider["github"], return_to),
+      slack_card(user_id, slack_tokens, return_to),
       telegram_card(user_id, telegram_account, return_to),
       linear_card(user_id, token_by_provider["linear"], return_to),
       notion_card(user_id, token_by_provider["notion"], return_to)
@@ -93,6 +95,34 @@ defmodule Maraithon.Connections do
     OAuth.revoke(user_id, provider)
   end
 
+  def disconnect(user_id, "slack") when is_binary(user_id) do
+    slack_providers =
+      OAuth.list_user_tokens(user_id)
+      |> Enum.map(& &1.provider)
+      |> Enum.filter(&slack_provider?/1)
+      |> Enum.uniq()
+
+    case slack_providers do
+      [] ->
+        {:error, :no_token}
+
+      providers ->
+        errors =
+          Enum.reduce(providers, [], fn provider, acc ->
+            case OAuth.revoke(user_id, provider) do
+              {:ok, _deleted} -> acc
+              {:error, :no_token} -> acc
+              {:error, reason} -> [{provider, reason} | acc]
+            end
+          end)
+
+        case Enum.reverse(errors) do
+          [] -> {:ok, %{revoked: length(providers)}}
+          failures -> {:error, {:partial_disconnect, failures}}
+        end
+    end
+  end
+
   def disconnect(user_id, "telegram") when is_binary(user_id) do
     ConnectedAccounts.mark_disconnected(user_id, "telegram")
   end
@@ -104,6 +134,7 @@ defmodule Maraithon.Connections do
       [
         google_card(user_id, nil, return_to),
         github_card(user_id, nil, return_to),
+        slack_card(user_id, [], return_to),
         telegram_card(user_id, nil, return_to),
         linear_card(user_id, nil, return_to),
         notion_card(user_id, nil, return_to)
@@ -193,6 +224,70 @@ defmodule Maraithon.Connections do
           "Scopes: #{Enum.join(token_scopes(token), ", ")}"
         ]),
       services: []
+    }
+    |> enrich_provider_setup()
+  end
+
+  defp slack_card(user_id, tokens, return_to) do
+    configured? = Slack.configured?()
+    bot_token = slack_bot_token(tokens)
+    user_tokens = slack_user_tokens(tokens)
+    bot_scopes = token_scope_set(bot_token)
+
+    workspace_names =
+      tokens
+      |> Enum.map(fn token -> metadata_value(token, ["team_name"]) end)
+      |> Enum.reject(&is_nil/1)
+      |> Enum.uniq()
+
+    status =
+      cond do
+        not configured? -> :not_configured
+        is_nil(bot_token) -> :disconnected
+        user_tokens == [] -> :partial
+        true -> :connected
+      end
+
+    details =
+      provider_details(bot_token, [
+        if(workspace_names != [], do: "Workspaces: #{Enum.join(workspace_names, ", ")}"),
+        "Bot scopes: #{MapSet.size(bot_scopes)} granted",
+        if(user_tokens != [], do: "Personal Slack access connected for DM scans."),
+        if(user_tokens == [],
+          do:
+            "Reconnect Slack with user scopes enabled to scan personal DMs and private follow-through."
+        )
+      ])
+
+    services = [
+      %{
+        id: "channels",
+        label: "Channels",
+        description: "Track commitments and unresolved action loops in channel conversations.",
+        status: slack_service_status(configured?, bot_token)
+      },
+      %{
+        id: "dms",
+        label: "Personal DMs",
+        description: "Read DM and MPIM context to catch reply debt and private commitments.",
+        status: slack_service_status(configured?, List.first(user_tokens))
+      }
+    ]
+
+    %{
+      id: "slack",
+      provider: "slack",
+      label: "Slack",
+      description:
+        "Install Maraithon in Slack to track open loops in channels and personal messages.",
+      status: status,
+      configured?: configured?,
+      updated_at: latest_updated_at(tokens),
+      disconnectable?: tokens != [],
+      connect_url: auth_url("/auth/slack", user_id, return_to),
+      disconnect_label: "Disconnect Slack",
+      details: details,
+      services: services
     }
     |> enrich_provider_setup()
   end
@@ -393,13 +488,59 @@ defmodule Maraithon.Connections do
   defp normalize_list(list) when is_list(list), do: list
   defp normalize_list(_value), do: []
 
+  defp slack_provider?(provider) when is_binary(provider) do
+    String.starts_with?(provider, "slack:")
+  end
+
+  defp slack_provider?(_provider), do: false
+
+  defp slack_bot_token(tokens) when is_list(tokens) do
+    Enum.find(tokens, &slack_bot_provider?(&1.provider))
+  end
+
+  defp slack_user_tokens(tokens) when is_list(tokens) do
+    Enum.filter(tokens, &slack_user_provider?(&1.provider))
+  end
+
+  defp slack_bot_provider?(provider) when is_binary(provider) do
+    Regex.match?(~r/^slack:[^:]+$/, provider)
+  end
+
+  defp slack_bot_provider?(_provider), do: false
+
+  defp slack_user_provider?(provider) when is_binary(provider) do
+    Regex.match?(~r/^slack:[^:]+:user:[^:]+$/, provider)
+  end
+
+  defp slack_user_provider?(_provider), do: false
+
+  defp slack_service_status(false, _token), do: :not_configured
+  defp slack_service_status(true, nil), do: :disconnected
+  defp slack_service_status(true, _token), do: :connected
+
+  defp latest_updated_at([]), do: nil
+
+  defp latest_updated_at(tokens) when is_list(tokens) do
+    tokens
+    |> Enum.map(& &1.updated_at)
+    |> Enum.reject(&is_nil/1)
+    |> case do
+      [] ->
+        nil
+
+      values ->
+        Enum.max_by(values, &DateTime.to_unix/1, fn -> nil end)
+    end
+  end
+
   defp provider_sort_key(%Token{provider: provider}) do
-    case provider do
-      "google" -> 0
-      "github" -> 1
-      "linear" -> 2
-      "notion" -> 3
-      _ -> 99
+    cond do
+      provider == "google" -> 0
+      provider == "github" -> 1
+      slack_provider?(provider) -> 2
+      provider == "linear" -> 3
+      provider == "notion" -> 4
+      true -> 99
     end
   end
 
@@ -544,6 +685,58 @@ defmodule Maraithon.Connections do
         "Create a GitHub OAuth App and register the OAuth callback URL.",
         "For repo events, add a repository or org webhook pointing at the GitHub webhook callback.",
         "Agents can use a per-user GitHub grant or the optional fallback access token."
+      ]
+    }
+  end
+
+  defp provider_setup("slack") do
+    oauth_callback = callback_url("/auth/slack/callback")
+    events_callback = callback_url("/webhooks/slack")
+
+    %{
+      logo: :slack,
+      permissions: [
+        "Read channel and thread history",
+        "Read DM and MPIM history with user scopes",
+        "Post messages back into channels",
+        "Process Slack Events API webhooks for near-real-time updates"
+      ],
+      callback_urls: [
+        %{label: "OAuth callback", url: oauth_callback, required?: true},
+        %{label: "Events callback", url: events_callback, required?: true}
+      ],
+      env_requirements: [
+        env_requirement(
+          "SLACK_CLIENT_ID",
+          config_value(:slack, :client_id),
+          "Slack app client ID",
+          true
+        ),
+        env_requirement(
+          "SLACK_CLIENT_SECRET",
+          config_value(:slack, :client_secret),
+          "Slack app client secret",
+          true
+        ),
+        env_requirement(
+          "SLACK_REDIRECT_URI",
+          config_value(:slack, :redirect_uri),
+          "Must match the Slack OAuth callback URL",
+          true,
+          oauth_callback
+        ),
+        env_requirement(
+          "SLACK_SIGNING_SECRET",
+          config_value(:slack, :signing_secret),
+          "Used to verify Slack Events API signatures",
+          true
+        )
+      ],
+      setup_notes: [
+        "Enable OAuth token rotation in your Slack app so refresh tokens are issued.",
+        "Install the app to each workspace and request both bot scopes and user scopes for DM scanning.",
+        "Configure Event Subscriptions with the events callback URL and enable message events for channels and DMs.",
+        "After install, reconnect once if scopes change so Maraithon stores the updated grant."
       ]
     }
   end

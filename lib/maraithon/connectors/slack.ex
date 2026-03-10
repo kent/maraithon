@@ -129,7 +129,7 @@ defmodule Maraithon.Connectors.Slack do
       {:ignore, "bot message"}
     else
       channel = event["channel"]
-      topic = build_topic(team_id, channel)
+      topic = build_topic(team_id, channel, event["user"])
 
       # Determine event type based on subtype
       event_type =
@@ -258,12 +258,90 @@ defmodule Maraithon.Connectors.Slack do
     SlackOAuth.api_request(:get, "users.info?user=#{user_id}", access_token)
   end
 
+  @doc """
+  Lists Slack conversations.
+  """
+  def list_conversations(access_token, opts \\ []) do
+    query =
+      %{}
+      |> maybe_put_query(:types, encode_csv(opts[:types]))
+      |> maybe_put_query(:exclude_archived, encode_bool(opts[:exclude_archived]))
+      |> maybe_put_query(:limit, opts[:limit])
+      |> maybe_put_query(:cursor, opts[:cursor])
+      |> URI.encode_query()
+
+    endpoint = append_query("conversations.list", query)
+    SlackOAuth.api_request(:get, endpoint, access_token)
+  end
+
+  @doc """
+  Fetches message history for one Slack conversation.
+  """
+  def get_conversation_history(access_token, channel_id, opts \\ []) do
+    query =
+      %{}
+      |> Map.put(:channel, channel_id)
+      |> maybe_put_query(:limit, opts[:limit])
+      |> maybe_put_query(:oldest, opts[:oldest])
+      |> maybe_put_query(:latest, opts[:latest])
+      |> maybe_put_query(:inclusive, encode_bool(opts[:inclusive]))
+      |> maybe_put_query(:cursor, opts[:cursor])
+      |> URI.encode_query()
+
+    endpoint = append_query("conversations.history", query)
+    SlackOAuth.api_request(:get, endpoint, access_token)
+  end
+
+  @doc """
+  Fetches replies in one Slack thread.
+  """
+  def get_thread_replies(access_token, channel_id, thread_ts, opts \\ []) do
+    query =
+      %{}
+      |> Map.put(:channel, channel_id)
+      |> Map.put(:ts, thread_ts)
+      |> maybe_put_query(:limit, opts[:limit])
+      |> maybe_put_query(:oldest, opts[:oldest])
+      |> maybe_put_query(:latest, opts[:latest])
+      |> maybe_put_query(:inclusive, encode_bool(opts[:inclusive]))
+      |> maybe_put_query(:cursor, opts[:cursor])
+      |> URI.encode_query()
+
+    endpoint = append_query("conversations.replies", query)
+    SlackOAuth.api_request(:get, endpoint, access_token)
+  end
+
+  @doc """
+  Searches Slack messages with a user token.
+  """
+  def search_messages(access_token, query_text, opts \\ []) do
+    query =
+      %{}
+      |> Map.put(:query, query_text)
+      |> maybe_put_query(:count, opts[:count])
+      |> maybe_put_query(:page, opts[:page])
+      |> maybe_put_query(:sort, opts[:sort])
+      |> maybe_put_query(:sort_dir, opts[:sort_dir])
+      |> URI.encode_query()
+
+    endpoint = append_query("search.messages", query)
+    SlackOAuth.api_request(:get, endpoint, access_token)
+  end
+
   # ===========================================================================
   # Private Helpers
   # ===========================================================================
 
   defp build_topic(team_id, nil), do: "slack:#{team_id}"
   defp build_topic(team_id, channel), do: "slack:#{team_id}:#{channel}"
+
+  defp build_topic(team_id, channel, user_id) do
+    if dm_channel?(channel) and is_binary(user_id) and user_id != "" do
+      "slack:#{team_id}:dm:#{user_id}"
+    else
+      build_topic(team_id, channel)
+    end
+  end
 
   defp get_header(conn, header) do
     case Plug.Conn.get_req_header(conn, header) do
@@ -285,4 +363,41 @@ defmodule Maraithon.Connectors.Slack do
       }
     end)
   end
+
+  defp maybe_put_query(params, _key, nil), do: params
+  defp maybe_put_query(params, _key, ""), do: params
+  defp maybe_put_query(params, key, value), do: Map.put(params, key, value)
+
+  defp append_query(endpoint, ""), do: endpoint
+  defp append_query(endpoint, query), do: "#{endpoint}?#{query}"
+
+  defp encode_csv(nil), do: nil
+
+  defp encode_csv(values) when is_list(values) do
+    values
+    |> Enum.map(&to_string/1)
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
+    |> case do
+      [] -> nil
+      normalized -> Enum.join(normalized, ",")
+    end
+  end
+
+  defp encode_csv(value) when is_binary(value) do
+    case String.trim(value) do
+      "" -> nil
+      normalized -> normalized
+    end
+  end
+
+  defp encode_bool(value) when value in [true, "true", "TRUE", "1"], do: "true"
+  defp encode_bool(value) when value in [false, "false", "FALSE", "0"], do: "false"
+  defp encode_bool(_value), do: nil
+
+  defp dm_channel?(channel) when is_binary(channel) do
+    String.starts_with?(channel, "D")
+  end
+
+  defp dm_channel?(_channel), do: false
 end

@@ -16,6 +16,19 @@ defmodule MaraithonWeb.AgentBuilderLive do
       label: "Google Calendar"
     },
     "github_create_issue_comment" => %{provider: "github", label: "GitHub"},
+    "slack_post_message" => %{provider: "slack", service: "channels", label: "Slack Channels"},
+    "slack_list_conversations" => %{
+      provider: "slack",
+      service: "channels",
+      label: "Slack Channels"
+    },
+    "slack_list_messages" => %{provider: "slack", service: "channels", label: "Slack Channels"},
+    "slack_get_thread_replies" => %{
+      provider: "slack",
+      service: "channels",
+      label: "Slack Channels"
+    },
+    "slack_search_messages" => %{provider: "slack", service: "dms", label: "Slack DMs"},
     "linear_create_comment" => %{provider: "linear", label: "Linear"},
     "linear_create_issue" => %{provider: "linear", label: "Linear"},
     "linear_update_issue_state" => %{provider: "linear", label: "Linear"}
@@ -405,6 +418,61 @@ defmodule MaraithonWeb.AgentBuilderLive do
                   </div>
                 <% end %>
 
+                <%= if field_visible?(@selected_spec, "repo_full_name") or field_visible?(@selected_spec, "base_branch") or field_visible?(@selected_spec, "feature_limit") do %>
+                  <div class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+                    <%= if field_visible?(@selected_spec, "repo_full_name") do %>
+                      <div>
+                        <label for="launch_repo_full_name" class="block text-sm font-medium text-slate-700">
+                          GitHub repository
+                        </label>
+                        <input
+                          id="launch_repo_full_name"
+                          type="text"
+                          name="launch[repo_full_name]"
+                          value={@launch["repo_full_name"]}
+                          placeholder="owner/repo"
+                          class="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
+                        />
+                        <p class="mt-2 text-xs text-slate-500">The exact GitHub repository the planner should review every day.</p>
+                      </div>
+                    <% end %>
+
+                    <%= if field_visible?(@selected_spec, "base_branch") do %>
+                      <div>
+                        <label for="launch_base_branch" class="block text-sm font-medium text-slate-700">
+                          Base branch
+                        </label>
+                        <input
+                          id="launch_base_branch"
+                          type="text"
+                          name="launch[base_branch]"
+                          value={@launch["base_branch"]}
+                          placeholder="main"
+                          class="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
+                        />
+                        <p class="mt-2 text-xs text-slate-500">Usually `main`. This is the branch snapshot the planner treats as the current product baseline.</p>
+                      </div>
+                    <% end %>
+
+                    <%= if field_visible?(@selected_spec, "feature_limit") do %>
+                      <div>
+                        <label for="launch_feature_limit" class="block text-sm font-medium text-slate-700">
+                          Daily feature limit
+                        </label>
+                        <select
+                          id="launch_feature_limit"
+                          name="launch[feature_limit]"
+                          class="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
+                        >
+                          <option value="2" selected={@launch["feature_limit"] == "2"}>2</option>
+                          <option value="3" selected={@launch["feature_limit"] == "3"}>3</option>
+                        </select>
+                        <p class="mt-2 text-xs text-slate-500">How many roadmap opportunities the planner should surface in each daily batch.</p>
+                      </div>
+                    <% end %>
+                  </div>
+                <% end %>
+
                 <%= if field_visible?(@selected_spec, "email_scan_limit") or field_visible?(@selected_spec, "event_scan_limit") or field_visible?(@selected_spec, "prep_window_hours") or field_visible?(@selected_spec, "max_insights_per_cycle") or field_visible?(@selected_spec, "min_confidence") do %>
                   <div class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
                     <%= if field_visible?(@selected_spec, "email_scan_limit") do %>
@@ -442,7 +510,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
                     <%= if field_visible?(@selected_spec, "prep_window_hours") do %>
                       <div>
                         <label for="launch_prep_window_hours" class="block text-sm font-medium text-slate-700">
-                          Prep window (hours)
+                          Meeting follow-up window (hours)
                         </label>
                         <input
                           id="launch_prep_window_hours"
@@ -481,6 +549,77 @@ defmodule MaraithonWeb.AgentBuilderLive do
                           type="text"
                           name="launch[min_confidence]"
                           value={@launch["min_confidence"]}
+                          class="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
+                        />
+                      </div>
+                    <% end %>
+                  </div>
+                <% end %>
+
+                <%= if field_visible?(@selected_spec, "team_id") or field_visible?(@selected_spec, "channel_scan_limit") or field_visible?(@selected_spec, "dm_scan_limit") or field_visible?(@selected_spec, "lookback_hours") do %>
+                  <div class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+                    <%= if field_visible?(@selected_spec, "team_id") do %>
+                      <div>
+                        <label for="launch_team_id" class="block text-sm font-medium text-slate-700">
+                          Slack team ID (optional)
+                        </label>
+                        <input
+                          id="launch_team_id"
+                          type="text"
+                          name="launch[team_id]"
+                          value={@launch["team_id"]}
+                          placeholder="T01234567"
+                          class="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
+                        />
+                        <p class="mt-2 text-xs text-slate-500">
+                          Leave blank to scan every connected workspace; set this to pin the agent to one team.
+                        </p>
+                      </div>
+                    <% end %>
+
+                    <%= if field_visible?(@selected_spec, "channel_scan_limit") do %>
+                      <div>
+                        <label for="launch_channel_scan_limit" class="block text-sm font-medium text-slate-700">
+                          Channel message scan limit
+                        </label>
+                        <input
+                          id="launch_channel_scan_limit"
+                          type="number"
+                          min="1"
+                          name="launch[channel_scan_limit]"
+                          value={@launch["channel_scan_limit"]}
+                          class="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
+                        />
+                      </div>
+                    <% end %>
+
+                    <%= if field_visible?(@selected_spec, "dm_scan_limit") do %>
+                      <div>
+                        <label for="launch_dm_scan_limit" class="block text-sm font-medium text-slate-700">
+                          DM message scan limit
+                        </label>
+                        <input
+                          id="launch_dm_scan_limit"
+                          type="number"
+                          min="1"
+                          name="launch[dm_scan_limit]"
+                          value={@launch["dm_scan_limit"]}
+                          class="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
+                        />
+                      </div>
+                    <% end %>
+
+                    <%= if field_visible?(@selected_spec, "lookback_hours") do %>
+                      <div>
+                        <label for="launch_lookback_hours" class="block text-sm font-medium text-slate-700">
+                          Lookback window (hours)
+                        </label>
+                        <input
+                          id="launch_lookback_hours"
+                          type="number"
+                          min="1"
+                          name="launch[lookback_hours]"
+                          value={@launch["lookback_hours"]}
                           class="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
                         />
                       </div>
@@ -936,12 +1075,54 @@ defmodule MaraithonWeb.AgentBuilderLive do
       %{
         title: "Scan coverage",
         body:
-          "Checks up to #{launch["email_scan_limit"]} emails and #{launch["event_scan_limit"]} events each cycle."
+          "Checks up to #{launch["email_scan_limit"]} inbox emails, recent sent mail, and #{launch["event_scan_limit"]} calendar events each cycle."
       },
       %{
         title: "Insight tuning",
         body:
-          "Prep window: #{launch["prep_window_hours"]}h, max insights: #{launch["max_insights_per_cycle"]}, minimum confidence: #{launch["min_confidence"]}."
+          "Follow-up window: #{launch["prep_window_hours"]}h, max insights: #{launch["max_insights_per_cycle"]}, minimum confidence: #{launch["min_confidence"]}."
+      }
+    ]
+  end
+
+  defp dynamic_input_preview("slack_followthrough_agent", launch) do
+    [
+      %{
+        title: "Workspace scope",
+        body:
+          if(launch["team_id"] == "",
+            do: "Scanning all connected Slack teams.",
+            else: "Scoped to Slack team #{launch["team_id"]}."
+          )
+      },
+      %{
+        title: "Scan coverage",
+        body:
+          "Checks up to #{launch["channel_scan_limit"]} channel messages and #{launch["dm_scan_limit"]} DM messages over the last #{launch["lookback_hours"]} hours each cycle."
+      },
+      %{
+        title: "Escalation tuning",
+        body:
+          "Max insights: #{launch["max_insights_per_cycle"]}, minimum confidence: #{launch["min_confidence"]}."
+      }
+    ]
+  end
+
+  defp dynamic_input_preview("github_product_planner", launch) do
+    [
+      %{
+        title: "Repository review target",
+        body:
+          if(launch["repo_full_name"] == "",
+            do: "No repository selected yet. Add one in `owner/repo` format.",
+            else:
+              "Reviewing #{launch["repo_full_name"]} on branch #{blank_fallback(launch["base_branch"], "main")}."
+          )
+      },
+      %{
+        title: "Daily planning scope",
+        body:
+          "The planner will shortlist #{blank_fallback(launch["feature_limit"], "3")} feature opportunities per cycle."
       }
     ]
   end
@@ -970,8 +1151,17 @@ defmodule MaraithonWeb.AgentBuilderLive do
     [
       %{
         title: "Stored records",
+        body: "Each insight stores a structured commitment record with evidence and next action."
+      }
+    ]
+  end
+
+  defp dynamic_output_preview("slack_followthrough_agent", _launch) do
+    [
+      %{
+        title: "Stored records",
         body:
-          "Insights are persisted for the current signed-in user and can feed notification workflows."
+          "Each unresolved Slack commitment persists a structured record with commitment, person, source, deadline, status, evidence, and next_action."
       }
     ]
   end
@@ -996,6 +1186,16 @@ defmodule MaraithonWeb.AgentBuilderLive do
     ]
   end
 
+  defp dynamic_output_preview("github_product_planner", launch) do
+    [
+      %{
+        title: "Telegram push behavior",
+        body:
+          "High-signal roadmap suggestions for #{blank_fallback(launch["repo_full_name"], "the selected repository")} are stored as insights and sent through the Telegram notification pipeline."
+      }
+    ]
+  end
+
   defp dynamic_output_preview(_behavior, _launch), do: []
 
   defp starter_values(spec, launch) do
@@ -1011,7 +1211,17 @@ defmodule MaraithonWeb.AgentBuilderLive do
         [
           %{label: "Email scan limit", value: launch["email_scan_limit"]},
           %{label: "Event scan limit", value: launch["event_scan_limit"]},
-          %{label: "Minimum confidence", value: launch["min_confidence"]}
+          %{label: "Follow-up window", value: launch["prep_window_hours"] <> " h"}
+        ]
+
+      "slack_followthrough_agent" ->
+        [
+          %{
+            label: "Slack team",
+            value: if(launch["team_id"] == "", do: "All connected teams", else: launch["team_id"])
+          },
+          %{label: "Channel scan limit", value: launch["channel_scan_limit"]},
+          %{label: "DM scan limit", value: launch["dm_scan_limit"]}
         ]
 
       "codebase_advisor" ->
@@ -1041,6 +1251,19 @@ defmodule MaraithonWeb.AgentBuilderLive do
           %{label: "Tool budget", value: launch["budget_tool_calls"]}
         ]
 
+      "github_product_planner" ->
+        [
+          %{
+            label: "Repository",
+            value: blank_fallback(launch["repo_full_name"], "Set `owner/repo`")
+          },
+          %{
+            label: "Daily shortlist",
+            value: blank_fallback(launch["feature_limit"], "3") <> " features"
+          },
+          %{label: "Wakeup interval", value: launch["wakeup_interval_ms"] <> " ms"}
+        ]
+
       _ ->
         [
           %{label: "LLM call budget", value: launch["budget_llm_calls"]},
@@ -1063,6 +1286,15 @@ defmodule MaraithonWeb.AgentBuilderLive do
   end
 
   defp parse_csv(_values), do: []
+
+  defp blank_fallback(value, fallback) when is_binary(value) do
+    case String.trim(value) do
+      "" -> fallback
+      normalized -> normalized
+    end
+  end
+
+  defp blank_fallback(_value, fallback), do: fallback
 
   defp behavior_card_class(true),
     do:

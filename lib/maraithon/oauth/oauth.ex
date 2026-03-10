@@ -240,6 +240,57 @@ defmodule Maraithon.OAuth do
     end
   end
 
+  defp do_refresh(%Token{provider: provider} = token) when is_binary(provider) do
+    if String.starts_with?(provider, "slack:") do
+      case Maraithon.OAuth.Slack.refresh_token(token.refresh_token) do
+        {:ok, new_tokens} ->
+          scopes =
+            case split_scope_string(new_tokens.scope) do
+              [] -> token.scopes
+              values -> values
+            end
+
+          metadata =
+            token.metadata
+            |> put_metadata_if_present(
+              "team_id",
+              new_tokens.team_id || metadata_value(token.metadata, "team_id")
+            )
+            |> put_metadata_if_present(
+              "team_name",
+              new_tokens.team_name || metadata_value(token.metadata, "team_name")
+            )
+            |> put_metadata_if_present(
+              "bot_user_id",
+              new_tokens.bot_user_id || metadata_value(token.metadata, "bot_user_id")
+            )
+            |> put_metadata_if_present(
+              "app_id",
+              new_tokens.app_id || metadata_value(token.metadata, "app_id")
+            )
+
+          store_tokens(token.user_id, provider, %{
+            access_token: new_tokens.access_token,
+            refresh_token: new_tokens.refresh_token || token.refresh_token,
+            expires_in: new_tokens.expires_in,
+            scopes: scopes,
+            metadata: metadata
+          })
+
+        {:error, reason} ->
+          Logger.warning("Failed to refresh Slack token",
+            user_id: token.user_id,
+            provider: provider,
+            reason: inspect(reason)
+          )
+
+          {:error, reason}
+      end
+    else
+      {:error, {:unknown_provider, provider}}
+    end
+  end
+
   defp do_refresh(%Token{provider: provider}) do
     {:error, {:unknown_provider, provider}}
   end
@@ -267,4 +318,24 @@ defmodule Maraithon.OAuth do
       :ok
     end
   end
+
+  defp split_scope_string(nil), do: []
+  defp split_scope_string(""), do: []
+
+  defp split_scope_string(scope_string) when is_binary(scope_string) do
+    scope_string
+    |> String.split(~r/[\s,]+/, trim: true)
+    |> Enum.uniq()
+  end
+
+  defp metadata_value(metadata, key) when is_map(metadata) and is_binary(key) do
+    metadata[key] || metadata[String.to_atom(key)]
+  rescue
+    ArgumentError -> metadata[key]
+  end
+
+  defp metadata_value(_metadata, _key), do: nil
+
+  defp put_metadata_if_present(metadata, _key, nil), do: metadata
+  defp put_metadata_if_present(metadata, key, value), do: Map.put(metadata, key, value)
 end

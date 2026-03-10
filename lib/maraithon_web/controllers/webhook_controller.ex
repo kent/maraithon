@@ -134,6 +134,23 @@ defmodule MaraithonWeb.WebhookController do
         |> put_status(:ok)
         |> text(challenge)
 
+      {:ok, topic, event} ->
+        Connector.publish(topic, event)
+
+        case slack_team_topic(topic) do
+          nil -> :ok
+          ^topic -> :ok
+          team_topic -> Connector.publish(team_topic, event)
+        end
+
+        conn
+        |> put_status(:ok)
+        |> json(%{
+          status: "published",
+          topic: topic,
+          event_type: event.type
+        })
+
       result ->
         handle_connector_result(conn, result, failure_log: "Slack webhook failed")
     end
@@ -253,4 +270,14 @@ defmodule MaraithonWeb.WebhookController do
     |> put_status(:bad_request)
     |> json(%{error: message})
   end
+
+  defp slack_team_topic(topic) when is_binary(topic) do
+    case String.split(topic, ":", parts: 4) do
+      ["slack", team_id, _rest] when team_id != "" -> "slack:#{team_id}"
+      ["slack", team_id] when team_id != "" -> "slack:#{team_id}"
+      _ -> nil
+    end
+  end
+
+  defp slack_team_topic(_topic), do: nil
 end

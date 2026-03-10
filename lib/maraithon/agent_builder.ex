@@ -24,11 +24,18 @@ defmodule Maraithon.AgentBuilder do
     "ignore_patterns" => "",
     "wakeup_interval_ms" => "",
     "check_url" => "",
+    "repo_full_name" => "",
+    "base_branch" => "main",
+    "feature_limit" => "3",
     "email_scan_limit" => "",
     "event_scan_limit" => "",
     "prep_window_hours" => "",
     "max_insights_per_cycle" => "",
     "min_confidence" => "",
+    "team_id" => "",
+    "channel_scan_limit" => "",
+    "dm_scan_limit" => "",
+    "lookback_hours" => "",
     "write_plan_files" => "true"
   }
 
@@ -59,20 +66,70 @@ defmodule Maraithon.AgentBuilder do
       ]
     },
     %{
-      id: "inbox_calendar_advisor",
-      label: "Inbox + Calendar Advisor",
-      category: "Workflow",
+      id: "github_product_planner",
+      label: "GitHub Product Planner",
+      category: "Planning",
       summary:
-        "Scans Gmail and Calendar activity, scores urgency, and records actionable insights for the signed-in user.",
+        "Reviews one GitHub repository like a PM, proposes the next 2-3 features, and pushes the strongest roadmap ideas to Telegram each day.",
       inputs: [
-        "Recent Gmail messages for the current user",
-        "Upcoming Google Calendar events",
-        "Optional Gmail or Calendar sync events when they arrive"
+        "GitHub repository metadata, README, root structure, recent commits, open issues, and open pull requests",
+        "The base branch you want reviewed, usually `main`",
+        "A daily wakeup cadence that controls when the planner re-evaluates the roadmap"
       ],
       outputs: [
-        "Stored insights with urgency and prep recommendations",
-        "Insight categories like reply urgency, tone risk, or meeting prep reminders",
-        "A running advisor loop that wakes up every few minutes"
+        "Stored roadmap insights with titles, summaries, recommended first milestones, and evidence",
+        "Telegram-ready feature suggestions scored for whether they are worth interrupting you about",
+        "A daily planning loop grounded in the current state of the selected repository"
+      ],
+      fields: ~w(repo_full_name base_branch feature_limit wakeup_interval_ms),
+      defaults: %{
+        "prompt" => "",
+        "tools" => "",
+        "memory_limit" => "",
+        "repo_full_name" => "",
+        "base_branch" => "main",
+        "feature_limit" => "3",
+        "wakeup_interval_ms" => "86400000"
+      },
+      requirements: [
+        %{
+          kind: :provider,
+          provider: "github",
+          label: "GitHub",
+          description:
+            "Recommended for private repositories and higher GitHub API limits. Public repos can run without it.",
+          required?: false
+        },
+        %{
+          kind: :provider,
+          provider: "telegram",
+          label: "Telegram",
+          description:
+            "Needed so the planner can push the daily feature shortlist to your linked chat.",
+          required?: true
+        }
+      ],
+      suggestions: [
+        "Point this at one product repository, not a monorepo grab bag, so the recommendations stay coherent.",
+        "Keep `feature_limit` at 2 or 3. A daily shortlist should force prioritization instead of becoming a backlog dump.",
+        "Use the default daily cadence first, then tighten it only if you truly want more operator interrupts."
+      ]
+    },
+    %{
+      id: "inbox_calendar_advisor",
+      label: "Founder Followthrough Agent",
+      category: "Workflow",
+      summary:
+        "Tracks commitments from Gmail and Calendar, verifies whether follow-through happened, and escalates only high-confidence unresolved items.",
+      inputs: [
+        "Gmail threads where you promised something, agreed on deadlines, or owe a reply",
+        "Calendar meetings likely to create follow-up work, especially customer, investor, hiring, and planning meetings",
+        "Recent sent email used as evidence to verify whether follow-through already happened"
+      ],
+      outputs: [
+        "Telegram-ready nudges for unresolved commitments",
+        "Post-meeting reminders when owners and next steps are still missing",
+        "Structured commitment records with commitment, person, source, deadline, status, evidence, and next_action"
       ],
       fields:
         ~w(email_scan_limit event_scan_limit prep_window_hours max_insights_per_cycle min_confidence),
@@ -81,11 +138,11 @@ defmodule Maraithon.AgentBuilder do
         "tools" => "",
         "memory_limit" => "",
         "wakeup_interval_ms" => "600000",
-        "email_scan_limit" => "12",
+        "email_scan_limit" => "14",
         "event_scan_limit" => "12",
-        "prep_window_hours" => "24",
-        "max_insights_per_cycle" => "6",
-        "min_confidence" => "0.55"
+        "prep_window_hours" => "36",
+        "max_insights_per_cycle" => "5",
+        "min_confidence" => "0.72"
       },
       requirements: [
         %{
@@ -101,14 +158,68 @@ defmodule Maraithon.AgentBuilder do
           provider: "google",
           service: "calendar",
           label: "Google Calendar",
-          description: "Needed to inspect upcoming events and prep windows.",
+          description: "Needed to inspect important meetings and infer missing follow-ups.",
           required?: true
         }
       ],
       suggestions: [
-        "Keep the scan limits low at first so the advisor only works on the highest-signal items.",
-        "Raise `prep_window_hours` if you want earlier heads-up before important meetings.",
-        "Increase `min_confidence` if you want fewer, more conservative insights."
+        "Keep scan limits focused so the agent escalates only the strongest unresolved commitments.",
+        "Use `prep_window_hours` as a meeting follow-up window for how far back to inspect unresolved actions.",
+        "Raise `min_confidence` if you want even fewer Telegram interruptions."
+      ]
+    },
+    %{
+      id: "slack_followthrough_agent",
+      label: "Slack Followthrough Agent",
+      category: "Workflow",
+      summary:
+        "Tracks open loops from Slack channels and DMs, then escalates only high-confidence unresolved commitments.",
+      inputs: [
+        "Slack channel and thread messages where commitments or deadlines were explicitly stated",
+        "Personal DM and group DM messages that indicate you owe a reply or promised a follow-up",
+        "Recent follow-up evidence in the same channel/thread to verify whether the loop is already closed"
+      ],
+      outputs: [
+        "Actionable unresolved commitment insights scored for urgency and confidence",
+        "Structured records with commitment, person, source, deadline, status, evidence, and next_action",
+        "Telegram-ready nudges for unresolved loops that should interrupt you now"
+      ],
+      fields:
+        ~w(team_id channel_scan_limit dm_scan_limit lookback_hours max_insights_per_cycle min_confidence wakeup_interval_ms),
+      defaults: %{
+        "prompt" => "",
+        "tools" => "",
+        "memory_limit" => "",
+        "team_id" => "",
+        "channel_scan_limit" => "80",
+        "dm_scan_limit" => "50",
+        "lookback_hours" => "48",
+        "max_insights_per_cycle" => "5",
+        "min_confidence" => "0.75",
+        "wakeup_interval_ms" => "600000"
+      },
+      requirements: [
+        %{
+          kind: :provider_service,
+          provider: "slack",
+          service: "channels",
+          label: "Slack Channels",
+          description: "Needed to inspect channel context and detect stated commitments.",
+          required?: true
+        },
+        %{
+          kind: :provider_service,
+          provider: "slack",
+          service: "dms",
+          label: "Slack Personal DMs",
+          description: "Needed to scan direct messages and private follow-through loops.",
+          required?: true
+        }
+      ],
+      suggestions: [
+        "Keep channel and DM scan limits bounded so only the strongest unresolved commitments are escalated.",
+        "Set `team_id` when multiple Slack workspaces are connected and you want one workspace per agent.",
+        "Raise `min_confidence` if you want fewer interruptions and only the clearest open loops."
       ]
     },
     %{
@@ -245,20 +356,28 @@ defmodule Maraithon.AgentBuilder do
     }
   ]
 
+  @behavior_spec_aliases %{
+    "founder_followthrough_agent" => "inbox_calendar_advisor"
+  }
+
   @behavior_spec_by_id Map.new(@behavior_specs, &{&1.id, &1})
 
   def behavior_specs, do: @behavior_specs
 
   def behavior_spec(id) when is_binary(id) do
-    Map.get(@behavior_spec_by_id, id, hd(@behavior_specs))
+    id
+    |> resolve_behavior_id()
+    |> then(&Map.get(@behavior_spec_by_id, &1, hd(@behavior_specs)))
   end
 
   def default_launch_params, do: launch_params_for_behavior("prompt_agent")
 
   def launch_params_for_behavior(id) when is_binary(id) do
+    spec = behavior_spec(id)
+
     @launch_defaults
-    |> Map.merge(behavior_spec(id).defaults)
-    |> Map.put("behavior", behavior_spec(id).id)
+    |> Map.merge(spec.defaults)
+    |> Map.put("behavior", id)
   end
 
   def normalize_launch_params(params) when is_map(params) do
@@ -307,11 +426,22 @@ defmodule Maraithon.AgentBuilder do
       "ignore_patterns" => Enum.join(config["ignore_patterns"] || [], ","),
       "wakeup_interval_ms" => stringify(config["wakeup_interval_ms"]),
       "check_url" => config["check_url"] || "",
+      "repo_full_name" => config["repo_full_name"] || "",
+      "base_branch" =>
+        config["base_branch"] || launch_params_for_behavior(behavior)["base_branch"],
+      "feature_limit" =>
+        stringify(
+          config["feature_limit"] || launch_params_for_behavior(behavior)["feature_limit"]
+        ),
       "email_scan_limit" => stringify(config["email_scan_limit"]),
       "event_scan_limit" => stringify(config["event_scan_limit"]),
       "prep_window_hours" => stringify(config["prep_window_hours"]),
       "max_insights_per_cycle" => stringify(config["max_insights_per_cycle"]),
       "min_confidence" => stringify(config["min_confidence"]),
+      "team_id" => config["team_id"] || "",
+      "channel_scan_limit" => stringify(config["channel_scan_limit"]),
+      "dm_scan_limit" => stringify(config["dm_scan_limit"]),
+      "lookback_hours" => stringify(config["lookback_hours"]),
       "write_plan_files" => stringify(Map.get(config, "write_plan_files", true))
     })
   end
@@ -319,12 +449,13 @@ defmodule Maraithon.AgentBuilder do
   def build_start_params(launch, user_id) when is_binary(user_id) do
     launch = normalize_launch_params(launch)
     behavior = launch["behavior"]
+    resolved_behavior = resolve_behavior_id(behavior)
 
     cond do
       behavior == "" ->
         {:error, "Choose a template before creating the agent."}
 
-      is_nil(Map.get(@behavior_spec_by_id, behavior)) ->
+      is_nil(Map.get(@behavior_spec_by_id, resolved_behavior)) ->
         {:error, "Unknown behavior: #{behavior}"}
 
       true ->
@@ -333,7 +464,7 @@ defmodule Maraithon.AgentBuilder do
              {:ok, tool_calls} <-
                parse_positive_integer(launch["budget_tool_calls"], "Tool call budget"),
              {:ok, extra_config} <- parse_optional_config_json(launch["config_json"]),
-             {:ok, config} <- build_behavior_config(behavior, launch, user_id) do
+             {:ok, config} <- build_behavior_config(resolved_behavior, launch, user_id) do
           {:ok,
            %{
              "user_id" => user_id,
@@ -412,6 +543,24 @@ defmodule Maraithon.AgentBuilder do
     end
   end
 
+  defp build_behavior_config("github_product_planner", launch, user_id) do
+    with {:ok, repo_full_name} <- validate_repo_full_name(launch["repo_full_name"]),
+         {:ok, feature_limit} <-
+           parse_integer_in_range(launch["feature_limit"], "Feature limit", 2, 3),
+         {:ok, wakeup_interval_ms} <-
+           parse_positive_integer(launch["wakeup_interval_ms"], "Wakeup interval") do
+      {:ok,
+       %{
+         "name" => launch_name(launch),
+         "user_id" => user_id,
+         "repo_full_name" => repo_full_name,
+         "base_branch" => normalize_branch(launch["base_branch"]),
+         "feature_limit" => feature_limit,
+         "wakeup_interval_ms" => wakeup_interval_ms
+       }}
+    end
+  end
+
   defp build_behavior_config("inbox_calendar_advisor", launch, user_id) do
     with {:ok, email_scan_limit} <-
            parse_positive_integer(launch["email_scan_limit"], "Email scan limit"),
@@ -436,6 +585,39 @@ defmodule Maraithon.AgentBuilder do
     end
   end
 
+  defp build_behavior_config("slack_followthrough_agent", launch, user_id) do
+    with {:ok, channel_scan_limit} <-
+           parse_positive_integer(launch["channel_scan_limit"], "Channel scan limit"),
+         {:ok, dm_scan_limit} <-
+           parse_positive_integer(launch["dm_scan_limit"], "DM scan limit"),
+         {:ok, lookback_hours} <-
+           parse_positive_integer(launch["lookback_hours"], "Lookback window"),
+         {:ok, max_insights_per_cycle} <-
+           parse_positive_integer(launch["max_insights_per_cycle"], "Max insights per cycle"),
+         {:ok, min_confidence} <-
+           parse_float_in_range(launch["min_confidence"], "Minimum confidence", 0.0, 1.0),
+         {:ok, wakeup_interval_ms} <-
+           parse_positive_integer(launch["wakeup_interval_ms"], "Wakeup interval") do
+      {:ok,
+       %{
+         "name" => launch_name(launch),
+         "user_id" => user_id,
+         "team_id" => empty_to_nil(launch["team_id"]),
+         "channel_scan_limit" => channel_scan_limit,
+         "dm_scan_limit" => dm_scan_limit,
+         "lookback_hours" => lookback_hours,
+         "max_insights_per_cycle" => max_insights_per_cycle,
+         "min_confidence" => min_confidence,
+         "wakeup_interval_ms" => wakeup_interval_ms
+       }}
+      |> drop_nil_values()
+    end
+  end
+
+  defp build_behavior_config("founder_followthrough_agent", launch, user_id) do
+    build_behavior_config("inbox_calendar_advisor", launch, user_id)
+  end
+
   defp build_behavior_config(behavior, launch, _user_id) do
     {:ok, %{"name" => launch_name(launch), "prompt" => launch["prompt"], "behavior" => behavior}}
   end
@@ -458,6 +640,13 @@ defmodule Maraithon.AgentBuilder do
 
   defp parse_float_in_range(value, field_name, min, max) do
     case Float.parse(value || "") do
+      {parsed, ""} when parsed >= min and parsed <= max -> {:ok, parsed}
+      _ -> {:error, "#{field_name} must be between #{min} and #{max}"}
+    end
+  end
+
+  defp parse_integer_in_range(value, field_name, min, max) do
+    case Integer.parse(value || "") do
       {parsed, ""} when parsed >= min and parsed <= max -> {:ok, parsed}
       _ -> {:error, "#{field_name} must be between #{min} and #{max}"}
     end
@@ -512,6 +701,27 @@ defmodule Maraithon.AgentBuilder do
     end
   end
 
+  defp validate_repo_full_name(value) do
+    repo_full_name =
+      value
+      |> to_string()
+      |> String.trim()
+
+    case String.split(repo_full_name, "/", parts: 2) do
+      [owner, repo] when owner != "" and repo != "" -> {:ok, repo_full_name}
+      _ -> {:error, "Repository must be in `owner/repo` format"}
+    end
+  end
+
+  defp normalize_branch(value) when is_binary(value) do
+    case String.trim(value) do
+      "" -> "main"
+      branch -> branch
+    end
+  end
+
+  defp normalize_branch(_value), do: "main"
+
   defp parse_csv(""), do: []
 
   defp parse_csv(values) when is_binary(values) do
@@ -562,6 +772,16 @@ defmodule Maraithon.AgentBuilder do
   defp known_config_keys("watchdog_summarizer"),
     do: ["name", "check_url", "wakeup_interval_ms"]
 
+  defp known_config_keys("github_product_planner"),
+    do: [
+      "name",
+      "user_id",
+      "repo_full_name",
+      "base_branch",
+      "feature_limit",
+      "wakeup_interval_ms"
+    ]
+
   defp known_config_keys("inbox_calendar_advisor"),
     do: [
       "name",
@@ -572,6 +792,22 @@ defmodule Maraithon.AgentBuilder do
       "max_insights_per_cycle",
       "min_confidence"
     ]
+
+  defp known_config_keys("slack_followthrough_agent"),
+    do: [
+      "name",
+      "user_id",
+      "team_id",
+      "channel_scan_limit",
+      "dm_scan_limit",
+      "lookback_hours",
+      "max_insights_per_cycle",
+      "min_confidence",
+      "wakeup_interval_ms"
+    ]
+
+  defp known_config_keys("founder_followthrough_agent"),
+    do: known_config_keys("inbox_calendar_advisor")
 
   defp known_config_keys(_behavior), do: ["name", "prompt"]
 
@@ -586,4 +822,8 @@ defmodule Maraithon.AgentBuilder do
     do: {:ok, Enum.reject(map, fn {_k, v} -> is_nil(v) end) |> Map.new()}
 
   defp drop_nil_values(other), do: other
+
+  defp resolve_behavior_id(id) when is_binary(id) do
+    Map.get(@behavior_spec_aliases, id, id)
+  end
 end

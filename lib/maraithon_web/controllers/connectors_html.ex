@@ -26,6 +26,8 @@ defmodule MaraithonWeb.ConnectorsHTML do
     do: "Reconnect Telegram"
 
   def connection_primary_action(%{provider: "telegram"}), do: "Link Telegram"
+  def connection_primary_action(%{provider: "slack", status: :connected}), do: "Reconnect Slack"
+  def connection_primary_action(%{provider: "slack"}), do: "Connect Slack"
   def connection_primary_action(%{status: :connected}), do: "Reconnect"
   def connection_primary_action(_provider), do: "Connect"
 
@@ -173,6 +175,14 @@ defmodule MaraithonWeb.ConnectorsHTML do
     ~H"""
     <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-sky-500 text-xs font-semibold text-white shadow-sm">
       TG
+    </div>
+    """
+  end
+
+  def oauth_logo(%{provider: :slack} = assigns) do
+    ~H"""
+    <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-[#4A154B] text-xs font-semibold text-white shadow-sm">
+      SL
     </div>
     """
   end
