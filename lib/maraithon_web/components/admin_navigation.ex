@@ -7,6 +7,7 @@ defmodule MaraithonWeb.AdminNavigation do
 
   @tabs [
     %{label: "Dashboard", path: "/dashboard"},
+    %{label: "Build Agent", path: "/agents/new"},
     %{label: "Connectors", path: "/connectors"},
     %{label: "How it works", path: "/how-it-works"}
   ]

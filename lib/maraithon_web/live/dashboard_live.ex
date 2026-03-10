@@ -1,7 +1,7 @@
 defmodule MaraithonWeb.DashboardLive do
   use MaraithonWeb, :live_view
 
-  alias Maraithon.Accounts
+  alias Maraithon.AgentBuilder
   alias Maraithon.Admin
   alias Maraithon.Agents
   alias Maraithon.Behaviors
@@ -13,9 +13,6 @@ defmodule MaraithonWeb.DashboardLive do
   @event_limit 50
   @activity_limit 40
   @failure_limit 20
-
-  @default_prompt "You are a helpful assistant that watches for events and responds thoughtfully."
-  @default_tools "read_file,search_files,http_get"
 
   @impl true
   def mount(_params, _session, socket) do
@@ -80,49 +77,40 @@ defmodule MaraithonWeb.DashboardLive do
 
   @impl true
   def handle_params(params, uri, socket) do
-    if Accounts.connected_accounts?(current_user_id(socket)) do
-      socket =
-        socket
-        |> assign(:current_path, current_path_from_uri(uri))
-        |> apply_dashboard_params(params, uri)
+    socket =
+      socket
+      |> assign(:current_path, current_path_from_uri(uri))
+      |> apply_dashboard_params(params, uri)
 
-      case Map.get(params, "id") do
-        id when is_binary(id) ->
-          case refresh_selected_agent(socket, id) do
-            {:ok, socket} ->
-              {:noreply, assign(socket, page_title: "Agent #{String.slice(id, 0, 8)}")}
+    case Map.get(params, "id") do
+      id when is_binary(id) ->
+        case refresh_selected_agent(socket, id) do
+          {:ok, socket} ->
+            {:noreply, assign(socket, page_title: "Agent #{String.slice(id, 0, 8)}")}
 
-            {:not_found, socket} ->
-              {:noreply,
-               socket
-               |> assign(
-                 selected_agent: nil,
-                 events: [],
-                 agent_spend: nil,
-                 inspection: empty_inspection(),
-                 inspection_errors: []
-               )
-               |> push_navigate(
-                 to: connection_home_path(socket, socket.assigns.connection_user_id)
-               )}
-          end
+          {:not_found, socket} ->
+            {:noreply,
+             socket
+             |> assign(
+               selected_agent: nil,
+               events: [],
+               agent_spend: nil,
+               inspection: empty_inspection(),
+               inspection_errors: []
+             )
+             |> push_navigate(to: connection_home_path(socket, socket.assigns.connection_user_id))}
+        end
 
-        _ ->
-          {:noreply,
-           assign(socket,
-             selected_agent: nil,
-             events: [],
-             agent_spend: nil,
-             inspection: empty_inspection(),
-             inspection_errors: [],
-             page_title: "Control Center"
-           )}
-      end
-    else
-      {:noreply,
-       socket
-       |> put_flash(:info, "Connect at least one account before launching agents.")
-       |> push_navigate(to: "/connectors")}
+      _ ->
+        {:noreply,
+         assign(socket,
+           selected_agent: nil,
+           events: [],
+           agent_spend: nil,
+           inspection: empty_inspection(),
+           inspection_errors: [],
+           page_title: "Control Center"
+         )}
     end
   end
 
@@ -394,13 +382,12 @@ defmodule MaraithonWeb.DashboardLive do
           </div>
 
           <div class="flex gap-2">
-            <button
-              type="button"
-              phx-click="new_agent"
+            <a
+              href={~p"/agents/new"}
               class="inline-flex items-center rounded-md border border-white/20 bg-white/10 px-3 py-2 text-sm font-medium text-white hover:bg-white/15"
             >
-              New Agent
-            </button>
+              Build Agent
+            </a>
             <button
               type="button"
               phx-click="refresh_now"
@@ -636,7 +623,7 @@ defmodule MaraithonWeb.DashboardLive do
                 <%= if @agents == [] do %>
                   <tr>
                     <td colspan="5" class="px-4 py-12 text-center text-gray-500">
-                      No agents yet. Create one from the editor.
+                      No agents yet. Build one from the dedicated builder.
                     </td>
                   </tr>
                 <% end %>
@@ -670,144 +657,167 @@ defmodule MaraithonWeb.DashboardLive do
               </div>
             <% end %>
 
-            <form id="launch-agent-form" phx-submit="launch_agent" class="space-y-4">
-              <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
+            <%= if @launch_mode == :edit do %>
+              <form id="launch-agent-form" phx-submit="launch_agent" class="space-y-4">
+                <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
+                  <div>
+                    <label for="launch_behavior" class="block text-sm font-medium text-gray-700">
+                      Behavior
+                    </label>
+                    <select
+                      id="launch_behavior"
+                      name="launch[behavior]"
+                      class="mt-1 block w-full rounded-md border-gray-300 text-sm shadow-sm"
+                    >
+                      <%= for behavior <- @behaviors do %>
+                        <option value={behavior} selected={behavior == @launch["behavior"]}>
+                          <%= behavior %>
+                        </option>
+                      <% end %>
+                    </select>
+                  </div>
+                  <div>
+                    <label for="launch_name" class="block text-sm font-medium text-gray-700">
+                      Name
+                    </label>
+                    <input
+                      id="launch_name"
+                      type="text"
+                      name="launch[name]"
+                      value={@launch["name"]}
+                      placeholder="optional display name"
+                      class="mt-1 block w-full rounded-md border-gray-300 text-sm shadow-sm"
+                    />
+                  </div>
+                </div>
+
                 <div>
-                  <label for="launch_behavior" class="block text-sm font-medium text-gray-700">
-                    Behavior
+                  <label for="launch_prompt" class="block text-sm font-medium text-gray-700">
+                    Prompt
                   </label>
-                  <select
-                    id="launch_behavior"
-                    name="launch[behavior]"
+                  <textarea
+                    id="launch_prompt"
+                    name="launch[prompt]"
+                    rows="4"
                     class="mt-1 block w-full rounded-md border-gray-300 text-sm shadow-sm"
+                  ><%= @launch["prompt"] %></textarea>
+                </div>
+
+                <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
+                  <div>
+                    <label for="launch_subscriptions" class="block text-sm font-medium text-gray-700">
+                      Subscriptions
+                    </label>
+                    <input
+                      id="launch_subscriptions"
+                      type="text"
+                      name="launch[subscriptions]"
+                      value={@launch["subscriptions"]}
+                      placeholder="github:owner/repo,email:kent"
+                      class="mt-1 block w-full rounded-md border-gray-300 text-sm shadow-sm"
+                    />
+                  </div>
+                  <div>
+                    <label for="launch_tools" class="block text-sm font-medium text-gray-700">
+                      Tools
+                    </label>
+                    <input
+                      id="launch_tools"
+                      type="text"
+                      name="launch[tools]"
+                      value={@launch["tools"]}
+                      placeholder="read_file,search_files,http_get"
+                      class="mt-1 block w-full rounded-md border-gray-300 text-sm shadow-sm"
+                    />
+                  </div>
+                </div>
+
+                <div class="grid grid-cols-1 gap-4 md:grid-cols-3">
+                  <div>
+                    <label for="launch_memory_limit" class="block text-sm font-medium text-gray-700">
+                      Memory Limit
+                    </label>
+                    <input
+                      id="launch_memory_limit"
+                      type="number"
+                      min="1"
+                      name="launch[memory_limit]"
+                      value={@launch["memory_limit"]}
+                      class="mt-1 block w-full rounded-md border-gray-300 text-sm shadow-sm"
+                    />
+                  </div>
+                  <div>
+                    <label for="launch_budget_llm_calls" class="block text-sm font-medium text-gray-700">
+                      LLM Call Budget
+                    </label>
+                    <input
+                      id="launch_budget_llm_calls"
+                      type="number"
+                      min="1"
+                      name="launch[budget_llm_calls]"
+                      value={@launch["budget_llm_calls"]}
+                      class="mt-1 block w-full rounded-md border-gray-300 text-sm shadow-sm"
+                    />
+                  </div>
+                  <div>
+                    <label for="launch_budget_tool_calls" class="block text-sm font-medium text-gray-700">
+                      Tool Call Budget
+                    </label>
+                    <input
+                      id="launch_budget_tool_calls"
+                      type="number"
+                      min="1"
+                      name="launch[budget_tool_calls]"
+                      value={@launch["budget_tool_calls"]}
+                      class="mt-1 block w-full rounded-md border-gray-300 text-sm shadow-sm"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label for="launch_config_json" class="block text-sm font-medium text-gray-700">
+                    Additional Config JSON
+                  </label>
+                  <textarea
+                    id="launch_config_json"
+                    name="launch[config_json]"
+                    rows="5"
+                    class="mt-1 block w-full rounded-md border-gray-300 text-sm font-mono shadow-sm"
+                    placeholder={"{\"custom_key\":\"value\"}"}
+                  ><%= @launch["config_json"] %></textarea>
+                </div>
+
+                <div class="flex justify-end">
+                  <button
+                    type="submit"
+                    class="inline-flex items-center rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500"
                   >
-                    <%= for behavior <- @behaviors do %>
-                      <option value={behavior} selected={behavior == @launch["behavior"]}>
-                        <%= behavior %>
-                      </option>
-                    <% end %>
-                  </select>
+                    <%= launch_submit_label(@launch_mode) %>
+                  </button>
                 </div>
-                <div>
-                  <label for="launch_name" class="block text-sm font-medium text-gray-700">
-                    Name
-                  </label>
-                  <input
-                    id="launch_name"
-                    type="text"
-                    name="launch[name]"
-                    value={@launch["name"]}
-                    placeholder="optional display name"
-                    class="mt-1 block w-full rounded-md border-gray-300 text-sm shadow-sm"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label for="launch_prompt" class="block text-sm font-medium text-gray-700">
-                  Prompt
-                </label>
-                <textarea
-                  id="launch_prompt"
-                  name="launch[prompt]"
-                  rows="4"
-                  class="mt-1 block w-full rounded-md border-gray-300 text-sm shadow-sm"
-                ><%= @launch["prompt"] %></textarea>
-              </div>
-
-              <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
-                <div>
-                  <label for="launch_subscriptions" class="block text-sm font-medium text-gray-700">
-                    Subscriptions
-                  </label>
-                  <input
-                    id="launch_subscriptions"
-                    type="text"
-                    name="launch[subscriptions]"
-                    value={@launch["subscriptions"]}
-                    placeholder="github:owner/repo,email:kent"
-                    class="mt-1 block w-full rounded-md border-gray-300 text-sm shadow-sm"
-                  />
-                </div>
-                <div>
-                  <label for="launch_tools" class="block text-sm font-medium text-gray-700">
-                    Tools
-                  </label>
-                  <input
-                    id="launch_tools"
-                    type="text"
-                    name="launch[tools]"
-                    value={@launch["tools"]}
-                    placeholder="read_file,search_files,http_get"
-                    class="mt-1 block w-full rounded-md border-gray-300 text-sm shadow-sm"
-                  />
+              </form>
+            <% else %>
+              <div class="rounded-xl border border-indigo-200 bg-indigo-50/60 p-5">
+                <p class="text-xs font-semibold uppercase tracking-[0.24em] text-indigo-700">
+                  Dedicated Builder
+                </p>
+                <h3 class="mt-3 text-xl font-semibold text-slate-900">Create agents on a focused page</h3>
+                <p class="mt-2 max-w-2xl text-sm text-slate-600">
+                  Use the dedicated builder to choose the right template, understand the exact inputs and outputs, confirm permissions, and start the agent with sensible defaults.
+                </p>
+                <div class="mt-4 flex flex-wrap gap-3">
+                  <a
+                    href={~p"/agents/new"}
+                    class="inline-flex items-center rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500"
+                  >
+                    Open Agent Builder
+                  </a>
+                  <p class="text-sm text-slate-500">
+                    The builder starts new agents immediately after creation and sends you back here to inspect them.
+                  </p>
                 </div>
               </div>
-
-              <div class="grid grid-cols-1 gap-4 md:grid-cols-3">
-                <div>
-                  <label for="launch_memory_limit" class="block text-sm font-medium text-gray-700">
-                    Memory Limit
-                  </label>
-                  <input
-                    id="launch_memory_limit"
-                    type="number"
-                    min="1"
-                    name="launch[memory_limit]"
-                    value={@launch["memory_limit"]}
-                    class="mt-1 block w-full rounded-md border-gray-300 text-sm shadow-sm"
-                  />
-                </div>
-                <div>
-                  <label for="launch_budget_llm_calls" class="block text-sm font-medium text-gray-700">
-                    LLM Call Budget
-                  </label>
-                  <input
-                    id="launch_budget_llm_calls"
-                    type="number"
-                    min="1"
-                    name="launch[budget_llm_calls]"
-                    value={@launch["budget_llm_calls"]}
-                    class="mt-1 block w-full rounded-md border-gray-300 text-sm shadow-sm"
-                  />
-                </div>
-                <div>
-                  <label for="launch_budget_tool_calls" class="block text-sm font-medium text-gray-700">
-                    Tool Call Budget
-                  </label>
-                  <input
-                    id="launch_budget_tool_calls"
-                    type="number"
-                    min="1"
-                    name="launch[budget_tool_calls]"
-                    value={@launch["budget_tool_calls"]}
-                    class="mt-1 block w-full rounded-md border-gray-300 text-sm shadow-sm"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label for="launch_config_json" class="block text-sm font-medium text-gray-700">
-                  Additional Config JSON
-                </label>
-                <textarea
-                  id="launch_config_json"
-                  name="launch[config_json]"
-                  rows="5"
-                  class="mt-1 block w-full rounded-md border-gray-300 text-sm font-mono shadow-sm"
-                  placeholder={"{\"custom_key\":\"value\"}"}
-                ><%= @launch["config_json"] %></textarea>
-              </div>
-
-              <div class="flex justify-end">
-                <button
-                  type="submit"
-                  class="inline-flex items-center rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500"
-                >
-                  <%= launch_submit_label(@launch_mode) %>
-                </button>
-              </div>
-            </form>
+            <% end %>
           </div>
         </div>
       </section>
@@ -1594,144 +1604,15 @@ defmodule MaraithonWeb.DashboardLive do
   end
 
   defp default_launch_params do
-    %{
-      "behavior" => "prompt_agent",
-      "name" => "",
-      "prompt" => @default_prompt,
-      "subscriptions" => "",
-      "tools" => @default_tools,
-      "memory_limit" => "50",
-      "budget_llm_calls" => "500",
-      "budget_tool_calls" => "1000",
-      "config_json" => ""
-    }
+    AgentBuilder.default_launch_params()
   end
 
-  defp launch_params_from_agent(agent) do
-    config = agent.config || %{}
-    budget = config["budget"] || %{}
+  defp launch_params_from_agent(agent), do: AgentBuilder.launch_params_from_agent(agent)
 
-    %{
-      "behavior" => agent.behavior,
-      "name" => config["name"] || "",
-      "prompt" => config["prompt"] || @default_prompt,
-      "subscriptions" => Enum.join(config["subscribe"] || [], ","),
-      "tools" => Enum.join(config["tools"] || [], ","),
-      "memory_limit" => to_string(config["memory_limit"] || 50),
-      "budget_llm_calls" => to_string(budget["llm_calls"] || 500),
-      "budget_tool_calls" => to_string(budget["tool_calls"] || 1000),
-      "config_json" => extra_config_json(config)
-    }
-  end
+  defp normalize_launch_params(params), do: AgentBuilder.normalize_launch_params(params)
 
-  defp extra_config_json(config) do
-    extra =
-      config
-      |> Map.drop([
-        "name",
-        "prompt",
-        "subscribe",
-        "tools",
-        "memory_limit",
-        "budget",
-        "_last_message"
-      ])
-
-    if extra == %{} do
-      ""
-    else
-      Jason.encode!(extra, pretty: true)
-    end
-  end
-
-  defp normalize_launch_params(params) do
-    defaults = default_launch_params()
-
-    Enum.reduce(defaults, %{}, fn {key, default}, acc ->
-      value =
-        case Map.get(params, key, default) do
-          nil -> default
-          value -> to_string(value)
-        end
-
-      Map.put(acc, key, String.trim(value))
-    end)
-  end
-
-  defp build_agent_start_params(launch, user_id) when is_binary(user_id) do
-    behavior = launch["behavior"]
-
-    cond do
-      behavior == "" ->
-        {:error, "Behavior is required"}
-
-      not Behaviors.exists?(behavior) ->
-        {:error, "Unknown behavior: #{behavior}"}
-
-      true ->
-        with {:ok, memory_limit} <-
-               parse_positive_integer(launch["memory_limit"], "Memory limit"),
-             {:ok, llm_calls} <-
-               parse_positive_integer(launch["budget_llm_calls"], "LLM call budget"),
-             {:ok, tool_calls} <-
-               parse_positive_integer(launch["budget_tool_calls"], "Tool call budget"),
-             {:ok, extra_config} <- parse_optional_config_json(launch["config_json"]) do
-          name =
-            if launch["name"] == "",
-              do: "#{behavior}-#{System.unique_integer([:positive])}",
-              else: launch["name"]
-
-          config =
-            %{
-              "name" => name,
-              "prompt" => launch["prompt"],
-              "subscribe" => parse_csv(launch["subscriptions"]),
-              "tools" => parse_csv(launch["tools"]),
-              "memory_limit" => memory_limit
-            }
-            |> Map.merge(extra_config)
-
-          {:ok,
-           %{
-             "user_id" => user_id,
-             "behavior" => behavior,
-             "config" => config,
-             "budget" => %{"llm_calls" => llm_calls, "tool_calls" => tool_calls}
-           }}
-        end
-    end
-  end
-
-  defp parse_positive_integer(value, field_name) do
-    case Integer.parse(value) do
-      {parsed, ""} when parsed > 0 -> {:ok, parsed}
-      _ -> {:error, "#{field_name} must be a positive integer"}
-    end
-  end
-
-  defp parse_optional_config_json(""), do: {:ok, %{}}
-
-  defp parse_optional_config_json(json) do
-    case Jason.decode(json) do
-      {:ok, parsed} when is_map(parsed) ->
-        {:ok, parsed}
-
-      {:ok, _} ->
-        {:error, "Additional config JSON must decode to an object"}
-
-      {:error, _} ->
-        {:error, "Additional config JSON is invalid"}
-    end
-  end
-
-  defp parse_csv(""), do: []
-
-  defp parse_csv(values) when is_binary(values) do
-    values
-    |> String.split(",")
-    |> Enum.map(&String.trim/1)
-    |> Enum.reject(&(&1 == ""))
-  end
+  defp build_agent_start_params(launch, user_id),
+    do: AgentBuilder.build_start_params(launch, user_id)
 
   defp changeset_errors(changeset) do
     changeset
@@ -1745,13 +1626,14 @@ defmodule MaraithonWeb.DashboardLive do
   end
 
   defp launch_title(:edit), do: "Edit Agent"
-  defp launch_title(_), do: "Create Agent"
+  defp launch_title(_), do: "Build Agent"
 
   defp launch_subtitle(:edit),
     do: "Update a definition. Running agents are restarted with the new config."
 
   defp launch_subtitle(_),
-    do: "Create a new long-running agent process directly from the admin UI."
+    do:
+      "Use the dedicated builder for clearer inputs, outputs, permissions, and suggested defaults."
 
   defp launch_submit_label(:edit), do: "Save Changes"
   defp launch_submit_label(_), do: "Create Agent"
@@ -1953,7 +1835,9 @@ defmodule MaraithonWeb.DashboardLive do
   defp format_confidence(_), do: "n/a"
 
   defp agent_name(config), do: config["name"] || "unnamed_agent"
-  defp agent_prompt(config), do: config["prompt"] || @default_prompt
+
+  defp agent_prompt(config),
+    do: config["prompt"] || AgentBuilder.default_launch_params()["prompt"]
 
   defp pretty_config(config) when is_map(config) do
     Jason.encode!(config, pretty: true)

@@ -119,7 +119,6 @@ defmodule MaraithonWeb.DashboardLiveTest do
   alias Maraithon.Agents
   alias Maraithon.Effects.Effect
   alias Maraithon.OAuth
-  alias Maraithon.Runtime
   alias Maraithon.Runtime.ScheduledJob
 
   @user_email "user@example.com"
@@ -257,42 +256,16 @@ defmodule MaraithonWeb.DashboardLiveTest do
     end
   end
 
-  describe "launch agent form" do
-    test "launches an agent from the admin UI", %{conn: conn} do
-      {:ok, view, _html} = live(conn, "/dashboard")
+  describe "agent builder entrypoints" do
+    test "links to the dedicated builder from the dashboard", %{conn: conn} do
+      {:ok, _view, html} = live(conn, "/dashboard")
 
-      _html =
-        view
-        |> form("#launch-agent-form",
-          launch: %{
-            behavior: "prompt_agent",
-            name: "admin-launched-agent",
-            prompt: "Monitor and summarize activity.",
-            subscriptions: "github:acme/repo",
-            tools: "read_file,search_files",
-            memory_limit: "25",
-            budget_llm_calls: "120",
-            budget_tool_calls: "240",
-            config_json: ""
-          }
-        )
-        |> render_submit()
-
-      agents = Agents.list_agents()
-      assert length(agents) == 1
-
-      [agent] = agents
-      assert agent.behavior == "prompt_agent"
-      assert agent.config["name"] == "admin-launched-agent"
-      assert agent.config["subscribe"] == ["github:acme/repo"]
-      assert agent.config["tools"] == ["read_file", "search_files"]
-      assert agent.config["budget"]["llm_calls"] == 120
-      assert agent.config["budget"]["tool_calls"] == 240
-
-      assert {:ok, _} = Runtime.stop_agent(agent.id, "test_cleanup")
+      assert html =~ "Dedicated Builder"
+      assert html =~ "Open Agent Builder"
+      refute html =~ "launch-agent-form"
     end
 
-    test "updates a stopped agent from the admin UI", %{conn: conn} do
+    test "updates a stopped prompt agent from the dashboard", %{conn: conn} do
       {:ok, agent} =
         create_agent(%{
           behavior: "prompt_agent",
@@ -317,7 +290,7 @@ defmodule MaraithonWeb.DashboardLiveTest do
         view
         |> form("#launch-agent-form",
           launch: %{
-            behavior: "watchdog_summarizer",
+            behavior: "prompt_agent",
             name: "after-edit",
             prompt: "After edit",
             subscriptions: "linear:team-1,notaui:tasks",
@@ -332,7 +305,7 @@ defmodule MaraithonWeb.DashboardLiveTest do
 
       updated_agent = Agents.get_agent!(agent.id)
 
-      assert updated_agent.behavior == "watchdog_summarizer"
+      assert updated_agent.behavior == "prompt_agent"
       assert updated_agent.config["name"] == "after-edit"
       assert updated_agent.config["prompt"] == "After edit"
       assert updated_agent.config["subscribe"] == ["linear:team-1", "notaui:tasks"]
