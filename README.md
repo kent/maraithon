@@ -641,6 +641,16 @@ flyctl secrets set -a maraithon \
 flyctl deploy -a maraithon
 ```
 
+### GitHub Actions Auto-Deploy
+
+Pushes to `main` automatically deploy to Fly via `.github/workflows/deploy-fly.yml`.
+
+Set this repository secret in GitHub:
+
+- `FLY_API_TOKEN`: a Fly token with permission to deploy the `maraithon` app
+
+You can also trigger the same workflow manually via `workflow_dispatch`.
+
 ### Migrating from Legacy `maraithon-db`
 
 If you still have the old unmanaged Postgres app, migrate before changing production traffic:
