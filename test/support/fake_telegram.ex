@@ -10,4 +10,8 @@ defmodule Maraithon.TestSupport.FakeTelegram do
   def answer_callback_query(_callback_query_id, _opts \\ []) do
     {:ok, true}
   end
+
+  def edit_message_text(_chat_id, _message_id, _text, _opts \\ []) do
+    {:ok, true}
+  end
 end

@@ -7,7 +7,7 @@ defmodule Maraithon.TestSupport.CapturingTelegram do
     if pid = Process.whereis(:capturing_telegram_recorder) do
       Agent.update(pid, fn messages ->
         [
-          %{chat_id: normalize_chat_id(chat_id), text: text, opts: opts}
+          %{type: :send, chat_id: normalize_chat_id(chat_id), text: text, opts: opts}
           | messages
         ]
       end)
@@ -17,6 +17,25 @@ defmodule Maraithon.TestSupport.CapturingTelegram do
   end
 
   def answer_callback_query(_callback_query_id, _opts \\ []) do
+    {:ok, true}
+  end
+
+  def edit_message_text(chat_id, message_id, text, opts \\ []) do
+    if pid = Process.whereis(:capturing_telegram_recorder) do
+      Agent.update(pid, fn messages ->
+        [
+          %{
+            type: :edit,
+            chat_id: normalize_chat_id(chat_id),
+            message_id: normalize_chat_id(message_id),
+            text: text,
+            opts: opts
+          }
+          | messages
+        ]
+      end)
+    end
+
     {:ok, true}
   end
 

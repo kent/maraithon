@@ -32,6 +32,9 @@ defmodule Maraithon.Tools.SlackPostMessage do
       {:error, :no_token} ->
         {:error, "slack_workspace_not_connected"}
 
+      {:error, :reauth_required} ->
+        {:error, "slack_workspace_reauth_required"}
+
       {:error, message} when is_binary(message) ->
         {:error, message}
 

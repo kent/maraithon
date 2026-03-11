@@ -8,6 +8,7 @@ defmodule Maraithon.InsightNotifications do
   alias Maraithon.Accounts
   alias Maraithon.ConnectedAccounts
   alias Maraithon.Connectors.Telegram
+  alias Maraithon.InsightNotifications.Actions
   alias Maraithon.InsightNotifications.{Delivery, ThresholdProfile}
   alias Maraithon.Insights
   alias Maraithon.Insights.Insight
@@ -59,7 +60,7 @@ defmodule Maraithon.InsightNotifications do
         maybe_handle_link_command(read_map(event, "data"))
 
       "callback_query" ->
-        handle_feedback_callback(read_map(event, "data"))
+        handle_callback_query(read_map(event, "data"))
 
       _ ->
         :ok
@@ -132,23 +133,13 @@ defmodule Maraithon.InsightNotifications do
   end
 
   defp send_delivery(%Delivery{} = delivery) do
-    callback_helpful = "insfb:#{delivery.id}:h"
-    callback_not_helpful = "insfb:#{delivery.id}:n"
-
-    reply_markup = %{
-      "inline_keyboard" => [
-        [
-          %{"text" => "Helpful", "callback_data" => callback_helpful},
-          %{"text" => "Not Helpful", "callback_data" => callback_not_helpful}
-        ]
-      ]
-    }
+    payload = Actions.telegram_payload(delivery)
 
     case telegram_module().send_message(
            delivery.destination,
-           render_message(delivery),
+           payload.text,
            parse_mode: "HTML",
-           reply_markup: reply_markup
+           reply_markup: payload.reply_markup
          ) do
       {:ok, result} ->
         message_id = read_message_id(result)
@@ -158,11 +149,7 @@ defmodule Maraithon.InsightNotifications do
           status: "sent",
           sent_at: DateTime.utc_now(),
           provider_message_id: message_id,
-          metadata:
-            Map.merge(delivery.metadata || %{}, %{
-              "callback_helpful" => callback_helpful,
-              "callback_not_helpful" => callback_not_helpful
-            })
+          metadata: Map.merge(delivery.metadata || %{}, %{"telegram_message_id" => message_id})
         })
         |> Repo.update()
 
@@ -202,6 +189,15 @@ defmodule Maraithon.InsightNotifications do
   end
 
   defp handle_feedback_callback(_), do: :ok
+
+  defp handle_callback_query(data) when is_map(data) do
+    case read_string(data, "data") do
+      "insfb:" <> _ -> handle_feedback_callback(data)
+      _ -> Actions.handle_callback(data)
+    end
+  end
+
+  defp handle_callback_query(_), do: :ok
 
   defp apply_feedback(%Delivery{} = delivery, feedback)
        when feedback in ["helpful", "not_helpful"] do
@@ -374,58 +370,6 @@ defmodule Maraithon.InsightNotifications do
     end
   end
 
-  defp render_message(%Delivery{insight: insight, score: score, threshold: threshold}) do
-    metadata = insight.metadata || %{}
-    why_now = read_string(metadata, "why_now")
-    follow_up_ideas = read_string_list(metadata, "follow_up_ideas")
-
-    due_text =
-      case insight.due_at do
-        %DateTime{} = due_at -> "\nDue: #{Calendar.strftime(due_at, "%Y-%m-%d %H:%M UTC")}"
-        _ -> ""
-      end
-
-    why_now_text =
-      case why_now do
-        nil -> ""
-        value -> "\n\n<b>Why now:</b> #{safe(value)}"
-      end
-
-    ideas_text =
-      case follow_up_ideas do
-        [] ->
-          ""
-
-        ideas ->
-          rendered =
-            ideas
-            |> Enum.map_join("\n", fn idea -> "- #{safe(idea)}" end)
-
-          "\n\n<b>Ideas:</b>\n#{rendered}"
-      end
-
-    """
-    <b>Maraithon Insight</b>
-    <b>#{safe(insight.title)}</b>
-
-    #{safe(insight.summary)}
-
-    <b>Action:</b> #{safe(insight.recommended_action)}#{due_text}#{why_now_text}#{ideas_text}
-
-    score=#{Float.round(score, 2)} threshold=#{Float.round(threshold, 2)}
-    """
-    |> String.trim()
-  end
-
-  defp safe(value) when is_binary(value) do
-    value
-    |> String.replace("&", "&amp;")
-    |> String.replace("<", "&lt;")
-    |> String.replace(">", "&gt;")
-  end
-
-  defp safe(_), do: ""
-
   defp maybe_answer_callback(nil, _text), do: :ok
 
   defp maybe_answer_callback(callback_id, text) do
@@ -520,25 +464,6 @@ defmodule Maraithon.InsightNotifications do
 
       _ ->
         nil
-    end
-  end
-
-  defp read_string_list(map, key) when is_map(map) and is_binary(key) do
-    case fetch(map, key) do
-      values when is_list(values) ->
-        values
-        |> Enum.map(fn
-          value when is_binary(value) ->
-            value = String.trim(value)
-            if value == "", do: nil, else: value
-
-          _ ->
-            nil
-        end)
-        |> Enum.reject(&is_nil/1)
-
-      _ ->
-        []
     end
   end
 

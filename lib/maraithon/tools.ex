@@ -13,6 +13,7 @@ defmodule Maraithon.Tools do
     "gmail_list_recent" => Maraithon.Tools.GmailListRecent,
     "gmail_search" => Maraithon.Tools.GmailSearch,
     "gmail_get_message" => Maraithon.Tools.GmailGetMessage,
+    "gmail_send_message" => Maraithon.Tools.GmailSendMessage,
     "google_calendar_list_events" => Maraithon.Tools.GoogleCalendarListEvents,
     "github_create_issue_comment" => Maraithon.Tools.GitHubCreateIssueComment,
     "slack_post_message" => Maraithon.Tools.SlackPostMessage,

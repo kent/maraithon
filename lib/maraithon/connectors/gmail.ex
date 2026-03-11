@@ -236,6 +236,49 @@ defmodule Maraithon.Connectors.Gmail do
     end
   end
 
+  @doc """
+  Sends a Gmail message, optionally within an existing thread.
+  """
+  def send_message(user_id_or_token, attrs) when is_map(attrs) do
+    with {:ok, access_token, provider} <- access_token_for_send(user_id_or_token, attrs),
+         {:ok, to} <- required_attr(attrs, "to"),
+         {:ok, subject} <- required_attr(attrs, "subject"),
+         {:ok, body} <- required_attr(attrs, "body") do
+      thread_id = optional_attr(attrs, "thread_id")
+      reply_to_message_id = optional_attr(attrs, "reply_to_message_id")
+      reply_headers = fetch_reply_headers(access_token, reply_to_message_id)
+
+      raw =
+        build_raw_message(
+          to,
+          subject,
+          body,
+          reply_headers["message_id"],
+          reply_headers["references"]
+        )
+
+      request_body =
+        %{raw: raw}
+        |> maybe_put("threadId", thread_id)
+
+      url = "#{api_base_url()}/users/me/messages/send"
+
+      case Google.api_request(:post, url, access_token, request_body) do
+        {:ok, response} ->
+          {:ok,
+           %{
+             provider: provider,
+             message_id: response["id"],
+             thread_id: response["threadId"],
+             label_ids: response["labelIds"] || []
+           }}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    end
+  end
+
   # ===========================================================================
   # Private Functions
   # ===========================================================================
@@ -245,6 +288,29 @@ defmodule Maraithon.Connectors.Gmail do
   defp get_access_token(user_id, _) do
     OAuth.get_valid_access_token(user_id, "google")
   end
+
+  defp access_token_for_send("ya29." <> _ = access_token, _attrs) do
+    {:ok, access_token, "google"}
+  end
+
+  defp access_token_for_send(user_id, attrs) when is_binary(user_id) do
+    account = optional_attr(attrs, "account")
+    provider = if is_binary(account) and account != "", do: "google:#{account}", else: "google"
+
+    case OAuth.get_valid_access_token(user_id, provider) do
+      {:ok, access_token} ->
+        {:ok, access_token, provider}
+
+      {:error, :no_token} when provider != "google" ->
+        get_access_token(user_id, nil) |> wrap_provider("google")
+
+      other ->
+        wrap_provider(other, provider)
+    end
+  end
+
+  defp wrap_provider({:ok, access_token}, provider), do: {:ok, access_token, provider}
+  defp wrap_provider(other, _provider), do: other
 
   defp create_watch(_user_id, access_token) do
     pubsub_topic = get_pubsub_topic()
@@ -333,10 +399,99 @@ defmodule Maraithon.Connectors.Gmail do
       from: get_header(headers, "From"),
       to: get_header(headers, "To"),
       subject: get_header(headers, "Subject"),
+      internet_message_id: get_header(headers, "Message-ID"),
+      references: get_header(headers, "References"),
       date: get_header(headers, "Date"),
       internal_date: parse_internal_date(message["internalDate"])
     }
   end
+
+  defp fetch_reply_headers(_access_token, nil), do: %{}
+  defp fetch_reply_headers(_access_token, ""), do: %{}
+
+  defp fetch_reply_headers(access_token, message_id) do
+    params =
+      [
+        {"format", "metadata"},
+        {"metadataHeaders", "Message-ID"},
+        {"metadataHeaders", "References"}
+      ]
+      |> Enum.map(&URI.encode_query([&1]))
+      |> Enum.join("&")
+
+    url = "#{api_base_url()}/users/me/messages/#{message_id}?#{params}"
+
+    case Google.api_request(:get, url, access_token) do
+      {:ok, response} ->
+        parsed = parse_message(response)
+
+        %{
+          "message_id" => parsed.internet_message_id,
+          "references" => parsed.references
+        }
+
+      _ ->
+        %{}
+    end
+  end
+
+  defp build_raw_message(to, subject, body, in_reply_to, references) do
+    [
+      "To: #{to}",
+      "Subject: #{subject}",
+      "MIME-Version: 1.0",
+      "Content-Type: text/plain; charset=UTF-8",
+      if(present?(in_reply_to), do: "In-Reply-To: #{in_reply_to}"),
+      if(present?(references), do: "References: #{references}"),
+      "",
+      body
+    ]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.join("\r\n")
+    |> Base.url_encode64(padding: false)
+  end
+
+  defp maybe_put(map, _key, nil), do: map
+  defp maybe_put(map, _key, ""), do: map
+  defp maybe_put(map, key, value), do: Map.put(map, key, value)
+
+  defp required_attr(attrs, key) do
+    case optional_attr(attrs, key) do
+      nil -> {:error, "#{key} is required"}
+      value -> {:ok, value}
+    end
+  end
+
+  defp optional_attr(attrs, key) when is_map(attrs) do
+    value =
+      case Map.fetch(attrs, key) do
+        {:ok, direct} ->
+          direct
+
+        :error ->
+          Enum.find_value(attrs, fn
+            {map_key, map_value} when is_atom(map_key) ->
+              if Atom.to_string(map_key) == key, do: map_value
+
+            _ ->
+              nil
+          end)
+      end
+
+    case value do
+      value when is_binary(value) ->
+        case String.trim(value) do
+          "" -> nil
+          trimmed -> trimmed
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  defp present?(value) when is_binary(value), do: String.trim(value) != ""
+  defp present?(value), do: not is_nil(value)
 
   defp get_header(headers, name) do
     case Enum.find(headers, fn h -> h["name"] == name end) do
