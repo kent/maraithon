@@ -1498,10 +1498,7 @@ defmodule MaraithonWeb.DashboardLive do
   end
 
   defp refresh_dashboard(socket, opts \\ []) do
-    socket =
-      socket
-      |> refresh_connections()
-      |> refresh_insights()
+    socket = refresh_insights(socket)
 
     user_id = current_user_id(socket)
 
@@ -1741,9 +1738,7 @@ defmodule MaraithonWeb.DashboardLive do
         connection_return_to: connection_return_to_from_uri(uri)
       )
 
-    socket
-    |> refresh_connections()
-    |> maybe_put_oauth_flash(params)
+    maybe_put_oauth_flash(socket, params)
   end
 
   defp maybe_put_oauth_flash(socket, %{"oauth_status" => "connected", "oauth_message" => message})
@@ -1881,14 +1876,28 @@ defmodule MaraithonWeb.DashboardLive do
     metadata_account =
       insight_metadata_value(insight, "account") ||
         insight_metadata_value(insight, "account_email") ||
-        insight_metadata_value(insight, "user_id")
+        insight_metadata_value(insight, "mailbox") ||
+        insight_metadata_value(insight, "workspace_name") ||
+        insight_metadata_value(insight, "team_name")
 
     case normalized_text(metadata_account) do
       nil ->
-        normalized_text(Map.get(insight, :user_id)) || "unknown"
+        insight_source_account_fallback(insight) || "unknown"
 
       value ->
         value
+    end
+  end
+
+  defp insight_source_account_fallback(insight) do
+    source = normalized_text(Map.get(insight, :source))
+
+    case source do
+      "slack" ->
+        normalized_text(insight_metadata_value(insight, "team_id"))
+
+      _ ->
+        nil
     end
   end
 

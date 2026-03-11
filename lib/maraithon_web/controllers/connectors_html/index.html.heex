@@ -54,23 +54,41 @@
                   <%= for account <- provider.accounts do %>
                     <div class="flex flex-wrap items-center justify-between gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
                       <div>
-                        <p class="text-xs font-medium text-slate-800"><%= account.account %></p>
-                        <p class="text-[11px] text-slate-500">
+                        <div class="flex flex-wrap items-center gap-2">
+                          <p class="text-xs font-medium text-slate-800"><%= account.account %></p>
+                          <span class={connection_status_badge_class(account.status)}>
+                            <%= connection_status_label(account.status) %>
+                          </span>
+                        </div>
+                        <p class="mt-1 text-[11px] text-slate-500">
                           Updated <%= format_datetime(account.updated_at) %>
                         </p>
+                        <%= if account[:status_note] && account.status_note != "Healthy" do %>
+                          <p class="mt-1 text-[11px] text-rose-700"><%= account.status_note %></p>
+                        <% end %>
                       </div>
-                      <form action={~p"/connectors/#{provider.provider}/disconnect"} method="post">
-                        <input type="hidden" name="_csrf_token" value={get_csrf_token()} />
-                        <input type="hidden" name="return_to" value={~p"/connectors"} />
-                        <input type="hidden" name="provider_key" value={account.provider} />
-                        <input type="hidden" name="account_label" value={account.account} />
-                        <button
-                          type="submit"
-                          class="inline-flex items-center rounded-md border border-rose-200 bg-rose-50 px-2.5 py-1 text-xs font-medium text-rose-700 hover:bg-rose-100"
-                        >
-                          Disconnect
-                        </button>
-                      </form>
+                      <div class="flex flex-wrap items-center gap-2">
+                        <%= if account[:needs_reconnect?] and account[:reconnect_url] do %>
+                          <a
+                            href={account.reconnect_url}
+                            class="inline-flex items-center rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-800 hover:bg-amber-100"
+                          >
+                            Reconnect
+                          </a>
+                        <% end %>
+                        <form action={~p"/connectors/#{provider.provider}/disconnect"} method="post">
+                          <input type="hidden" name="_csrf_token" value={get_csrf_token()} />
+                          <input type="hidden" name="return_to" value={~p"/connectors"} />
+                          <input type="hidden" name="provider_key" value={account.provider} />
+                          <input type="hidden" name="account_label" value={account.account} />
+                          <button
+                            type="submit"
+                            class="inline-flex items-center rounded-md border border-rose-200 bg-rose-50 px-2.5 py-1 text-xs font-medium text-rose-700 hover:bg-rose-100"
+                          >
+                            Disconnect
+                          </button>
+                        </form>
+                      </div>
                     </div>
                   <% end %>
                 </div>

@@ -57,13 +57,7 @@ defmodule Maraithon.Admin do
 
     db_fetcher =
       Keyword.get(opts, :db_fetcher, fn ->
-        %{
-          agents: Agents.list_agents(user_id: user_id),
-          total_spend: Spend.get_total_spend(user_id: user_id),
-          queue_metrics: queue_metrics(user_id: user_id),
-          recent_activity: recent_activity(activity_limit, user_id: user_id),
-          recent_failures: recent_failures(failure_limit, user_id: user_id)
-        }
+        control_center_db_snapshot(user_id, activity_limit, failure_limit)
       end)
 
     if database_available?(health) do
@@ -90,19 +84,21 @@ defmodule Maraithon.Admin do
   """
   def queue_metrics(opts \\ []) do
     user_id = Keyword.get(opts, :user_id)
+    effect_counts = effect_status_counts(user_id)
+    job_counts = job_status_counts(user_id)
 
     %{
       effects: %{
-        pending: count_effects_by_status("pending", user_id),
-        claimed: count_effects_by_status("claimed", user_id),
-        completed: count_effects_by_status("completed", user_id),
-        failed: count_effects_by_status("failed", user_id)
+        pending: Map.get(effect_counts, "pending", 0),
+        claimed: Map.get(effect_counts, "claimed", 0),
+        completed: Map.get(effect_counts, "completed", 0),
+        failed: Map.get(effect_counts, "failed", 0)
       },
       jobs: %{
-        pending: count_jobs_by_status("pending", user_id),
-        dispatched: count_jobs_by_status("dispatched", user_id),
-        delivered: count_jobs_by_status("delivered", user_id),
-        cancelled: count_jobs_by_status("cancelled", user_id)
+        pending: Map.get(job_counts, "pending", 0),
+        dispatched: Map.get(job_counts, "dispatched", 0),
+        delivered: Map.get(job_counts, "delivered", 0),
+        cancelled: Map.get(job_counts, "cancelled", 0)
       }
     }
   end
@@ -244,20 +240,49 @@ defmodule Maraithon.Admin do
     FlyLogs.recent_logs(opts)
   end
 
-  defp count_effects_by_status(status, user_id) do
+  defp effect_status_counts(user_id) do
     Effect
     |> join(:inner, [effect], agent in Agent, on: agent.id == effect.agent_id)
-    |> where([effect, _agent], effect.status == ^status)
     |> maybe_filter_agent_user(user_id)
-    |> Repo.aggregate(:count)
+    |> group_by([effect, _agent], effect.status)
+    |> select([effect, _agent], {effect.status, count(effect.id)})
+    |> Repo.all()
+    |> Map.new()
   end
 
-  defp count_jobs_by_status(status, user_id) do
+  defp job_status_counts(user_id) do
     ScheduledJob
     |> join(:inner, [job], agent in Agent, on: agent.id == job.agent_id)
-    |> where([job, _agent], job.status == ^status)
     |> maybe_filter_agent_user(user_id)
-    |> Repo.aggregate(:count)
+    |> group_by([job, _agent], job.status)
+    |> select([job, _agent], {job.status, count(job.id)})
+    |> Repo.all()
+    |> Map.new()
+  end
+
+  defp control_center_db_snapshot(user_id, activity_limit, failure_limit) do
+    fetchers = [
+      {:agents, fn -> Agents.list_agents(user_id: user_id) end},
+      {:total_spend, fn -> Spend.get_total_spend(user_id: user_id) end},
+      {:queue_metrics, fn -> queue_metrics(user_id: user_id) end},
+      {:recent_activity, fn -> recent_activity(activity_limit, user_id: user_id) end},
+      {:recent_failures, fn -> recent_failures(failure_limit, user_id: user_id) end}
+    ]
+
+    fetchers
+    |> Task.async_stream(
+      fn {key, fun} -> {key, fun.()} end,
+      ordered: false,
+      timeout: :infinity,
+      max_concurrency: length(fetchers)
+    )
+    |> Enum.reduce(%{}, fn
+      {:ok, {key, value}}, acc ->
+        Map.put(acc, key, value)
+
+      {:exit, reason}, _acc ->
+        raise "control-center snapshot query failed: #{inspect(reason)}"
+    end)
   end
 
   defp failed_effects_query(limit, user_id) do

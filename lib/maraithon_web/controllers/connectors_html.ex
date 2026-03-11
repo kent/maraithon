@@ -35,6 +35,7 @@ defmodule MaraithonWeb.ConnectorsHTML do
   def connection_status_label(:connected), do: "connected"
   def connection_status_label(:partial), do: "partial"
   def connection_status_label(:missing_scope), do: "needs scope"
+  def connection_status_label(:needs_refresh), do: "refresh required"
   def connection_status_label(:not_configured), do: "not configured"
   def connection_status_label(:unknown), do: "unknown"
   def connection_status_label(_status), do: "disconnected"
@@ -50,6 +51,10 @@ defmodule MaraithonWeb.ConnectorsHTML do
   def connection_status_badge_class(:missing_scope),
     do:
       "inline-flex items-center rounded-full bg-amber-100 px-2.5 py-1 text-xs font-medium text-amber-800"
+
+  def connection_status_badge_class(:needs_refresh),
+    do:
+      "inline-flex items-center rounded-full bg-rose-100 px-2.5 py-1 text-xs font-medium text-rose-800"
 
   def connection_status_badge_class(:not_configured),
     do:

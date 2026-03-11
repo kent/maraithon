@@ -76,6 +76,32 @@ defmodule MaraithonWeb.NavigationControllerTest do
       assert html =~ "Disconnect"
     end
 
+    test "GET /connectors shows refresh-required state for errored Google account", %{conn: conn} do
+      user_id = "google-refresh-needed@example.com"
+      {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+      {:ok, _token} =
+        OAuth.store_tokens(user_id, "google:founder@example.com", %{
+          access_token: "google-token-1",
+          refresh_token: "refresh-token-1",
+          metadata: %{"account_email" => "founder@example.com"}
+        })
+
+      {:ok, _account} =
+        ConnectedAccounts.mark_error(
+          user_id,
+          "google:founder@example.com",
+          "oauth_reauth_required"
+        )
+
+      conn = conn |> log_in_test_user(user_id) |> get("/connectors")
+      html = html_response(conn, 200)
+
+      assert html =~ "refresh required"
+      assert html =~ "Token refresh failed and the account must be re-authenticated."
+      assert html =~ "Reconnect"
+    end
+
     test "GET /connectors/:provider renders provider details", %{conn: conn} do
       conn = conn |> log_in_test_user() |> get("/connectors/github")
       html = html_response(conn, 200)

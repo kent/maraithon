@@ -66,6 +66,9 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisorTest do
       assert prompt =~ "thread-1"
       assert prompt =~ "IMPORTANT"
       assert prompt =~ "ops@example.com"
+      assert prompt =~ "automated transactional receipts"
+      assert prompt =~ "Uber Eats"
+      assert prompt =~ "false_positive_risk"
     end
 
     test "includes Telegram feedback context in the llm prompt", %{
@@ -213,6 +216,14 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisorTest do
                 "Reply now, confirm next steps, and suggest a same-day checkpoint if needed.",
               "priority" => 95,
               "confidence" => 0.91,
+              "actionability" => "actionable",
+              "obligation_type" => "direct_human_request",
+              "human_counterparty" => true,
+              "missing_followthrough_evidence" => true,
+              "interrupt_now" => true,
+              "false_positive_risk" => 0.12,
+              "reasoning_summary" =>
+                "Human sender requested a same-day response and no reply evidence exists.",
               "telegram_fit_score" => 0.93,
               "telegram_fit_reason" => "User tends to value urgent email follow-ups in Telegram.",
               "why_now" => "The sender is asking for a same-day response on an active thread.",
@@ -243,6 +254,12 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisorTest do
       assert stored.metadata["telegram_fit_reason"] =~ "urgent email"
       assert stored.metadata["feedback_tuned"] == true
       assert stored.metadata["why_now"] =~ "same-day response"
+      assert stored.metadata["obligation_type"] == "direct_human_request"
+      assert stored.metadata["human_counterparty"] == true
+      assert stored.metadata["missing_followthrough_evidence"] == true
+      assert stored.metadata["interrupt_now"] == true
+      assert stored.metadata["false_positive_risk"] == 0.12
+      assert stored.metadata["reasoning_summary"] =~ "no reply evidence"
       assert stored.metadata["record"]["status"] == "unresolved"
       assert is_binary(stored.metadata["record"]["commitment"])
       assert stored.metadata["record"]["next_action"] =~ "Reply"
@@ -251,6 +268,90 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisorTest do
                "Draft the reply with a clear owner and ETA.",
                "Flag any blockers before the next customer touchpoint."
              ]
+    end
+
+    test "does not fall back to heuristic candidates when llm output is invalid", %{
+      user_id: user_id,
+      context: context
+    } do
+      state = InboxCalendarAdvisor.init(%{"user_id" => user_id})
+
+      payload = %{
+        "source" => "gmail",
+        "data" => %{
+          "messages" => [
+            %{
+              "message_id" => "msg-heuristic-fallback",
+              "subject" => "Urgent follow-up needed",
+              "snippet" => "Please respond today",
+              "from" => "ops@example.com",
+              "internal_date" => DateTime.utc_now()
+            }
+          ]
+        }
+      }
+
+      {:effect, {:llm_call, _params}, state_after_wakeup} =
+        InboxCalendarAdvisor.handle_wakeup(state, %{context | event: %{payload: payload}})
+
+      assert state_after_wakeup.pending_candidates != []
+
+      {:emit, {:insights_recorded, result}, final_state} =
+        InboxCalendarAdvisor.handle_effect_result(
+          {:llm_call, %{content: "not-json"}},
+          state_after_wakeup,
+          context
+        )
+
+      assert result.count == 0
+      assert final_state.pending_candidates == []
+      assert Insights.list_open_for_user(user_id) == []
+    end
+
+    test "drops llm items marked non-actionable", %{user_id: user_id, context: context} do
+      state = InboxCalendarAdvisor.init(%{"user_id" => user_id})
+
+      payload = %{
+        "source" => "gmail",
+        "data" => %{
+          "messages" => [
+            %{
+              "message_id" => "msg-receipt-no-action",
+              "subject" => "Urgent follow-up needed",
+              "snippet" => "Please respond today",
+              "from" => "ops@example.com",
+              "internal_date" => DateTime.utc_now()
+            }
+          ]
+        }
+      }
+
+      {:effect, {:llm_call, _params}, state_after_wakeup} =
+        InboxCalendarAdvisor.handle_wakeup(state, %{context | event: %{payload: payload}})
+
+      dedupe_key = hd(state_after_wakeup.pending_candidates)["dedupe_key"]
+
+      llm_response = %{
+        content:
+          Jason.encode!([
+            %{
+              "dedupe_key" => dedupe_key,
+              "actionability" => "non_actionable",
+              "confidence" => 0.95
+            }
+          ])
+      }
+
+      {:emit, {:insights_recorded, result}, final_state} =
+        InboxCalendarAdvisor.handle_effect_result(
+          {:llm_call, llm_response},
+          state_after_wakeup,
+          context
+        )
+
+      assert result.count == 0
+      assert final_state.pending_candidates == []
+      assert Insights.list_open_for_user(user_id) == []
     end
   end
 end

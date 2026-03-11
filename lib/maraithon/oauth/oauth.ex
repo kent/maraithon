@@ -223,7 +223,8 @@ defmodule Maraithon.OAuth do
     end
   end
 
-  defp do_refresh(%Token{refresh_token: nil}) do
+  defp do_refresh(%Token{refresh_token: nil} = token) do
+    _ = ConnectedAccounts.mark_error(token.user_id, token.provider, "oauth_missing_refresh_token")
     {:error, :no_refresh_token}
   end
 
@@ -254,6 +255,10 @@ defmodule Maraithon.OAuth do
         })
 
       {:error, reason} ->
+        if reauth_required_refresh_error?(reason) do
+          _ = ConnectedAccounts.mark_error(token.user_id, "notion", "oauth_reauth_required")
+        end
+
         Logger.warning("Failed to refresh Notion token",
           user_id: token.user_id,
           reason: inspect(reason)
@@ -301,6 +306,10 @@ defmodule Maraithon.OAuth do
           })
 
         {:error, reason} ->
+          if reauth_required_refresh_error?(reason) do
+            _ = ConnectedAccounts.mark_error(token.user_id, provider, "oauth_reauth_required")
+          end
+
           Logger.warning("Failed to refresh Slack token",
             user_id: token.user_id,
             provider: provider,
@@ -390,7 +399,8 @@ defmodule Maraithon.OAuth do
     text = inspect(reason) |> String.downcase()
 
     String.contains?(text, "invalid_grant") or String.contains?(text, "expired or revoked") or
-      String.contains?(text, "has been revoked")
+      String.contains?(text, "has been revoked") or
+      String.contains?(text, "invalid_refresh_token") or String.contains?(text, "token_revoked")
   end
 
   defp revoke_provider_token(%Token{provider: "google", access_token: access_token}) do

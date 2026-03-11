@@ -6,9 +6,12 @@ defmodule Maraithon.ConnectedAccounts do
   import Ecto.Query
 
   alias Maraithon.Accounts.ConnectedAccount
+  alias Maraithon.Connectors.Telegram
   alias Maraithon.OAuth
   alias Maraithon.OAuth.Token
   alias Maraithon.Repo
+
+  require Logger
 
   def list_for_user(user_id) when is_binary(user_id) do
     ConnectedAccount
@@ -139,22 +142,33 @@ defmodule Maraithon.ConnectedAccounts do
 
       account ->
         now = DateTime.utc_now()
+        normalized_reason = normalize_error_reason(reason)
 
         metadata =
           account.metadata
           |> normalize_metadata()
           |> Map.put("last_error", %{
-            "reason" => normalize_error_reason(reason),
+            "reason" => normalized_reason,
             "at" => DateTime.to_iso8601(now)
           })
 
-        account
-        |> ConnectedAccount.changeset(%{
-          status: "error",
-          metadata: metadata,
-          last_refreshed_at: now
-        })
-        |> Repo.update()
+        result =
+          account
+          |> ConnectedAccount.changeset(%{
+            status: "error",
+            metadata: metadata,
+            last_refreshed_at: now
+          })
+          |> Repo.update()
+
+        case result do
+          {:ok, updated_account} = ok ->
+            maybe_send_reauth_notification(updated_account, normalized_reason)
+            ok
+
+          error ->
+            error
+        end
     end
   end
 
@@ -198,4 +212,226 @@ defmodule Maraithon.ConnectedAccounts do
       scopes: normalize_scopes(attrs[:scopes] || attrs["scopes"])
     }
   end
+
+  defp maybe_send_reauth_notification(%ConnectedAccount{} = account, reason)
+       when is_binary(reason) do
+    if reauth_required_reason?(reason) and reauth_notification_pending?(account.metadata, reason) do
+      case telegram_destination(account.user_id) do
+        nil ->
+          :ok
+
+        destination ->
+          send_reauth_notification(account, destination, reason)
+      end
+    else
+      :ok
+    end
+  end
+
+  defp maybe_send_reauth_notification(_account, _reason), do: :ok
+
+  defp send_reauth_notification(%ConnectedAccount{} = account, destination, reason) do
+    module = telegram_module()
+    reconnect_url = reconnect_url(account.provider)
+    message = reauth_notification_message(account, reconnect_url)
+
+    case module.send_message(destination, message, parse_mode: "HTML") do
+      {:ok, _result} ->
+        mark_reauth_notification_sent(account, destination, reason)
+
+      {:error, notification_error} ->
+        Logger.warning("Failed to send reauth Telegram notification",
+          user_id: account.user_id,
+          provider: account.provider,
+          reason: inspect(notification_error)
+        )
+
+        :ok
+    end
+  rescue
+    notification_error ->
+      Logger.warning("Reauth Telegram notification crashed",
+        user_id: account.user_id,
+        provider: account.provider,
+        reason: Exception.message(notification_error)
+      )
+
+      :ok
+  end
+
+  defp reauth_required_reason?("oauth_reauth_required"), do: true
+  defp reauth_required_reason?("oauth_missing_refresh_token"), do: true
+  defp reauth_required_reason?(_reason), do: false
+
+  defp reauth_notification_pending?(metadata, reason) do
+    notification =
+      metadata
+      |> normalize_metadata()
+      |> fetch_map_value("reauth_notification")
+
+    sent_at = is_map(notification) && fetch_map_value(notification, "sent_at")
+    sent_reason = is_map(notification) && fetch_map_value(notification, "reason")
+
+    not (is_binary(sent_at) and sent_at != "" and sent_reason == reason)
+  end
+
+  defp telegram_destination(user_id) when is_binary(user_id) do
+    if telegram_notifications_enabled?() do
+      case get(user_id, "telegram") do
+        %ConnectedAccount{status: "connected"} = account ->
+          value =
+            account.external_account_id ||
+              fetch_map_value(normalize_metadata(account.metadata), "chat_id")
+
+          normalize_destination(value)
+
+        _ ->
+          nil
+      end
+    else
+      nil
+    end
+  end
+
+  defp telegram_destination(_user_id), do: nil
+
+  defp telegram_notifications_enabled? do
+    module = telegram_module()
+
+    if function_exported?(module, :configured?, 0) do
+      module.configured?()
+    else
+      true
+    end
+  end
+
+  defp telegram_module do
+    Application.get_env(:maraithon, :connected_accounts, [])
+    |> Keyword.get(:telegram_module, Telegram)
+  end
+
+  defp reconnect_url(provider) when is_binary(provider) do
+    base =
+      Application.get_env(:maraithon, :connected_accounts, [])
+      |> Keyword.get_lazy(:reconnect_base_url, fn -> MaraithonWeb.Endpoint.url() end)
+      |> to_string()
+      |> String.trim_trailing("/")
+
+    root = provider_root(provider)
+    path = if root == "", do: "/connectors", else: "/connectors/#{root}"
+    if base == "", do: path, else: base <> path
+  end
+
+  defp reconnect_url(_provider), do: "/connectors"
+
+  defp provider_root(provider) when is_binary(provider) do
+    provider
+    |> String.split(":", parts: 2)
+    |> List.first()
+    |> case do
+      nil -> ""
+      "" -> ""
+      value -> value
+    end
+  end
+
+  defp provider_root(_provider), do: ""
+
+  defp reauth_notification_message(%ConnectedAccount{} = account, reconnect_url) do
+    provider_label = provider_label(account.provider)
+    account_label = account_label(account)
+
+    """
+    <b>Maraithon action required</b>
+    #{html_escape(provider_label)} account #{html_escape(account_label)} needs re-authentication.
+    <a href="#{html_escape(reconnect_url)}">Reconnect in Maraithon</a>
+    """
+    |> String.trim()
+  end
+
+  defp provider_label("google"), do: "Google"
+  defp provider_label("google:" <> _), do: "Google"
+  defp provider_label("slack"), do: "Slack"
+  defp provider_label("slack:" <> _), do: "Slack"
+  defp provider_label("telegram"), do: "Telegram"
+  defp provider_label("github"), do: "GitHub"
+  defp provider_label("linear"), do: "Linear"
+  defp provider_label("notion"), do: "Notion"
+  defp provider_label(provider) when is_binary(provider), do: provider
+  defp provider_label(_provider), do: "Connector"
+
+  defp account_label(%ConnectedAccount{} = account) do
+    metadata = normalize_metadata(account.metadata)
+
+    normalize_destination(
+      fetch_map_value(metadata, "account_email") || fetch_map_value(metadata, "email")
+    ) || provider_suffix(account.provider) || provider_label(account.provider)
+  end
+
+  defp account_label(_account), do: "account"
+
+  defp provider_suffix(provider) when is_binary(provider) do
+    case String.split(provider, ":", parts: 2) do
+      [_root, suffix] -> normalize_destination(suffix)
+      _ -> nil
+    end
+  end
+
+  defp provider_suffix(_provider), do: nil
+
+  defp mark_reauth_notification_sent(%ConnectedAccount{} = account, destination, reason) do
+    metadata =
+      account.metadata
+      |> normalize_metadata()
+      |> Map.put("reauth_notification", %{
+        "reason" => reason,
+        "sent_at" => DateTime.utc_now() |> DateTime.to_iso8601(),
+        "destination" => to_string(destination)
+      })
+
+    _ =
+      account
+      |> ConnectedAccount.changeset(%{metadata: metadata})
+      |> Repo.update()
+
+    :ok
+  end
+
+  defp normalize_destination(value) when is_binary(value) do
+    case String.trim(value) do
+      "" -> nil
+      destination -> destination
+    end
+  end
+
+  defp normalize_destination(value) when is_integer(value), do: Integer.to_string(value)
+  defp normalize_destination(_value), do: nil
+
+  defp fetch_map_value(map, key) when is_map(map) and is_binary(key) do
+    case Map.fetch(map, key) do
+      {:ok, value} ->
+        value
+
+      :error ->
+        Enum.find_value(map, fn
+          {map_key, value} when is_atom(map_key) ->
+            if Atom.to_string(map_key) == key, do: value
+
+          _ ->
+            nil
+        end)
+    end
+  end
+
+  defp fetch_map_value(_map, _key), do: nil
+
+  defp html_escape(value) when is_binary(value) do
+    value
+    |> String.replace("&", "&amp;")
+    |> String.replace("<", "&lt;")
+    |> String.replace(">", "&gt;")
+    |> String.replace("\"", "&quot;")
+  end
+
+  defp html_escape(_value), do: ""
 end

@@ -14,6 +14,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
   alias Maraithon.Connectors.GoogleCalendar
   alias Maraithon.InsightFeedback
   alias Maraithon.Insights
+  alias Maraithon.OAuth
   alias Maraithon.Tools.GmailHelpers
 
   require Logger
@@ -164,6 +165,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
       max_insights_per_cycle:
         to_positive_integer(config["max_insights_per_cycle"], @default_max_insights_per_cycle),
       min_confidence: to_float(config["min_confidence"], @default_min_confidence),
+      google_account: nil,
       pending_candidates: [],
       last_scan_at: nil
     }
@@ -171,7 +173,10 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
 
   @impl true
   def handle_wakeup(state, context) do
-    state = ensure_user_id(state, context)
+    state =
+      state
+      |> ensure_user_id(context)
+      |> hydrate_google_account()
 
     cond do
       is_nil(state.user_id) ->
@@ -218,14 +223,9 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
   @impl true
   def handle_effect_result({:llm_call, response}, state, context) do
     candidates = state.pending_candidates
-    fallback = fallback_insights(candidates, state)
 
     insights =
       parse_llm_response(response.content, candidates, state)
-      |> case do
-        [] -> fallback
-        parsed -> parsed
-      end
       |> Enum.filter(&high_signal_unresolved?(&1, state))
       |> Enum.take(state.max_insights_per_cycle)
 
@@ -258,6 +258,42 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
       _ -> state
     end
   end
+
+  defp hydrate_google_account(%{user_id: nil} = state), do: state
+
+  defp hydrate_google_account(state) do
+    Map.put(state, :google_account, google_account_for_user(state.user_id))
+  end
+
+  defp google_account_for_user(user_id) when is_binary(user_id) do
+    case OAuth.get_token(user_id, "google") do
+      %{metadata: metadata, provider: provider} ->
+        metadata = metadata || %{}
+
+        normalize_string(metadata["account_email"]) ||
+          normalize_string(metadata[:account_email]) ||
+          normalize_string(metadata["email"]) ||
+          normalize_string(metadata[:email]) ||
+          google_provider_account(provider)
+
+      _ ->
+        nil
+    end
+  end
+
+  defp google_account_for_user(_user_id), do: nil
+
+  defp google_provider_account("google:" <> account) when is_binary(account) do
+    account = normalize_string(account)
+
+    if account && String.starts_with?(account, "sub-") do
+      nil
+    else
+      account
+    end
+  end
+
+  defp google_provider_account(_provider), do: nil
 
   defp candidates_from_periodic_scan(state, _context) do
     emails = fetch_recent_inbox_messages(state)
@@ -478,6 +514,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
             dedupe_key: "gmail:thread:#{thread_id}:reply_owed",
             metadata:
               compact_map(%{
+                "account" => state.google_account,
                 "thread_id" => thread_id,
                 "from" => from,
                 "to" => to,
@@ -599,6 +636,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
             dedupe_key: "gmail:commitment:#{thread_id}",
             metadata:
               compact_map(%{
+                "account" => state.google_account,
                 "thread_id" => thread_id,
                 "from" => from,
                 "to" => to,
@@ -725,6 +763,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
             dedupe_key: "calendar:follow_up:#{event_id}",
             metadata:
               compact_map(%{
+                "account" => state.google_account,
                 "summary" => summary,
                 "organizer" => organizer,
                 "attendee_count" => attendee_count,
@@ -755,18 +794,6 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
         Logger.warning("InboxCalendarAdvisor failed to persist insights", reason: inspect(reason))
         {:error, reason}
     end
-  end
-
-  defp fallback_insights(candidates, state) do
-    candidates
-    |> Enum.map(fn candidate ->
-      candidate
-      |> Map.put(
-        "confidence",
-        max(read_float(candidate, "confidence", 0.5), state.min_confidence)
-      )
-      |> Map.put_new("source_occurred_at", read_datetime(candidate, "source_occurred_at"))
-    end)
   end
 
   defp parse_llm_response(content, candidates, state) when is_binary(content) do
@@ -806,7 +833,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
     dedupe_key = read_string(item, "dedupe_key", nil)
     base = if is_binary(dedupe_key), do: Map.get(by_key, dedupe_key), else: nil
 
-    if is_nil(base) do
+    if is_nil(base) or not actionable_llm_item?(item) do
       nil
     else
       confidence =
@@ -815,6 +842,12 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
       if confidence < min_confidence do
         nil
       else
+        obligation_type = read_string(item, "obligation_type", nil)
+        reasoning_summary = read_string(item, "reasoning_summary", nil)
+        human_counterparty = read_boolean(item, "human_counterparty", false)
+        missing_followthrough = read_boolean(item, "missing_followthrough_evidence", false)
+        interrupt_now = read_boolean(item, "interrupt_now", false)
+        false_positive_risk = clamp(read_float(item, "false_positive_risk", 1.0), 0.0, 1.0)
         telegram_fit_score = clamp(read_float(item, "telegram_fit_score", confidence), 0.0, 1.0)
         telegram_fit_reason = read_string(item, "telegram_fit_reason", nil)
         why_now = read_string(item, "why_now", nil)
@@ -842,6 +875,12 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
             |> Map.put("telegram_fit_score", telegram_fit_score)
             |> maybe_put("telegram_fit_reason", telegram_fit_reason)
             |> maybe_put("why_now", why_now)
+            |> maybe_put("obligation_type", obligation_type)
+            |> maybe_put("reasoning_summary", reasoning_summary)
+            |> maybe_put("human_counterparty", human_counterparty)
+            |> maybe_put("missing_followthrough_evidence", missing_followthrough)
+            |> maybe_put("interrupt_now", interrupt_now)
+            |> maybe_put("false_positive_risk", false_positive_risk)
             |> maybe_put_list("follow_up_ideas", follow_up_ideas)
             |> Map.put("record", merged_record)
             |> Map.put("commitment", merged_record["commitment"])
@@ -859,6 +898,20 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
   end
 
   defp merge_llm_item(_item, _by_key, _min_confidence), do: nil
+
+  defp actionable_llm_item?(item) when is_map(item) do
+    actionability = read_string(item, "actionability", "") |> String.downcase()
+    human_counterparty = read_boolean(item, "human_counterparty", false)
+    missing_followthrough = read_boolean(item, "missing_followthrough_evidence", false)
+    interrupt_now = read_boolean(item, "interrupt_now", false)
+    false_positive_risk = read_float(item, "false_positive_risk", 1.0)
+
+    actionability == "actionable" and
+      human_counterparty and
+      missing_followthrough and
+      interrupt_now and
+      false_positive_risk <= 0.35
+  end
 
   defp resolve_record(item, base) do
     base_metadata = read_map(base, "metadata")
@@ -959,7 +1012,22 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
     Task:
     - Keep only unresolved commitments that should interrupt a founder now.
     - Prioritize explicit promises, missed replies, and post-meeting follow-ups.
+    - Apply a reasoning-first decision, not keyword heuristics:
+      1. Is there a real human counterparty?
+      2. Is there an explicit ask or explicit commitment?
+      3. Is completion evidence still missing?
+      4. Is interruption justified now?
+      5. What is the false positive risk?
     - Drop low-confidence or ambiguous items.
+    - Strongly down-rank or exclude automated transactional receipts and notifications
+      (payment confirmations, invoices, password resets, marketing/autonotifications)
+      unless there is a clear human ask or explicit founder commitment that is still open.
+    - If an item is mostly informational/receipt-like, omit it from output instead of rewording it.
+    - Examples to exclude:
+      1. "Your payment was successful"
+      2. "Your Tuesday afternoon order with Uber Eats"
+      3. "Receipt / invoice / order confirmation" with no direct ask
+    - Every returned item must be truly actionable now.
     - Keep `category` and `dedupe_key` unchanged.
     - Keep confidence between 0 and 1.
     - Estimate telegram_fit_score between 0 and 1, where 1 means "send to Telegram now".
@@ -971,7 +1039,12 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
     Return ONLY valid JSON array. Each item must include:
     dedupe_key, title, summary, recommended_action, priority, confidence,
     telegram_fit_score, telegram_fit_reason, why_now, follow_up_ideas,
-    commitment, person, source, deadline, status, evidence, next_action
+    commitment, person, source, deadline, status, evidence, next_action,
+    actionability, obligation_type, human_counterparty, missing_followthrough_evidence,
+    interrupt_now, false_positive_risk, reasoning_summary
+    - Set actionability to exactly "actionable" for every returned item.
+    - Set human_counterparty, missing_followthrough_evidence, and interrupt_now to true for every returned item.
+    - Keep false_positive_risk <= 0.35 for every returned item.
     """
   end
 
@@ -1396,6 +1469,34 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
       is_binary(value) ->
         case Float.parse(value) do
           {parsed, ""} -> parsed
+          _ -> default
+        end
+
+      true ->
+        default
+    end
+  end
+
+  defp read_boolean(attrs, key, default) when is_map(attrs) do
+    value = fetch_attr(attrs, key)
+
+    cond do
+      is_boolean(value) ->
+        value
+
+      is_integer(value) ->
+        value != 0
+
+      is_binary(value) ->
+        case String.downcase(String.trim(value)) do
+          "true" -> true
+          "1" -> true
+          "yes" -> true
+          "y" -> true
+          "false" -> false
+          "0" -> false
+          "no" -> false
+          "n" -> false
           _ -> default
         end
 

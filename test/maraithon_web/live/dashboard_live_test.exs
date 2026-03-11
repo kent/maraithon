@@ -212,6 +212,7 @@ defmodule MaraithonWeb.DashboardLiveTest do
             "confidence" => 0.9,
             "dedupe_key" => "dashboard:enriched:1",
             "metadata" => %{
+              "account" => @user_email,
               "why_now" => "The customer asked for an update before today's review call.",
               "follow_up_ideas" => [
                 "Pull the latest status from support before replying.",

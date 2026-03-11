@@ -3,6 +3,7 @@ defmodule Maraithon.Connections do
   Admin-facing connection inventory for integrations.
   """
 
+  alias Maraithon.Accounts.ConnectedAccount
   alias Maraithon.ConnectedAccounts
   alias Maraithon.Connectors.Telegram
   alias Maraithon.OAuth
@@ -60,23 +61,25 @@ defmodule Maraithon.Connections do
   """
   def dashboard_snapshot(user_id, opts \\ []) when is_binary(user_id) do
     return_to = Keyword.get(opts, :return_to, "/")
+    connected_accounts = ConnectedAccounts.list_for_user(user_id)
 
     tokens =
       OAuth.list_user_tokens(user_id)
       |> Enum.sort_by(&provider_sort_key/1)
 
+    account_by_provider = Map.new(connected_accounts, &{&1.provider, &1})
     token_by_provider = Map.new(tokens, &{&1.provider, &1})
     google_tokens = Enum.filter(tokens, &google_provider?(&1.provider))
     slack_tokens = Enum.filter(tokens, &slack_provider?(&1.provider))
     telegram_account = ConnectedAccounts.get(user_id, "telegram")
 
     providers = [
-      google_card(user_id, google_tokens, return_to),
-      github_card(user_id, token_by_provider["github"], return_to),
-      slack_card(user_id, slack_tokens, return_to),
+      google_card(user_id, google_tokens, account_by_provider, return_to),
+      github_card(user_id, token_by_provider["github"], account_by_provider["github"], return_to),
+      slack_card(user_id, slack_tokens, account_by_provider, return_to),
       telegram_card(user_id, telegram_account, return_to),
-      linear_card(user_id, token_by_provider["linear"], return_to),
-      notion_card(user_id, token_by_provider["notion"], return_to)
+      linear_card(user_id, token_by_provider["linear"], account_by_provider["linear"], return_to),
+      notion_card(user_id, token_by_provider["notion"], account_by_provider["notion"], return_to)
     ]
 
     %{
@@ -159,12 +162,12 @@ defmodule Maraithon.Connections do
   defp fallback_snapshot(user_id, return_to, reason) do
     providers =
       [
-        google_card(user_id, [], return_to),
-        github_card(user_id, nil, return_to),
-        slack_card(user_id, [], return_to),
+        google_card(user_id, [], %{}, return_to),
+        github_card(user_id, nil, nil, return_to),
+        slack_card(user_id, [], %{}, return_to),
         telegram_card(user_id, nil, return_to),
-        linear_card(user_id, nil, return_to),
-        notion_card(user_id, nil, return_to)
+        linear_card(user_id, nil, nil, return_to),
+        notion_card(user_id, nil, nil, return_to)
       ]
       |> Enum.map(&mark_unavailable/1)
 
@@ -183,16 +186,23 @@ defmodule Maraithon.Connections do
     }
   end
 
-  defp google_card(user_id, tokens, return_to) when is_list(tokens) do
+  defp google_card(user_id, tokens, account_by_provider, return_to)
+       when is_list(tokens) and is_map(account_by_provider) do
     configured? = Google.configured?()
     primary_token = primary_google_token(tokens)
-    account_entries = google_account_entries(tokens)
+    account_entries = google_account_entries(user_id, tokens, account_by_provider, return_to)
     granted_scope_count = tokens |> Enum.flat_map(&token_scopes/1) |> Enum.uniq() |> length()
+    reauth_required? = Enum.any?(account_entries, &(&1.status == :needs_refresh))
 
     services =
       Enum.map(@google_services, fn service ->
         required_scopes = Google.scopes_for([service.id])
-        connected? = Enum.any?(tokens, &google_service_connected?(&1, required_scopes))
+
+        connected? =
+          Enum.any?(tokens, fn token ->
+            google_service_connected?(token, required_scopes) and
+              token_account_status(token, account_by_provider) != :needs_refresh
+          end)
 
         %{
           id: service.id,
@@ -207,6 +217,7 @@ defmodule Maraithon.Connections do
       cond do
         not configured? -> :not_configured
         tokens == [] -> :disconnected
+        reauth_required? -> :needs_refresh
         Enum.all?(services, &(&1.status == :connected)) -> :connected
         true -> :partial
       end
@@ -237,7 +248,7 @@ defmodule Maraithon.Connections do
     |> enrich_provider_setup()
   end
 
-  defp github_card(user_id, token, return_to) do
+  defp github_card(user_id, token, account, return_to) do
     configured? = GitHub.configured?()
 
     %{
@@ -245,7 +256,7 @@ defmodule Maraithon.Connections do
       provider: "github",
       label: "GitHub",
       description: "Grant repo and org access so agents can inspect issues and comment back.",
-      status: provider_status(configured?, token),
+      status: provider_status(configured?, token, account),
       configured?: configured?,
       updated_at: token && token.updated_at,
       disconnectable?: not is_nil(token),
@@ -262,11 +273,15 @@ defmodule Maraithon.Connections do
     |> enrich_provider_setup()
   end
 
-  defp slack_card(user_id, tokens, return_to) do
+  defp slack_card(user_id, tokens, account_by_provider, return_to)
+       when is_list(tokens) and is_map(account_by_provider) do
     configured? = Slack.configured?()
     bot_token = slack_bot_token(tokens)
     user_tokens = slack_user_tokens(tokens)
+    first_user_token = List.first(user_tokens)
     bot_scopes = token_scope_set(bot_token)
+    account_entries = slack_account_entries(user_id, tokens, account_by_provider, return_to)
+    reauth_required? = Enum.any?(account_entries, &(&1.status == :needs_refresh))
 
     workspace_names =
       tokens
@@ -278,6 +293,7 @@ defmodule Maraithon.Connections do
       cond do
         not configured? -> :not_configured
         is_nil(bot_token) -> :disconnected
+        reauth_required? -> :needs_refresh
         user_tokens == [] -> :partial
         true -> :connected
       end
@@ -298,13 +314,23 @@ defmodule Maraithon.Connections do
         id: "channels",
         label: "Channels",
         description: "Track commitments and unresolved action loops in channel conversations.",
-        status: slack_service_status(configured?, bot_token)
+        status:
+          slack_service_status(
+            configured?,
+            bot_token,
+            bot_token && Map.get(account_by_provider, bot_token.provider)
+          )
       },
       %{
         id: "dms",
         label: "Personal DMs",
         description: "Read DM and MPIM context to catch reply debt and private commitments.",
-        status: slack_service_status(configured?, List.first(user_tokens))
+        status:
+          slack_service_status(
+            configured?,
+            first_user_token,
+            first_user_token && Map.get(account_by_provider, first_user_token.provider)
+          )
       }
     ]
 
@@ -321,12 +347,13 @@ defmodule Maraithon.Connections do
       connect_url: auth_url("/auth/slack", user_id, return_to),
       disconnect_label: "Disconnect Slack",
       details: details,
-      services: services
+      services: services,
+      accounts: account_entries
     }
     |> enrich_provider_setup()
   end
 
-  defp linear_card(user_id, token, return_to) do
+  defp linear_card(user_id, token, account, return_to) do
     configured? = Linear.configured?()
 
     team_names =
@@ -350,7 +377,7 @@ defmodule Maraithon.Connections do
       provider: "linear",
       label: "Linear",
       description: "Connect your Linear workspace for issue review and issue/comment actions.",
-      status: provider_status(configured?, token),
+      status: provider_status(configured?, token, account),
       configured?: configured?,
       updated_at: token && token.updated_at,
       disconnectable?: not is_nil(token),
@@ -406,7 +433,7 @@ defmodule Maraithon.Connections do
     |> enrich_provider_setup()
   end
 
-  defp notion_card(user_id, token, return_to) do
+  defp notion_card(user_id, token, account, return_to) do
     configured? = Notion.configured?()
 
     %{
@@ -414,7 +441,7 @@ defmodule Maraithon.Connections do
       provider: "notion",
       label: "Notion",
       description: "Store a workspace grant now so Notion data can feed future agents and tools.",
-      status: provider_status(configured?, token),
+      status: provider_status(configured?, token, account),
       configured?: configured?,
       updated_at: token && token.updated_at,
       disconnectable?: not is_nil(token),
@@ -451,9 +478,12 @@ defmodule Maraithon.Connections do
   defp google_service_status(true, _tokens, true), do: :connected
   defp google_service_status(true, _tokens, false), do: :missing_scope
 
-  defp provider_status(false, _token), do: :not_configured
-  defp provider_status(true, nil), do: :disconnected
-  defp provider_status(true, _token), do: :connected
+  defp provider_status(false, _token, _account), do: :not_configured
+  defp provider_status(true, nil, _account), do: :disconnected
+
+  defp provider_status(true, _token, account) do
+    if reauth_required_account?(account), do: :needs_refresh, else: :connected
+  end
 
   defp google_details(nil, items), do: provider_details(nil, items)
 
@@ -523,14 +553,24 @@ defmodule Maraithon.Connections do
   defp normalize_list(list) when is_list(list), do: list
   defp normalize_list(_value), do: []
 
-  defp google_account_entries(tokens) when is_list(tokens) do
+  defp google_account_entries(user_id, tokens, account_by_provider, return_to)
+       when is_binary(user_id) and is_list(tokens) and is_map(account_by_provider) do
+    reconnect_url =
+      auth_url("/auth/google", user_id, return_to, scopes: "gmail,calendar,contacts")
+
     tokens
     |> Enum.filter(&google_provider?(&1.provider))
     |> Enum.map(fn token ->
+      status = token_account_status(token, account_by_provider)
+
       %{
         provider: token.provider,
         account: google_account_label(token),
-        updated_at: token.updated_at
+        updated_at: token_or_account_updated_at(token, account_by_provider),
+        status: status,
+        status_note: token_account_status_note(token, account_by_provider),
+        reconnect_url: reconnect_url,
+        needs_reconnect?: status == :needs_refresh
       }
     end)
     |> Enum.sort_by(&timestamp_sort_value(&1.updated_at), :desc)
@@ -573,6 +613,27 @@ defmodule Maraithon.Connections do
 
   defp normalize_text(_value), do: nil
 
+  defp normalize_metadata_map(metadata) when is_map(metadata), do: metadata
+  defp normalize_metadata_map(_metadata), do: %{}
+
+  defp fetch_map_value(map, key) when is_map(map) and is_binary(key) do
+    case Map.fetch(map, key) do
+      {:ok, value} ->
+        value
+
+      :error ->
+        Enum.find_value(map, fn
+          {map_key, value} when is_atom(map_key) ->
+            if Atom.to_string(map_key) == key, do: value
+
+          _ ->
+            nil
+        end)
+    end
+  end
+
+  defp fetch_map_value(_map, _key), do: nil
+
   defp google_provider?("google"), do: true
 
   defp google_provider?(provider) when is_binary(provider) do
@@ -607,9 +668,125 @@ defmodule Maraithon.Connections do
 
   defp slack_user_provider?(_provider), do: false
 
-  defp slack_service_status(false, _token), do: :not_configured
-  defp slack_service_status(true, nil), do: :disconnected
-  defp slack_service_status(true, _token), do: :connected
+  defp slack_account_entries(user_id, tokens, account_by_provider, return_to)
+       when is_binary(user_id) and is_list(tokens) and is_map(account_by_provider) do
+    reconnect_url = auth_url("/auth/slack", user_id, return_to)
+
+    tokens
+    |> Enum.filter(&slack_provider?(&1.provider))
+    |> Enum.map(fn token ->
+      status = token_account_status(token, account_by_provider)
+
+      %{
+        provider: token.provider,
+        account: slack_account_label(token),
+        updated_at: token_or_account_updated_at(token, account_by_provider),
+        status: status,
+        status_note: token_account_status_note(token, account_by_provider),
+        reconnect_url: reconnect_url,
+        needs_reconnect?: status == :needs_refresh
+      }
+    end)
+    |> Enum.sort_by(&timestamp_sort_value(&1.updated_at), :desc)
+  end
+
+  defp slack_service_status(false, _token, _account), do: :not_configured
+  defp slack_service_status(true, nil, _account), do: :disconnected
+
+  defp slack_service_status(true, _token, account) do
+    if reauth_required_account?(account), do: :needs_refresh, else: :connected
+  end
+
+  defp token_account_status(%Token{} = token, account_by_provider)
+       when is_map(account_by_provider) do
+    account = Map.get(account_by_provider, token.provider)
+
+    cond do
+      reauth_required_account?(account) -> :needs_refresh
+      token_expired_without_refresh?(token) -> :needs_refresh
+      true -> :connected
+    end
+  end
+
+  defp token_account_status(_token, _account_by_provider), do: :disconnected
+
+  defp token_account_status_note(%Token{} = token, account_by_provider)
+       when is_map(account_by_provider) do
+    account = Map.get(account_by_provider, token.provider)
+    reason = account_error_reason(account)
+
+    cond do
+      reauth_required_account?(account) and reason == "oauth_missing_refresh_token" ->
+        "No refresh token is stored for this account. Reconnect required."
+
+      reauth_required_account?(account) ->
+        "Token refresh failed and the account must be re-authenticated."
+
+      token_expired_without_refresh?(token) ->
+        "Token is expired and cannot be refreshed automatically."
+
+      true ->
+        "Healthy"
+    end
+  end
+
+  defp token_account_status_note(_token, _account_by_provider), do: "Healthy"
+
+  defp token_or_account_updated_at(%Token{} = token, account_by_provider)
+       when is_map(account_by_provider) do
+    account = Map.get(account_by_provider, token.provider)
+    account_updated_at = account && account.updated_at
+
+    [token.updated_at, account_updated_at]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.max_by(&timestamp_sort_value/1, fn -> nil end)
+  end
+
+  defp token_or_account_updated_at(%Token{} = token, _account_by_provider), do: token.updated_at
+  defp token_or_account_updated_at(_token, _account_by_provider), do: nil
+
+  defp reauth_required_account?(%ConnectedAccount{status: "error"} = account) do
+    account_error_reason(account) in ["oauth_reauth_required", "oauth_missing_refresh_token"]
+  end
+
+  defp reauth_required_account?(_account), do: false
+
+  defp account_error_reason(nil), do: nil
+
+  defp account_error_reason(%ConnectedAccount{metadata: metadata}) do
+    metadata
+    |> normalize_metadata_map()
+    |> fetch_map_value("last_error")
+    |> case do
+      value when is_map(value) -> fetch_map_value(value, "reason")
+      _ -> nil
+    end
+    |> normalize_text()
+  end
+
+  defp token_expired_without_refresh?(%Token{expires_at: nil}), do: false
+
+  defp token_expired_without_refresh?(%Token{expires_at: expires_at, refresh_token: refresh_token})
+       when not is_nil(expires_at) do
+    DateTime.compare(expires_at, DateTime.utc_now()) != :gt and not present?(refresh_token)
+  rescue
+    ArgumentError -> false
+  end
+
+  defp token_expired_without_refresh?(_token), do: false
+
+  defp slack_account_label(%Token{} = token) do
+    team = normalize_text(metadata_value(token, ["team_name"])) || "Slack workspace"
+
+    if slack_user_provider?(token.provider) do
+      slack_user_id = normalize_text(metadata_value(token, ["slack_user_id"])) || "user"
+      "#{team} · DM user #{slack_user_id}"
+    else
+      "#{team} · Bot"
+    end
+  end
+
+  defp slack_account_label(_token), do: "Slack account"
 
   defp latest_updated_at([]), do: nil
 
@@ -657,6 +834,9 @@ defmodule Maraithon.Connections do
     end)
     |> Map.update!(:services, fn services ->
       Enum.map(services, &Map.put(&1, :status, :unknown))
+    end)
+    |> Map.update(:accounts, [], fn accounts ->
+      Enum.map(accounts, &Map.put(&1, :status, :unknown))
     end)
   end
 
