@@ -251,6 +251,16 @@ defmodule Maraithon.Connections do
   defp github_card(user_id, token, account, return_to) do
     configured? = GitHub.configured?()
 
+    account_entry =
+      single_oauth_account_entry(
+        user_id,
+        token,
+        account,
+        return_to,
+        "/auth/github",
+        &github_account_label/1
+      )
+
     %{
       id: "github",
       provider: "github",
@@ -268,7 +278,8 @@ defmodule Maraithon.Connections do
           metadata_value(token, ["email"]),
           "Scopes: #{Enum.join(token_scopes(token), ", ")}"
         ]),
-      services: []
+      services: [],
+      accounts: maybe_single_account_entry(account_entry)
     }
     |> enrich_provider_setup()
   end
@@ -356,6 +367,16 @@ defmodule Maraithon.Connections do
   defp linear_card(user_id, token, account, return_to) do
     configured? = Linear.configured?()
 
+    account_entry =
+      single_oauth_account_entry(
+        user_id,
+        token,
+        account,
+        return_to,
+        "/auth/linear",
+        &linear_account_label/1
+      )
+
     team_names =
       token
       |> metadata_value(["teams"])
@@ -388,7 +409,8 @@ defmodule Maraithon.Connections do
           if(team_names != [], do: "Teams: #{Enum.join(team_names, ", ")}"),
           "Scopes: #{Enum.join(token_scopes(token), ", ")}"
         ]),
-      services: []
+      services: [],
+      accounts: maybe_single_account_entry(account_entry)
     }
     |> enrich_provider_setup()
   end
@@ -436,6 +458,16 @@ defmodule Maraithon.Connections do
   defp notion_card(user_id, token, account, return_to) do
     configured? = Notion.configured?()
 
+    account_entry =
+      single_oauth_account_entry(
+        user_id,
+        token,
+        account,
+        return_to,
+        "/auth/notion",
+        &notion_account_label/1
+      )
+
     %{
       id: "notion",
       provider: "notion",
@@ -453,7 +485,8 @@ defmodule Maraithon.Connections do
           metadata_value(token, ["workspace_id"]) &&
             "Workspace ID: #{metadata_value(token, ["workspace_id"])}"
         ]),
-      services: []
+      services: [],
+      accounts: maybe_single_account_entry(account_entry)
     }
     |> enrich_provider_setup()
   end
@@ -697,6 +730,43 @@ defmodule Maraithon.Connections do
     if reauth_required_account?(account), do: :needs_refresh, else: :connected
   end
 
+  defp single_oauth_account_entry(
+         user_id,
+         %Token{} = token,
+         account,
+         return_to,
+         connect_path,
+         label_fun
+       )
+       when is_binary(user_id) and is_binary(return_to) and is_binary(connect_path) and
+              is_function(label_fun, 1) do
+    account_by_provider = %{token.provider => account}
+    status = token_account_status(token, account_by_provider)
+
+    %{
+      provider: token.provider,
+      account: label_fun.(token),
+      updated_at: token_or_account_updated_at(token, account_by_provider),
+      status: status,
+      status_note: token_account_status_note(token, account_by_provider),
+      reconnect_url: auth_url(connect_path, user_id, return_to),
+      needs_reconnect?: status == :needs_refresh
+    }
+  end
+
+  defp single_oauth_account_entry(
+         _user_id,
+         _token,
+         _account,
+         _return_to,
+         _connect_path,
+         _label_fun
+       ),
+       do: nil
+
+  defp maybe_single_account_entry(nil), do: []
+  defp maybe_single_account_entry(entry), do: [entry]
+
   defp token_account_status(%Token{} = token, account_by_provider)
        when is_map(account_by_provider) do
     account = Map.get(account_by_provider, token.provider)
@@ -787,6 +857,49 @@ defmodule Maraithon.Connections do
   end
 
   defp slack_account_label(_token), do: "Slack account"
+
+  defp github_account_label(%Token{} = token) do
+    login =
+      token
+      |> metadata_value(["login"])
+      |> normalize_text()
+
+    email =
+      token
+      |> metadata_value(["email"])
+      |> normalize_text()
+
+    cond do
+      present?(login) and present?(email) -> "@#{login} (#{email})"
+      present?(login) -> "@#{login}"
+      present?(email) -> email
+      true -> "GitHub account"
+    end
+  end
+
+  defp github_account_label(_token), do: "GitHub account"
+
+  defp linear_account_label(%Token{} = token) do
+    first_team_name =
+      token
+      |> metadata_value(["teams"])
+      |> normalize_list()
+      |> Enum.find_value(fn
+        %{"name" => name} when is_binary(name) and name != "" -> name
+        _ -> nil
+      end)
+
+    normalize_text(first_team_name) || "Linear workspace"
+  end
+
+  defp linear_account_label(_token), do: "Linear workspace"
+
+  defp notion_account_label(%Token{} = token) do
+    normalize_text(metadata_value(token, ["workspace_name"])) ||
+      normalize_text(metadata_value(token, ["workspace_id"])) || "Notion workspace"
+  end
+
+  defp notion_account_label(_token), do: "Notion workspace"
 
   defp latest_updated_at([]), do: nil
 

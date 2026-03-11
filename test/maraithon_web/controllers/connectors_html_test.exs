@@ -16,4 +16,9 @@ defmodule MaraithonWeb.ConnectorsHTMLTest do
   test "connection_status_label/1 supports needs_refresh status" do
     assert ConnectorsHTML.connection_status_label(:needs_refresh) == "refresh required"
   end
+
+  test "connection_primary_action/1 uses reconnect wording for refresh-required google" do
+    assert ConnectorsHTML.connection_primary_action(%{provider: "google", status: :needs_refresh}) ==
+             "Reconnect Google"
+  end
 end

@@ -21,6 +21,9 @@ defmodule MaraithonWeb.ConnectorsHTML do
       when status in [:connected, :partial],
       do: "Add Google Account"
 
+  def connection_primary_action(%{provider: "google", status: :needs_refresh}),
+    do: "Reconnect Google"
+
   def connection_primary_action(%{provider: "google"}), do: "Connect Google"
 
   def connection_primary_action(%{provider: "telegram", status: :connected}),
@@ -29,6 +32,7 @@ defmodule MaraithonWeb.ConnectorsHTML do
   def connection_primary_action(%{provider: "telegram"}), do: "Link Telegram"
   def connection_primary_action(%{provider: "slack", status: :connected}), do: "Reconnect Slack"
   def connection_primary_action(%{provider: "slack"}), do: "Connect Slack"
+  def connection_primary_action(%{status: :needs_refresh}), do: "Reconnect"
   def connection_primary_action(%{status: :connected}), do: "Reconnect"
   def connection_primary_action(_provider), do: "Connect"
 

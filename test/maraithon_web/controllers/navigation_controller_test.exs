@@ -100,6 +100,14 @@ defmodule MaraithonWeb.NavigationControllerTest do
       assert html =~ "refresh required"
       assert html =~ "Token refresh failed and the account must be re-authenticated."
       assert html =~ "Reconnect"
+
+      detail_conn = conn |> recycle() |> get("/connectors/google")
+      detail_html = html_response(detail_conn, 200)
+
+      assert detail_html =~ "Connected Accounts"
+      assert detail_html =~ "founder@example.com"
+      assert detail_html =~ "Reconnect"
+      assert detail_html =~ "Disconnect"
     end
 
     test "GET /connectors/:provider renders provider details", %{conn: conn} do
@@ -119,6 +127,66 @@ defmodule MaraithonWeb.NavigationControllerTest do
       assert html =~ "OAuth Setup"
       assert html =~ "SLACK_SIGNING_SECRET"
       assert html =~ "/webhooks/slack"
+    end
+
+    test "GET /connectors/github shows account-level reconnect/disconnect controls", %{conn: conn} do
+      user_id = "github-detail@example.com"
+      {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+      {:ok, _token} =
+        OAuth.store_tokens(user_id, "github", %{
+          access_token: "github-token",
+          scopes: ["repo"],
+          metadata: %{"login" => "octocat", "email" => "octocat@example.com"}
+        })
+
+      conn = conn |> log_in_test_user(user_id) |> get("/connectors/github")
+      html = html_response(conn, 200)
+
+      assert html =~ "Connected Accounts"
+      assert html =~ "@octocat"
+      assert html =~ "Reconnect"
+      assert html =~ "Disconnect"
+    end
+
+    test "GET /connectors/linear shows account-level reconnect/disconnect controls", %{conn: conn} do
+      user_id = "linear-detail@example.com"
+      {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+      {:ok, _token} =
+        OAuth.store_tokens(user_id, "linear", %{
+          access_token: "linear-token",
+          scopes: ["read"],
+          metadata: %{"teams" => [%{"name" => "Platform", "key" => "PLT"}]}
+        })
+
+      conn = conn |> log_in_test_user(user_id) |> get("/connectors/linear")
+      html = html_response(conn, 200)
+
+      assert html =~ "Connected Accounts"
+      assert html =~ "Platform"
+      assert html =~ "Reconnect"
+      assert html =~ "Disconnect"
+    end
+
+    test "GET /connectors/notion shows account-level reconnect/disconnect controls", %{conn: conn} do
+      user_id = "notion-detail@example.com"
+      {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+      {:ok, _token} =
+        OAuth.store_tokens(user_id, "notion", %{
+          access_token: "notion-token",
+          scopes: [],
+          metadata: %{"workspace_name" => "Agora Docs", "workspace_id" => "workspace-123"}
+        })
+
+      conn = conn |> log_in_test_user(user_id) |> get("/connectors/notion")
+      html = html_response(conn, 200)
+
+      assert html =~ "Connected Accounts"
+      assert html =~ "Agora Docs"
+      assert html =~ "Reconnect"
+      assert html =~ "Disconnect"
     end
 
     test "GET /connectors/telegram shows connected chat details without linked copy", %{
