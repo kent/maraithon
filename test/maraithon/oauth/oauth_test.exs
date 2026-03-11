@@ -1,6 +1,7 @@
 defmodule Maraithon.OAuthTest do
   use Maraithon.DataCase, async: true
 
+  alias Maraithon.Accounts
   alias Maraithon.ConnectedAccounts
   alias Maraithon.OAuth
 
@@ -83,6 +84,27 @@ defmodule Maraithon.OAuthTest do
 
       assert token.expires_at == nil
     end
+
+    test "stores exact provider without mutating existing google account providers" do
+      user_id = "user_#{System.unique_integer()}"
+
+      {:ok, _} =
+        OAuth.store_tokens(user_id, "google:account@example.com", %{
+          access_token: "account_token",
+          refresh_token: "account_refresh"
+        })
+
+      {:ok, _} =
+        OAuth.store_tokens(user_id, "google", %{
+          access_token: "base_token",
+          refresh_token: "base_refresh"
+        })
+
+      tokens = OAuth.list_user_tokens(user_id)
+      providers = tokens |> Enum.map(& &1.provider) |> Enum.sort()
+
+      assert providers == ["google", "google:account@example.com"]
+    end
   end
 
   describe "get_token/2" do
@@ -110,6 +132,35 @@ defmodule Maraithon.OAuthTest do
 
       assert google_token.access_token == "google_token"
       assert linear_token.access_token == "linear_token"
+    end
+
+    test "google provider lookup prefers healthy account token over reauth-required token" do
+      user_id = "user_#{System.unique_integer()}@example.com"
+      {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+      {:ok, _} =
+        OAuth.store_tokens(user_id, "google:healthy@example.com", %{
+          access_token: "healthy_access",
+          refresh_token: "healthy_refresh"
+        })
+
+      {:ok, _} =
+        OAuth.store_tokens(user_id, "google:stale@example.com", %{
+          access_token: "stale_access",
+          refresh_token: "stale_refresh"
+        })
+
+      {:ok, _} =
+        ConnectedAccounts.mark_error(
+          user_id,
+          "google:stale@example.com",
+          "oauth_reauth_required"
+        )
+
+      token = OAuth.get_token(user_id, "google")
+
+      assert token.provider == "google:healthy@example.com"
+      assert token.access_token == "healthy_access"
     end
   end
 
@@ -140,6 +191,29 @@ defmodule Maraithon.OAuthTest do
       {:ok, token} = OAuth.get_valid_access_token(user_id, "google")
 
       assert token == "no_expiry_token"
+    end
+
+    test "returns reauth_required when account is flagged for reconnect" do
+      user_id = "user_#{System.unique_integer()}@example.com"
+      {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+      expires_at = DateTime.add(DateTime.utc_now(), -3600, :second)
+
+      {:ok, _} =
+        OAuth.store_tokens(user_id, "google:needs-reauth@example.com", %{
+          access_token: "expired_token",
+          refresh_token: "refresh_token",
+          expires_at: expires_at
+        })
+
+      {:ok, _} =
+        ConnectedAccounts.mark_error(
+          user_id,
+          "google:needs-reauth@example.com",
+          "oauth_reauth_required"
+        )
+
+      assert {:error, :reauth_required} =
+               OAuth.get_valid_access_token(user_id, "google:needs-reauth@example.com")
     end
   end
 

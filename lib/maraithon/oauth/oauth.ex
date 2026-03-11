@@ -18,7 +18,7 @@ defmodule Maraithon.OAuth do
   If a token already exists for this user/provider, it will be updated.
   """
   def store_tokens(user_id, provider, %{} = token_data) do
-    existing = get_token(user_id, provider)
+    existing = get_exact_token(user_id, provider)
 
     attrs = %{
       user_id: user_id,
@@ -67,12 +67,21 @@ defmodule Maraithon.OAuth do
   Returns nil if no token exists.
   """
   def get_token(user_id, "google") do
-    Repo.get_by(Token, user_id: user_id, provider: "google") ||
-      latest_google_account_token(user_id)
+    case get_exact_token(user_id, "google") do
+      %Token{} = token ->
+        if reauth_required_account?(user_id, token.provider) do
+          latest_google_account_token(user_id)
+        else
+          token
+        end
+
+      nil ->
+        latest_google_account_token(user_id)
+    end
   end
 
   def get_token(user_id, provider) do
-    Repo.get_by(Token, user_id: user_id, provider: provider)
+    get_exact_token(user_id, provider)
   end
 
   @doc """
@@ -87,10 +96,14 @@ defmodule Maraithon.OAuth do
         {:error, :no_token}
 
       token ->
-        if Token.expired?(token) do
-          refresh_and_get_token(token)
+        if reauth_required_account?(token.user_id, token.provider) do
+          {:error, :reauth_required}
         else
-          {:ok, token.access_token}
+          if Token.expired?(token) do
+            refresh_and_get_token(token)
+          else
+            {:ok, token.access_token}
+          end
         end
     end
   end
@@ -106,10 +119,14 @@ defmodule Maraithon.OAuth do
         {:error, :no_token}
 
       token ->
-        if Token.expired?(token) do
-          do_refresh(token)
+        if reauth_required_account?(token.user_id, token.provider) do
+          {:error, :reauth_required}
         else
-          {:ok, token}
+          if Token.expired?(token) do
+            do_refresh(token)
+          else
+            {:ok, token}
+          end
         end
     end
   end
@@ -125,10 +142,14 @@ defmodule Maraithon.OAuth do
         {:error, :no_token}
 
       token ->
-        if token_expiring_within?(token, within_seconds) do
-          do_refresh(token)
+        if reauth_required_account?(token.user_id, token.provider) do
+          {:error, :reauth_required}
         else
-          {:ok, token}
+          if token_expiring_within?(token, within_seconds) do
+            do_refresh(token)
+          else
+            {:ok, token}
+          end
         end
     end
   end
@@ -202,6 +223,12 @@ defmodule Maraithon.OAuth do
   end
 
   defp calculate_expiry(_), do: nil
+
+  defp get_exact_token(user_id, provider) when is_binary(user_id) and is_binary(provider) do
+    Repo.get_by(Token, user_id: user_id, provider: provider)
+  end
+
+  defp get_exact_token(_user_id, _provider), do: nil
 
   defp token_expiring_within?(%Token{expires_at: nil}, _within_seconds), do: false
 
@@ -453,11 +480,127 @@ defmodule Maraithon.OAuth do
   defp put_metadata_if_present(metadata, key, value), do: Map.put(metadata, key, value)
 
   defp latest_google_account_token(user_id) when is_binary(user_id) do
+    account_by_provider =
+      ConnectedAccounts.list_for_user(user_id)
+      |> Map.new(&{&1.provider, &1})
+
     Token
     |> where([t], t.user_id == ^user_id)
     |> where([t], like(t.provider, "google:%"))
-    |> order_by([t], desc: t.updated_at)
-    |> limit(1)
-    |> Repo.one()
+    |> Repo.all()
+    |> Enum.max_by(
+      fn token ->
+        account = Map.get(account_by_provider, token.provider)
+        google_token_rank(token, account)
+      end,
+      fn -> nil end
+    )
   end
+
+  defp latest_google_account_token(_user_id), do: nil
+
+  defp google_token_rank(%Token{} = token, account) do
+    account_score =
+      cond do
+        reauth_required_account?(token.user_id, token.provider) -> 0
+        account && account.status == "connected" -> 3
+        account && account.status == "error" -> 1
+        true -> 2
+      end
+
+    freshness_score = token_freshness_score(token.expires_at)
+
+    refresh_score = if is_nil(token.refresh_token), do: 0, else: 1
+    updated_score = token_timestamp_sort_value(token.updated_at)
+
+    {account_score, freshness_score, refresh_score, updated_score}
+  end
+
+  defp google_token_rank(_token, _account), do: {0, 0, 0, 0}
+
+  defp token_freshness_score(nil), do: 2
+
+  defp token_freshness_score(%DateTime{} = expires_at) do
+    if DateTime.compare(expires_at, DateTime.utc_now()) == :gt, do: 2, else: 0
+  end
+
+  defp token_freshness_score(%NaiveDateTime{} = expires_at) do
+    case DateTime.from_naive(expires_at, "Etc/UTC") do
+      {:ok, datetime} -> token_freshness_score(datetime)
+      {:error, _reason} -> 0
+    end
+  end
+
+  defp token_freshness_score(_expires_at), do: 0
+
+  defp reauth_required_account?(user_id, provider)
+       when is_binary(user_id) and is_binary(provider) do
+    case ConnectedAccounts.get(user_id, provider) do
+      %{status: "error", metadata: metadata} ->
+        metadata
+        |> account_error_reason()
+        |> reauth_required_reason?()
+
+      _ ->
+        false
+    end
+  end
+
+  defp reauth_required_account?(_user_id, _provider), do: false
+
+  defp account_error_reason(metadata) when is_map(metadata) do
+    metadata
+    |> fetch_map_value("last_error")
+    |> case do
+      value when is_map(value) -> fetch_map_value(value, "reason")
+      _ -> nil
+    end
+    |> normalize_text()
+  end
+
+  defp account_error_reason(_metadata), do: nil
+
+  defp reauth_required_reason?(reason) when is_binary(reason) do
+    reason in ["oauth_reauth_required", "oauth_missing_refresh_token"]
+  end
+
+  defp reauth_required_reason?(_reason), do: false
+
+  defp fetch_map_value(map, key) when is_map(map) and is_binary(key) do
+    case Map.fetch(map, key) do
+      {:ok, value} ->
+        value
+
+      :error ->
+        Enum.find_value(map, fn
+          {map_key, value} when is_atom(map_key) ->
+            if Atom.to_string(map_key) == key, do: value
+
+          _ ->
+            nil
+        end)
+    end
+  end
+
+  defp fetch_map_value(_map, _key), do: nil
+
+  defp normalize_text(value) when is_binary(value) do
+    case String.trim(value) do
+      "" -> nil
+      text -> text
+    end
+  end
+
+  defp normalize_text(_value), do: nil
+
+  defp token_timestamp_sort_value(%DateTime{} = value), do: DateTime.to_unix(value, :microsecond)
+
+  defp token_timestamp_sort_value(%NaiveDateTime{} = value) do
+    case DateTime.from_naive(value, "Etc/UTC") do
+      {:ok, datetime} -> DateTime.to_unix(datetime, :microsecond)
+      {:error, _reason} -> 0
+    end
+  end
+
+  defp token_timestamp_sort_value(_value), do: 0
 end
