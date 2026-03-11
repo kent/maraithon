@@ -734,6 +734,7 @@ defmodule Maraithon.Connections do
       ],
       setup_notes: [
         "Register the OAuth redirect URI in Google Cloud Console.",
+        "Set the OAuth consent screen publishing status to Production to avoid short-lived testing refresh tokens.",
         "If you want Calendar watches, point GOOGLE_CALENDAR_WEBHOOK_URL at the calendar webhook callback.",
         "If you want Gmail push, grant Gmail Pub/Sub push access to the Gmail webhook callback."
       ]

@@ -143,6 +143,11 @@ config :maraithon, Maraithon.Runtime,
     String.to_integer(System.get_env("BOOTSTRAP_RETRY_INTERVAL_MS", "5000")),
   health_report_interval_ms:
     String.to_integer(System.get_env("HEALTH_REPORT_INTERVAL_MS", "60000")),
+  oauth_refresh_interval_ms:
+    String.to_integer(System.get_env("OAUTH_REFRESH_INTERVAL_MS", "300000")),
+  oauth_refresh_lookahead_seconds:
+    String.to_integer(System.get_env("OAUTH_REFRESH_LOOKAHEAD_SECONDS", "900")),
+  oauth_refresh_batch_size: String.to_integer(System.get_env("OAUTH_REFRESH_BATCH_SIZE", "100")),
   tool_allowed_paths: tool_allowed_paths,
   # Timeouts
   llm_timeout_ms: String.to_integer(System.get_env("LLM_TIMEOUT_MS", "120000")),

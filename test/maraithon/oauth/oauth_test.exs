@@ -1,6 +1,7 @@
 defmodule Maraithon.OAuthTest do
   use Maraithon.DataCase, async: true
 
+  alias Maraithon.ConnectedAccounts
   alias Maraithon.OAuth
 
   describe "store_tokens/3" do
@@ -41,6 +42,27 @@ defmodule Maraithon.OAuthTest do
       # Should not create a second token
       tokens = OAuth.list_user_tokens(user_id)
       assert length(tokens) == 1
+    end
+
+    test "preserves existing refresh token when update omits it" do
+      user_id = "user_#{System.unique_integer()}"
+
+      {:ok, _} =
+        OAuth.store_tokens(user_id, "google", %{
+          access_token: "old_token",
+          refresh_token: "refresh_123",
+          metadata: %{source: "initial"}
+        })
+
+      {:ok, updated} =
+        OAuth.store_tokens(user_id, "google", %{
+          access_token: "new_token",
+          metadata: %{source: "updated"}
+        })
+
+      assert updated.access_token == "new_token"
+      assert updated.refresh_token == "refresh_123"
+      assert updated.metadata == %{source: "updated"}
     end
 
     test "stores token with expires_at" do
@@ -152,6 +174,95 @@ defmodule Maraithon.OAuthTest do
         })
 
       {:error, :no_refresh_token} = OAuth.refresh_if_expired(user_id, "google")
+    end
+  end
+
+  describe "refresh_if_expiring/3" do
+    test "returns error when no token exists" do
+      assert {:error, :no_token} = OAuth.refresh_if_expiring("nonexistent", "google", 300)
+    end
+
+    test "refreshes token before expiry when in lookahead window" do
+      bypass = Bypass.open()
+
+      Application.put_env(:maraithon, :google,
+        token_url: "http://localhost:#{bypass.port}/token",
+        client_id: "test_client",
+        client_secret: "test_secret"
+      )
+
+      on_exit(fn ->
+        Application.delete_env(:maraithon, :google)
+      end)
+
+      user_id = "user_#{System.unique_integer()}"
+      expires_soon = DateTime.add(DateTime.utc_now(), 120, :second)
+
+      {:ok, _} =
+        OAuth.store_tokens(user_id, "google", %{
+          access_token: "expiring_token",
+          refresh_token: "refresh_token_123",
+          expires_at: expires_soon
+        })
+
+      Bypass.expect_once(bypass, "POST", "/token", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{
+            "access_token" => "new_refreshed_token",
+            "expires_in" => 3600,
+            "token_type" => "Bearer"
+          })
+        )
+      end)
+
+      assert {:ok, refreshed} = OAuth.refresh_if_expiring(user_id, "google", 300)
+      assert refreshed.access_token == "new_refreshed_token"
+    end
+
+    test "marks connected account as error when Google refresh token is invalid" do
+      bypass = Bypass.open()
+
+      Application.put_env(:maraithon, :google,
+        token_url: "http://localhost:#{bypass.port}/token",
+        client_id: "test_client",
+        client_secret: "test_secret"
+      )
+
+      on_exit(fn ->
+        Application.delete_env(:maraithon, :google)
+      end)
+
+      user_id = "user_#{System.unique_integer()}@example.com"
+      Repo.insert!(%Maraithon.Accounts.User{id: user_id, email: user_id})
+      expired_at = DateTime.add(DateTime.utc_now(), -3600, :second)
+
+      {:ok, _} =
+        OAuth.store_tokens(user_id, "google", %{
+          access_token: "old_token",
+          refresh_token: "invalid_refresh",
+          expires_at: expired_at
+        })
+
+      Bypass.expect_once(bypass, "POST", "/token", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(
+          400,
+          Jason.encode!(%{
+            "error" => "invalid_grant",
+            "error_description" => "Token has been expired or revoked."
+          })
+        )
+      end)
+
+      assert {:error, _reason} = OAuth.refresh_if_expiring(user_id, "google", 300)
+
+      account = ConnectedAccounts.get(user_id, "google")
+      assert account.status == "error"
+      assert get_in(account.metadata, ["last_error", "reason"]) == "oauth_reauth_required"
     end
   end
 

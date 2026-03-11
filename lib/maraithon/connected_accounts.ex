@@ -132,6 +132,32 @@ defmodule Maraithon.ConnectedAccounts do
     end
   end
 
+  def mark_error(user_id, provider, reason) when is_binary(user_id) and is_binary(provider) do
+    case get(user_id, provider) do
+      nil ->
+        :ok
+
+      account ->
+        now = DateTime.utc_now()
+
+        metadata =
+          account.metadata
+          |> normalize_metadata()
+          |> Map.put("last_error", %{
+            "reason" => normalize_error_reason(reason),
+            "at" => DateTime.to_iso8601(now)
+          })
+
+        account
+        |> ConnectedAccount.changeset(%{
+          status: "error",
+          metadata: metadata,
+          last_refreshed_at: now
+        })
+        |> Repo.update()
+    end
+  end
+
   def sync_from_oauth_tokens(user_id) when is_binary(user_id) do
     OAuth.list_user_tokens(user_id)
     |> Enum.map(&sync_token/1)
@@ -154,6 +180,9 @@ defmodule Maraithon.ConnectedAccounts do
 
   defp normalize_metadata(metadata) when is_map(metadata), do: metadata
   defp normalize_metadata(_), do: %{}
+
+  defp normalize_error_reason(reason) when is_binary(reason), do: reason
+  defp normalize_error_reason(reason), do: inspect(reason)
 
   defp metadata_external_account_id(metadata) when is_map(metadata) do
     metadata["id"] || metadata[:id] || metadata["github_id"] || metadata[:github_id] ||

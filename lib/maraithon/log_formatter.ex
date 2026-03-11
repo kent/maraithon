@@ -24,7 +24,18 @@ defmodule Maraithon.LogFormatter do
     # Add optional fields if present
     log_entry =
       metadata
-      |> Keyword.take([:request_id, :agent_id, :effect_id, :job_id, :error, :duration_ms])
+      |> Keyword.take([
+        :request_id,
+        :agent_id,
+        :effect_id,
+        :job_id,
+        :error,
+        :reason,
+        :provider,
+        :user_id,
+        :status,
+        :duration_ms
+      ])
       |> Enum.reduce(log_entry, fn {key, value}, acc ->
         Map.put(acc, key, value)
       end)

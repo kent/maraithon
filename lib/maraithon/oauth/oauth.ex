@@ -18,18 +18,20 @@ defmodule Maraithon.OAuth do
   If a token already exists for this user/provider, it will be updated.
   """
   def store_tokens(user_id, provider, %{} = token_data) do
+    existing = get_token(user_id, provider)
+
     attrs = %{
       user_id: user_id,
       provider: provider,
-      access_token: token_data.access_token,
-      refresh_token: Map.get(token_data, :refresh_token),
-      expires_at: calculate_expiry(token_data),
-      scopes: Map.get(token_data, :scopes, []),
-      metadata: Map.get(token_data, :metadata, %{})
+      access_token: token_field(token_data, :access_token),
+      refresh_token: merge_refresh_token(token_data, existing),
+      expires_at: calculate_expiry(token_data) || existing_field(existing, :expires_at),
+      scopes: merge_scopes(token_data, existing),
+      metadata: merge_metadata(token_data, existing)
     }
 
     result =
-      case get_token(user_id, provider) do
+      case existing do
         nil ->
           %Token{}
           |> Token.changeset(attrs)
@@ -42,14 +44,14 @@ defmodule Maraithon.OAuth do
       end
 
     case result do
-      {:ok, _token} = ok ->
+      {:ok, token} = ok ->
         _ =
           ConnectedAccounts.upsert_from_oauth(user_id, provider, %{
-            access_token: attrs.access_token,
-            refresh_token: attrs.refresh_token,
-            expires_at: attrs.expires_at,
-            scopes: attrs.scopes,
-            metadata: attrs.metadata
+            access_token: token.access_token,
+            refresh_token: token.refresh_token,
+            expires_at: token.expires_at,
+            scopes: token.scopes,
+            metadata: token.metadata
           })
 
         ok
@@ -105,6 +107,25 @@ defmodule Maraithon.OAuth do
 
       token ->
         if Token.expired?(token) do
+          do_refresh(token)
+        else
+          {:ok, token}
+        end
+    end
+  end
+
+  @doc """
+  Refreshes the token when it expires within the given window.
+
+  Returns the updated token or an error.
+  """
+  def refresh_if_expiring(user_id, provider, within_seconds \\ 300) do
+    case get_token(user_id, provider) do
+      nil ->
+        {:error, :no_token}
+
+      token ->
+        if token_expiring_within?(token, within_seconds) do
           do_refresh(token)
         else
           {:ok, token}
@@ -181,6 +202,16 @@ defmodule Maraithon.OAuth do
   end
 
   defp calculate_expiry(_), do: nil
+
+  defp token_expiring_within?(%Token{expires_at: nil}, _within_seconds), do: false
+
+  defp token_expiring_within?(%Token{expires_at: expires_at}, within_seconds)
+       when is_integer(within_seconds) and within_seconds >= 0 do
+    cutoff = DateTime.add(DateTime.utc_now(), within_seconds, :second)
+    DateTime.compare(expires_at, cutoff) != :gt
+  end
+
+  defp token_expiring_within?(_token, _within_seconds), do: false
 
   defp refresh_and_get_token(token) do
     case do_refresh(token) do
@@ -290,22 +321,76 @@ defmodule Maraithon.OAuth do
   defp refresh_google_token(token, provider) do
     case Maraithon.OAuth.Google.refresh_token(token.refresh_token) do
       {:ok, new_tokens} ->
+        scopes =
+          case split_scope_string(new_tokens.scope) do
+            [] -> token.scopes
+            values -> values
+          end
+
         store_tokens(token.user_id, provider, %{
           access_token: new_tokens.access_token,
-          refresh_token: token.refresh_token,
+          refresh_token: refresh_token_or_existing(new_tokens.refresh_token, token.refresh_token),
           expires_in: new_tokens.expires_in,
-          scopes: token.scopes,
+          scopes: scopes,
           metadata: token.metadata
         })
 
       {:error, reason} ->
+        if reauth_required_refresh_error?(reason) do
+          _ = ConnectedAccounts.mark_error(token.user_id, provider, "oauth_reauth_required")
+        end
+
         Logger.warning("Failed to refresh Google token",
           user_id: token.user_id,
+          provider: provider,
           reason: inspect(reason)
         )
 
         {:error, reason}
     end
+  end
+
+  defp token_field(token_data, key) when is_map(token_data) and is_atom(key) do
+    case Map.fetch(token_data, key) do
+      {:ok, value} -> value
+      :error -> Map.get(token_data, Atom.to_string(key))
+    end
+  end
+
+  defp merge_refresh_token(token_data, existing) do
+    token_field(token_data, :refresh_token) || existing_field(existing, :refresh_token)
+  end
+
+  defp merge_scopes(token_data, existing) do
+    case token_field(token_data, :scopes) do
+      scopes when is_list(scopes) -> scopes
+      _ -> existing_field(existing, :scopes) || []
+    end
+  end
+
+  defp merge_metadata(token_data, existing) do
+    case token_field(token_data, :metadata) do
+      metadata when is_map(metadata) -> metadata
+      _ -> existing_field(existing, :metadata) || %{}
+    end
+  end
+
+  defp existing_field(nil, _field), do: nil
+  defp existing_field(%Token{} = token, field), do: Map.get(token, field)
+
+  defp refresh_token_or_existing(new_refresh_token, _existing_refresh_token)
+       when is_binary(new_refresh_token) and new_refresh_token != "" do
+    new_refresh_token
+  end
+
+  defp refresh_token_or_existing(_new_refresh_token, existing_refresh_token),
+    do: existing_refresh_token
+
+  defp reauth_required_refresh_error?(reason) do
+    text = inspect(reason) |> String.downcase()
+
+    String.contains?(text, "invalid_grant") or String.contains?(text, "expired or revoked") or
+      String.contains?(text, "has been revoked")
   end
 
   defp revoke_provider_token(%Token{provider: "google", access_token: access_token}) do
