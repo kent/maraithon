@@ -174,19 +174,30 @@ defmodule Maraithon.Connectors.Gmail do
   Fetches recent emails from the user's inbox.
   """
   def fetch_recent_emails(user_id, max_results \\ 10) do
+    fetch_messages(user_id, max_results: max_results, label_ids: ["INBOX"])
+  end
+
+  @doc """
+  Fetches recent Gmail messages with optional labels or search query.
+  """
+  def fetch_messages(user_id, opts \\ []) when is_binary(user_id) and is_list(opts) do
+    max_results = Keyword.get(opts, :max_results, 10)
+    label_ids = Keyword.get(opts, :label_ids, [])
+    query = Keyword.get(opts, :query)
+
     case OAuth.get_valid_access_token(user_id, "google") do
       {:ok, token} ->
         params =
-          URI.encode_query(%{
-            maxResults: max_results,
-            labelIds: "INBOX"
-          })
+          [{"maxResults", max_results}]
+          |> maybe_append_query("q", query)
+          |> append_repeated_query("labelIds", label_ids)
+          |> Enum.map(&URI.encode_query([&1]))
+          |> Enum.join("&")
 
         url = "#{api_base_url()}/users/me/messages?#{params}"
 
         case Google.api_request(:get, url, token) do
           {:ok, %{"messages" => messages}} ->
-            # Fetch full message details
             detailed =
               messages
               |> Enum.take(max_results)
@@ -197,7 +208,6 @@ defmodule Maraithon.Connectors.Gmail do
             {:ok, detailed}
 
           {:ok, _} ->
-            # No messages
             {:ok, []}
 
           {:error, reason} ->
@@ -454,6 +464,16 @@ defmodule Maraithon.Connectors.Gmail do
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, _key, ""), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
+
+  defp maybe_append_query(params, _key, nil), do: params
+  defp maybe_append_query(params, _key, ""), do: params
+  defp maybe_append_query(params, key, value), do: params ++ [{key, value}]
+
+  defp append_repeated_query(params, _key, []), do: params
+
+  defp append_repeated_query(params, key, values) when is_list(values) do
+    params ++ Enum.map(values, &{key, &1})
+  end
 
   defp required_attr(attrs, key) do
     case optional_attr(attrs, key) do

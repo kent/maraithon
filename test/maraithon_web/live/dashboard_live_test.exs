@@ -254,6 +254,75 @@ defmodule MaraithonWeb.DashboardLiveTest do
       assert html =~ "Open Connectors"
     end
 
+    test "renders the onboarding proof-of-value preview after a qualifying connector is linked",
+         %{
+           conn: conn
+         } do
+      previous_module = Application.get_env(:maraithon, :onboarding_proof_module)
+      previous_response = Application.get_env(:maraithon, :onboarding_proof_stub_response)
+
+      on_exit(fn ->
+        if previous_module do
+          Application.put_env(:maraithon, :onboarding_proof_module, previous_module)
+        else
+          Application.delete_env(:maraithon, :onboarding_proof_module)
+        end
+
+        if previous_response do
+          Application.put_env(:maraithon, :onboarding_proof_stub_response, previous_response)
+        else
+          Application.delete_env(:maraithon, :onboarding_proof_stub_response)
+        end
+      end)
+
+      Application.put_env(
+        :maraithon,
+        :onboarding_proof_module,
+        Maraithon.TestSupport.OnboardingProofStub
+      )
+
+      Application.put_env(
+        :maraithon,
+        :onboarding_proof_stub_response,
+        {:ok,
+         %{
+           items: [
+             %{
+               title: "Maraithon would have caught the deck follow-up",
+               summary:
+                 "A recent Gmail thread shows a promised deck with no visible close-the-loop message yet.",
+               rationale:
+                 "This is a concrete founder commitment with obvious value if Maraithon catches it before it slips.",
+               recommended_action:
+                 "Watch the thread, detect the missing send, and nudge in Telegram the same day.",
+               source: "gmail",
+               account_label: @user_email,
+               suggested_behavior: "founder_followthrough_agent",
+               confidence: 0.91
+             }
+           ],
+           sources: ["Gmail · #{@user_email}"],
+           generated_at: DateTime.utc_now()
+         }}
+      )
+
+      {:ok, _token} =
+        OAuth.store_tokens(@user_email, "google:#{@user_email}", %{
+          access_token: "google-preview-token",
+          refresh_token: "google-preview-refresh",
+          scopes: ["https://www.googleapis.com/auth/gmail.readonly"],
+          metadata: %{"account_email" => @user_email}
+        })
+
+      {:ok, view, _html} = live(conn, "/dashboard")
+      html = render_async(view)
+
+      assert html =~ "3 things Maraithon would have caught this week"
+      assert html =~ "Maraithon would have caught the deck follow-up"
+      assert html =~ "Use this setup"
+      assert html =~ "Founder Followthrough"
+    end
+
     test "renders recent raw logs", %{conn: conn} do
       Maraithon.LogBuffer.clear()
 

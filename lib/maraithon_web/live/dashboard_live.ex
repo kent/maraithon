@@ -7,6 +7,7 @@ defmodule MaraithonWeb.DashboardLive do
   alias Maraithon.Behaviors
   alias Maraithon.Connections
   alias Maraithon.Insights
+  alias Maraithon.OnboardingProof
   alias Maraithon.Runtime
 
   @refresh_interval 5_000
@@ -60,7 +61,9 @@ defmodule MaraithonWeb.DashboardLive do
         connection_errors: [],
         dashboard_errors: [],
         inspection_errors: [],
-        insights: []
+        insights: [],
+        onboarding_preview: empty_onboarding_preview(),
+        onboarding_preview_eligible?: OnboardingProof.eligible?(user_id)
       )
 
     socket =
@@ -124,6 +127,46 @@ defmodule MaraithonWeb.DashboardLive do
   end
 
   @impl true
+  def handle_async(:onboarding_preview, {:ok, {:ok, preview}}, socket) do
+    {:noreply,
+     assign(socket,
+       onboarding_preview: %{
+         status: :ready,
+         items: preview.items,
+         sources: preview.sources,
+         generated_at: preview.generated_at,
+         error: nil
+       }
+     )}
+  end
+
+  def handle_async(:onboarding_preview, {:ok, {:error, reason}}, socket) do
+    {:noreply,
+     assign(socket,
+       onboarding_preview: %{
+         status: :error,
+         items: [],
+         sources: [],
+         generated_at: nil,
+         error: inspect(reason)
+       }
+     )}
+  end
+
+  def handle_async(:onboarding_preview, {:exit, reason}, socket) do
+    {:noreply,
+     assign(socket,
+       onboarding_preview: %{
+         status: :error,
+         items: [],
+         sources: [],
+         generated_at: nil,
+         error: inspect(reason)
+       }
+     )}
+  end
+
+  @impl true
   def handle_event("refresh_now", _params, socket) do
     send(self(), :load_fly_logs)
 
@@ -131,6 +174,13 @@ defmodule MaraithonWeb.DashboardLive do
      socket
      |> refresh_dashboard()
      |> put_flash(:info, "Dashboard refreshed")}
+  end
+
+  def handle_event("refresh_onboarding_preview", _params, socket) do
+    {:noreply,
+     socket
+     |> assign(:onboarding_preview, empty_onboarding_preview())
+     |> maybe_start_onboarding_preview(force: true)}
   end
 
   def handle_event("refresh_fly_logs", _params, socket) do
@@ -376,18 +426,32 @@ defmodule MaraithonWeb.DashboardLive do
             </p>
             <h1 class="mt-2 text-3xl font-semibold tracking-tight">Agent Fleet Operations</h1>
             <p class="mt-2 text-sm text-slate-200">
-              Create, edit, start, stop, delete, and inspect agents from one surface.
-              Drill into live runtime behavior, queued work, raw logs, and direct operator commands.
+              <%= if show_onboarding_preview?(@onboarding_preview_eligible?, @agents) do %>
+                You've connected real data. Maraithon is scanning a recent slice of Gmail, Calendar,
+                and Slack to show immediate value before you create anything.
+              <% else %>
+                Create, edit, start, stop, delete, and inspect agents from one surface.
+                Drill into live runtime behavior, queued work, raw logs, and direct operator commands.
+              <% end %>
             </p>
           </div>
 
           <div class="flex gap-2">
-            <a
-              href={~p"/agents/new"}
-              class="inline-flex items-center rounded-md border border-white/20 bg-white/10 px-3 py-2 text-sm font-medium text-white hover:bg-white/15"
-            >
-              Build Agent
-            </a>
+            <%= if show_onboarding_preview?(@onboarding_preview_eligible?, @agents) do %>
+              <a
+                href="#proof-of-value"
+                class="inline-flex items-center rounded-md border border-white/20 bg-white/10 px-3 py-2 text-sm font-medium text-white hover:bg-white/15"
+              >
+                See Proof
+              </a>
+            <% else %>
+              <a
+                href={~p"/agents/new"}
+                class="inline-flex items-center rounded-md border border-white/20 bg-white/10 px-3 py-2 text-sm font-medium text-white hover:bg-white/15"
+              >
+                Build Agent
+              </a>
+            <% end %>
             <button
               type="button"
               phx-click="refresh_now"
@@ -449,6 +513,109 @@ defmodule MaraithonWeb.DashboardLive do
           </.link>
         </div>
       </section>
+
+      <%= if show_onboarding_preview?(@onboarding_preview_eligible?, @agents) do %>
+        <section id="proof-of-value" class="overflow-hidden rounded-xl border border-emerald-100 bg-white shadow">
+          <div class="border-b border-emerald-100 bg-emerald-50/70 px-4 py-4 sm:px-6">
+            <div class="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <div class="flex flex-wrap items-center gap-2">
+                  <h2 class="text-lg font-medium text-slate-900">3 things Maraithon would have caught this week</h2>
+                  <span class="rounded-full bg-white px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-emerald-700 ring-1 ring-emerald-200">
+                    Preview
+                  </span>
+                </div>
+                <p class="mt-1 text-sm text-slate-600">
+                  Real examples from your connected accounts. This is a lightweight proof-of-value scan, not a full always-on agent run.
+                </p>
+              </div>
+              <button
+                type="button"
+                phx-click="refresh_onboarding_preview"
+                class="inline-flex items-center rounded-md border border-emerald-200 bg-white px-3 py-2 text-sm font-medium text-emerald-800 hover:bg-emerald-50"
+              >
+                Refresh preview
+              </button>
+            </div>
+          </div>
+
+          <div class="divide-y divide-slate-200">
+            <%= case @onboarding_preview.status do %>
+              <% :loading -> %>
+                <div class="px-4 py-6 sm:px-6">
+                  <p class="text-sm font-medium text-slate-900">Scanning your connected data...</p>
+                  <p class="mt-1 text-sm text-slate-600">
+                    Maraithon is pulling a small recent slice from your linked accounts and selecting the highest-signal examples.
+                  </p>
+                </div>
+              <% :ready when @onboarding_preview.items == [] -> %>
+                <div class="px-4 py-6 sm:px-6">
+                  <p class="text-sm font-medium text-slate-900">Nothing high-signal surfaced in the recent sample.</p>
+                  <p class="mt-1 text-sm text-slate-600">
+                    That is a good sign. Once you start an agent, Maraithon keeps watching continuously and only escalates concrete follow-through risk.
+                  </p>
+                </div>
+              <% :ready -> %>
+                <%= for item <- @onboarding_preview.items do %>
+                  <div class="px-4 py-4 sm:px-6">
+                    <div class="flex flex-wrap items-start justify-between gap-4">
+                      <div class="min-w-0 flex-1">
+                        <div class="flex flex-wrap items-center gap-2">
+                          <span class={preview_source_class(item.source)}>
+                            <%= preview_source_label(item.source) %>
+                          </span>
+                          <span class="text-xs text-slate-500">
+                            <%= item.account_label %>
+                          </span>
+                          <span class="text-xs text-slate-500">
+                            confidence <%= format_confidence(item.confidence) %>
+                          </span>
+                        </div>
+                        <p class="mt-2 text-base font-semibold text-slate-900"><%= item.title %></p>
+                        <p class="mt-1 text-sm text-slate-600"><%= item.summary %></p>
+                        <p class="mt-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                          Why this matters
+                        </p>
+                        <p class="mt-1 text-sm text-slate-600"><%= item.rationale %></p>
+                        <p class="mt-2 text-sm text-indigo-700">
+                          <span class="font-medium">What Maraithon would do:</span> <%= item.recommended_action %>
+                        </p>
+                      </div>
+                      <div class="w-full max-w-xs rounded-xl border border-slate-200 bg-slate-50 p-4">
+                        <p class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                          Best next step
+                        </p>
+                        <p class="mt-2 text-sm font-medium text-slate-900">
+                          Start <%= onboarding_behavior_label(item.suggested_behavior) %>
+                        </p>
+                        <p class="mt-1 text-sm text-slate-600">
+                          This agent is the best fit to catch this kind of loop continuously and escalate only when it matters.
+                        </p>
+                        <.link
+                          navigate={"/agents/new?behavior=#{item.suggested_behavior}"}
+                          class="mt-3 inline-flex items-center rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800"
+                        >
+                          Use this setup
+                        </.link>
+                      </div>
+                    </div>
+                  </div>
+                <% end %>
+              <% :error -> %>
+                <div class="px-4 py-6 sm:px-6">
+                  <p class="text-sm font-medium text-slate-900">Preview temporarily unavailable.</p>
+                  <p class="mt-1 text-sm text-slate-600">
+                    Maraithon could not build the onboarding proof just now. You can refresh this preview or go straight to the agent builder.
+                  </p>
+                </div>
+              <% _ -> %>
+                <div class="px-4 py-6 sm:px-6">
+                  <p class="text-sm text-slate-600">Connect Gmail, Calendar, or Slack to see a proof-of-value preview.</p>
+                </div>
+            <% end %>
+          </div>
+        </section>
+      <% end %>
 
       <section class="overflow-hidden rounded-xl bg-white shadow">
         <div class="border-b border-gray-200 px-4 py-4 sm:px-6">
@@ -1535,16 +1702,19 @@ defmodule MaraithonWeb.DashboardLive do
         socket
       end
 
-    if socket.assigns.selected_agent do
-      case refresh_selected_agent(socket, socket.assigns.selected_agent.id,
-             health: socket.assigns.health
-           ) do
-        {:ok, socket} -> socket
-        {:not_found, socket} -> socket
+    socket =
+      if socket.assigns.selected_agent do
+        case refresh_selected_agent(socket, socket.assigns.selected_agent.id,
+               health: socket.assigns.health
+             ) do
+          {:ok, socket} -> socket
+          {:not_found, socket} -> socket
+        end
+      else
+        socket
       end
-    else
-      socket
-    end
+
+    maybe_start_onboarding_preview(socket, opts)
   end
 
   defp refresh_insights(socket) do
@@ -1680,6 +1850,16 @@ defmodule MaraithonWeb.DashboardLive do
     %{current | recent_logs: degraded.recent_logs}
   end
 
+  defp empty_onboarding_preview do
+    %{
+      status: :idle,
+      items: [],
+      sources: [],
+      generated_at: nil,
+      error: nil
+    }
+  end
+
   defp empty_fly_logs do
     %{
       available: false,
@@ -1729,13 +1909,48 @@ defmodule MaraithonWeb.DashboardLive do
     end
   end
 
+  defp maybe_start_onboarding_preview(socket, opts) do
+    preview = socket.assigns.onboarding_preview
+    force? = Keyword.get(opts, :force, false)
+    user_id = current_user_id(socket)
+
+    cond do
+      not show_onboarding_preview?(
+        socket.assigns.onboarding_preview_eligible?,
+        socket.assigns.agents
+      ) ->
+        assign(socket, :onboarding_preview, %{empty_onboarding_preview() | status: :hidden})
+
+      preview.status == :loading and not force? ->
+        socket
+
+      preview.status == :ready and not force? ->
+        socket
+
+      preview.status == :error and not force? ->
+        socket
+
+      true ->
+        socket
+        |> assign(:onboarding_preview, %{empty_onboarding_preview() | status: :loading})
+        |> start_async(:onboarding_preview, fn ->
+          onboarding_proof_module().preview(user_id)
+        end)
+    end
+  end
+
+  defp onboarding_proof_module do
+    Application.get_env(:maraithon, :onboarding_proof_module, OnboardingProof)
+  end
+
   defp apply_dashboard_params(socket, params, uri) do
     user_id = current_user_id(socket)
 
     socket =
       assign(socket,
         connection_user_id: user_id,
-        connection_return_to: connection_return_to_from_uri(uri)
+        connection_return_to: connection_return_to_from_uri(uri),
+        onboarding_preview_eligible?: OnboardingProof.eligible?(user_id)
       )
 
     maybe_put_oauth_flash(socket, params)
@@ -1803,6 +2018,8 @@ defmodule MaraithonWeb.DashboardLive do
 
   defp current_user_id(socket), do: socket.assigns.current_user.id
 
+  defp show_onboarding_preview?(eligible?, agents), do: eligible? and agents == []
+
   defp agent_owned_by_current_user?(socket, agent_id) when is_binary(agent_id) do
     not is_nil(Agents.get_agent_for_user(agent_id, current_user_id(socket)))
   end
@@ -1813,9 +2030,33 @@ defmodule MaraithonWeb.DashboardLive do
   defp provider_label("github"), do: "GitHub"
   defp provider_label("slack"), do: "Slack"
   defp provider_label("telegram"), do: "Telegram"
+  defp provider_label("calendar"), do: "Calendar"
   defp provider_label("linear"), do: "Linear"
   defp provider_label("notion"), do: "Notion"
   defp provider_label(provider), do: provider
+
+  defp preview_source_label(source), do: provider_label(source)
+
+  defp preview_source_class("gmail"),
+    do:
+      "rounded-full bg-rose-50 px-2.5 py-1 text-xs font-medium text-rose-700 ring-1 ring-inset ring-rose-200"
+
+  defp preview_source_class("calendar"),
+    do:
+      "rounded-full bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-700 ring-1 ring-inset ring-amber-200"
+
+  defp preview_source_class("slack"),
+    do:
+      "rounded-full bg-violet-50 px-2.5 py-1 text-xs font-medium text-violet-700 ring-1 ring-inset ring-violet-200"
+
+  defp preview_source_class(_),
+    do:
+      "rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700 ring-1 ring-inset ring-slate-200"
+
+  defp onboarding_behavior_label("founder_followthrough_agent"), do: "Founder Followthrough"
+  defp onboarding_behavior_label("inbox_calendar_advisor"), do: "Inbox + Calendar Advisor"
+  defp onboarding_behavior_label("slack_followthrough_agent"), do: "Slack Followthrough"
+  defp onboarding_behavior_label(other), do: other
 
   defp insight_category_label("reply_urgent"), do: "Reply Needed"
   defp insight_category_label("tone_risk"), do: "Tone Risk"
