@@ -36,6 +36,12 @@ defmodule Maraithon.AgentBuilder do
     "channel_scan_limit" => "",
     "dm_scan_limit" => "",
     "lookback_hours" => "",
+    "timezone_offset_hours" => "",
+    "morning_brief_hour_local" => "",
+    "end_of_day_brief_hour_local" => "",
+    "weekly_review_day_local" => "",
+    "weekly_review_hour_local" => "",
+    "brief_max_items" => "",
     "write_plan_files" => "true"
   }
 
@@ -120,7 +126,7 @@ defmodule Maraithon.AgentBuilder do
       label: "Founder Followthrough Agent",
       category: "Workflow",
       summary:
-        "Tracks commitments across Gmail, Calendar, and Slack, verifies whether follow-through happened, and escalates only high-confidence unresolved items.",
+        "Tracks commitments across Gmail, Calendar, and Slack, verifies whether follow-through happened, escalates high-confidence unresolved items, and sends recurring chief-of-staff briefs.",
       inputs: [
         "Gmail threads where you promised something, agreed on deadlines, or owe a reply",
         "Calendar meetings likely to create follow-up work, especially customer, investor, hiring, and planning meetings",
@@ -130,10 +136,11 @@ defmodule Maraithon.AgentBuilder do
       outputs: [
         "Telegram-ready nudges for unresolved commitments",
         "Post-meeting and post-thread reminders when owners and next steps are still missing",
-        "Structured commitment records with commitment, person, source, deadline, status, evidence, and next_action"
+        "Structured commitment records with commitment, person, source, deadline, status, evidence, and next_action",
+        "Morning brief, end-of-day debt rollup, and weekly review summaries sent to Telegram"
       ],
       fields:
-        ~w(email_scan_limit event_scan_limit prep_window_hours team_id channel_scan_limit dm_scan_limit lookback_hours max_insights_per_cycle min_confidence),
+        ~w(email_scan_limit event_scan_limit prep_window_hours team_id channel_scan_limit dm_scan_limit lookback_hours max_insights_per_cycle min_confidence timezone_offset_hours morning_brief_hour_local end_of_day_brief_hour_local weekly_review_day_local weekly_review_hour_local brief_max_items),
       defaults: %{
         "prompt" => "",
         "tools" => "",
@@ -147,7 +154,13 @@ defmodule Maraithon.AgentBuilder do
         "dm_scan_limit" => "50",
         "lookback_hours" => "48",
         "max_insights_per_cycle" => "5",
-        "min_confidence" => "0.72"
+        "min_confidence" => "0.72",
+        "timezone_offset_hours" => "-5",
+        "morning_brief_hour_local" => "8",
+        "end_of_day_brief_hour_local" => "18",
+        "weekly_review_day_local" => "5",
+        "weekly_review_hour_local" => "16",
+        "brief_max_items" => "3"
       },
       requirements: [
         %{
@@ -182,13 +195,22 @@ defmodule Maraithon.AgentBuilder do
           description:
             "Needed to detect private reply debt and unresolved commitments in direct messages.",
           required?: true
+        },
+        %{
+          kind: :provider,
+          provider: "telegram",
+          label: "Telegram",
+          description:
+            "Needed for daily chief-of-staff briefs and the highest-signal follow-through nudges.",
+          required?: true
         }
       ],
       suggestions: [
         "Keep scan limits focused so the agent escalates only the strongest unresolved commitments.",
         "Set `team_id` when multiple Slack workspaces are connected and you want one workspace per founder agent.",
         "Use `prep_window_hours` as a meeting follow-up window for how far back to inspect unresolved actions.",
-        "Raise `min_confidence` if you want even fewer Telegram interruptions."
+        "Raise `min_confidence` if you want even fewer Telegram interruptions.",
+        "Set `timezone_offset_hours` to match the operator’s working day so morning and end-of-day briefs land at the right time."
       ]
     },
     %{
@@ -600,7 +622,24 @@ defmodule Maraithon.AgentBuilder do
          {:ok, max_insights_per_cycle} <-
            parse_positive_integer(launch["max_insights_per_cycle"], "Max insights per cycle"),
          {:ok, min_confidence} <-
-           parse_float_in_range(launch["min_confidence"], "Minimum confidence", 0.0, 1.0) do
+           parse_float_in_range(launch["min_confidence"], "Minimum confidence", 0.0, 1.0),
+         {:ok, timezone_offset_hours} <-
+           parse_integer_in_range(launch["timezone_offset_hours"], "Timezone offset", -12, 14),
+         {:ok, morning_brief_hour_local} <-
+           parse_integer_in_range(launch["morning_brief_hour_local"], "Morning brief hour", 0, 23),
+         {:ok, end_of_day_brief_hour_local} <-
+           parse_integer_in_range(
+             launch["end_of_day_brief_hour_local"],
+             "End-of-day brief hour",
+             0,
+             23
+           ),
+         {:ok, weekly_review_day_local} <-
+           parse_integer_in_range(launch["weekly_review_day_local"], "Weekly review day", 1, 7),
+         {:ok, weekly_review_hour_local} <-
+           parse_integer_in_range(launch["weekly_review_hour_local"], "Weekly review hour", 0, 23),
+         {:ok, brief_max_items} <-
+           parse_integer_in_range(launch["brief_max_items"], "Brief max items", 1, 5) do
       {:ok,
        %{
          "name" => launch_name(launch),
@@ -613,7 +652,13 @@ defmodule Maraithon.AgentBuilder do
          "dm_scan_limit" => dm_scan_limit,
          "lookback_hours" => lookback_hours,
          "max_insights_per_cycle" => max_insights_per_cycle,
-         "min_confidence" => min_confidence
+         "min_confidence" => min_confidence,
+         "timezone_offset_hours" => timezone_offset_hours,
+         "morning_brief_hour_local" => morning_brief_hour_local,
+         "end_of_day_brief_hour_local" => end_of_day_brief_hour_local,
+         "weekly_review_day_local" => weekly_review_day_local,
+         "weekly_review_hour_local" => weekly_review_hour_local,
+         "brief_max_items" => brief_max_items
        }}
       |> drop_nil_values()
     end
@@ -828,7 +873,13 @@ defmodule Maraithon.AgentBuilder do
       "dm_scan_limit",
       "lookback_hours",
       "max_insights_per_cycle",
-      "min_confidence"
+      "min_confidence",
+      "timezone_offset_hours",
+      "morning_brief_hour_local",
+      "end_of_day_brief_hour_local",
+      "weekly_review_day_local",
+      "weekly_review_hour_local",
+      "brief_max_items"
     ]
 
   defp known_config_keys("slack_followthrough_agent"),

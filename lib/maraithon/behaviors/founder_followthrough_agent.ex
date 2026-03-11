@@ -8,6 +8,7 @@ defmodule Maraithon.Behaviors.FounderFollowthroughAgent do
 
   @behaviour Maraithon.Behaviors.Behavior
 
+  alias Maraithon.Behaviors.ChiefOfStaffBriefAgent
   alias Maraithon.Behaviors.InboxCalendarAdvisor
   alias Maraithon.Behaviors.SlackFollowthroughAgent
 
@@ -16,6 +17,7 @@ defmodule Maraithon.Behaviors.FounderFollowthroughAgent do
     %{
       inbox_state: InboxCalendarAdvisor.init(config),
       slack_state: SlackFollowthroughAgent.init(config),
+      brief_state: ChiefOfStaffBriefAgent.init(config),
       pending_emit: nil
     }
   end
@@ -52,15 +54,28 @@ defmodule Maraithon.Behaviors.FounderFollowthroughAgent do
   @impl true
   def next_wakeup(state) do
     merge_wakeup(
-      InboxCalendarAdvisor.next_wakeup(state.inbox_state),
-      SlackFollowthroughAgent.next_wakeup(state.slack_state)
+      merge_wakeup(
+        InboxCalendarAdvisor.next_wakeup(state.inbox_state),
+        SlackFollowthroughAgent.next_wakeup(state.slack_state)
+      ),
+      ChiefOfStaffBriefAgent.next_wakeup(state.brief_state)
     )
   end
 
   defp continue_with_inbox(state, context) do
     {inbox_outcome, inbox_state} = run_wakeup(InboxCalendarAdvisor, state.inbox_state, context)
     state = %{state | inbox_state: inbox_state}
-    finalize_outcome(inbox_outcome, state)
+    continue_with_brief(inbox_outcome, state, context)
+  end
+
+  defp continue_with_brief({:effect, effect}, state, _context), do: {:effect, effect, state}
+  defp continue_with_brief(:continue, state, _context), do: {:continue, state}
+
+  defp continue_with_brief(outcome, state, context) do
+    state = stash_emit_from(state, outcome)
+    {brief_outcome, brief_state} = run_wakeup(ChiefOfStaffBriefAgent, state.brief_state, context)
+    state = %{state | brief_state: brief_state}
+    finalize_outcome(brief_outcome, state)
   end
 
   defp finalize_outcome({:effect, effect}, state), do: {:effect, effect, state}
@@ -148,6 +163,50 @@ defmodule Maraithon.Behaviors.FounderFollowthroughAgent do
   defp merge_emit({:insight_error, error}, {:insights_recorded, recorded}),
     do: merge_emit({:insights_recorded, recorded}, {:insight_error, error})
 
+  defp merge_emit({:briefs_recorded, left}, {:briefs_recorded, right}) do
+    {:briefs_recorded,
+     %{
+       count: payload_int(left, :count, 0) + payload_int(right, :count, 0),
+       user_id: payload_string(left, :user_id) || payload_string(right, :user_id),
+       cadences: Enum.uniq(payload_list(left, :cadences) ++ payload_list(right, :cadences))
+     }}
+  end
+
+  defp merge_emit({:insights_recorded, recorded}, {:briefs_recorded, briefs}) do
+    base = preserve_payload_shape(recorded)
+    briefs_key = shaped_key(recorded, :briefs)
+    count_key = shaped_key(briefs, :count)
+    cadences_key = shaped_key(briefs, :cadences)
+
+    {:insights_recorded,
+     Map.put(
+       base,
+       briefs_key,
+       payload_list(recorded, :briefs) ++
+         [
+           %{
+             count_key => payload_int(briefs, :count, 0),
+             cadences_key => payload_list(briefs, :cadences)
+           }
+         ]
+     )}
+  end
+
+  defp merge_emit({:briefs_recorded, briefs}, {:insights_recorded, recorded}),
+    do: merge_emit({:insights_recorded, recorded}, {:briefs_recorded, briefs})
+
+  defp merge_emit({:brief_error, left}, {:brief_error, right}) do
+    {:brief_error,
+     %{
+       reason:
+         [payload_string(left, :reason), payload_string(right, :reason)]
+         |> Enum.reject(&blank?/1)
+         |> Enum.join(" | "),
+       attempted_count:
+         payload_int(left, :attempted_count, 0) + payload_int(right, :attempted_count, 0)
+     }}
+  end
+
   defp merge_emit(left, _right), do: left
 
   defp merge_wakeup(:none, other), do: other
@@ -228,5 +287,13 @@ defmodule Maraithon.Behaviors.FounderFollowthroughAgent do
       {key, value}, acc when is_atom(key) -> Map.put(acc, Atom.to_string(key), value)
       {key, value}, acc -> Map.put(acc, key, value)
     end)
+  end
+
+  defp preserve_payload_shape(map) when is_map(map) do
+    if Enum.any?(Map.keys(map), &is_atom/1), do: map, else: stringify_keys(map)
+  end
+
+  defp shaped_key(map, key) when is_map(map) do
+    if Enum.any?(Map.keys(map), &is_atom/1), do: key, else: Atom.to_string(key)
   end
 end

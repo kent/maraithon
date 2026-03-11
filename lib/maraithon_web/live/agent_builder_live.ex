@@ -665,6 +665,123 @@ defmodule MaraithonWeb.AgentBuilderLive do
                   </div>
                 <% end %>
 
+                <%= if field_visible?(@selected_spec, "timezone_offset_hours") or field_visible?(@selected_spec, "morning_brief_hour_local") or field_visible?(@selected_spec, "end_of_day_brief_hour_local") or field_visible?(@selected_spec, "weekly_review_day_local") or field_visible?(@selected_spec, "weekly_review_hour_local") or field_visible?(@selected_spec, "brief_max_items") do %>
+                  <div class="space-y-4 rounded-2xl border border-emerald-100 bg-emerald-50/50 p-4">
+                    <div>
+                      <p class="text-sm font-medium text-emerald-950">Chief-of-Staff Briefing</p>
+                      <p class="mt-1 text-xs text-emerald-900/80">
+                        Configure the daily and weekly summary cadence that lands in Telegram in addition to interrupt-driven nudges.
+                      </p>
+                    </div>
+
+                    <div class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+                      <%= if field_visible?(@selected_spec, "timezone_offset_hours") do %>
+                        <div>
+                          <label for="launch_timezone_offset_hours" class="block text-sm font-medium text-slate-700">
+                            Timezone offset from UTC
+                          </label>
+                          <input
+                            id="launch_timezone_offset_hours"
+                            type="number"
+                            min="-12"
+                            max="14"
+                            name="launch[timezone_offset_hours]"
+                            value={@launch["timezone_offset_hours"]}
+                            class="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
+                          />
+                          <p class="mt-2 text-xs text-slate-500">Use `-5` for Eastern Standard Time, `-4` for Eastern Daylight Time, `0` for UTC.</p>
+                        </div>
+                      <% end %>
+
+                      <%= if field_visible?(@selected_spec, "morning_brief_hour_local") do %>
+                        <div>
+                          <label for="launch_morning_brief_hour_local" class="block text-sm font-medium text-slate-700">
+                            Morning brief hour
+                          </label>
+                          <input
+                            id="launch_morning_brief_hour_local"
+                            type="number"
+                            min="0"
+                            max="23"
+                            name="launch[morning_brief_hour_local]"
+                            value={@launch["morning_brief_hour_local"]}
+                            class="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
+                          />
+                        </div>
+                      <% end %>
+
+                      <%= if field_visible?(@selected_spec, "end_of_day_brief_hour_local") do %>
+                        <div>
+                          <label for="launch_end_of_day_brief_hour_local" class="block text-sm font-medium text-slate-700">
+                            End-of-day brief hour
+                          </label>
+                          <input
+                            id="launch_end_of_day_brief_hour_local"
+                            type="number"
+                            min="0"
+                            max="23"
+                            name="launch[end_of_day_brief_hour_local]"
+                            value={@launch["end_of_day_brief_hour_local"]}
+                            class="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
+                          />
+                        </div>
+                      <% end %>
+
+                      <%= if field_visible?(@selected_spec, "weekly_review_day_local") do %>
+                        <div>
+                          <label for="launch_weekly_review_day_local" class="block text-sm font-medium text-slate-700">
+                            Weekly review day
+                          </label>
+                          <input
+                            id="launch_weekly_review_day_local"
+                            type="number"
+                            min="1"
+                            max="7"
+                            name="launch[weekly_review_day_local]"
+                            value={@launch["weekly_review_day_local"]}
+                            class="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
+                          />
+                          <p class="mt-2 text-xs text-slate-500">Use `1` for Monday through `7` for Sunday.</p>
+                        </div>
+                      <% end %>
+
+                      <%= if field_visible?(@selected_spec, "weekly_review_hour_local") do %>
+                        <div>
+                          <label for="launch_weekly_review_hour_local" class="block text-sm font-medium text-slate-700">
+                            Weekly review hour
+                          </label>
+                          <input
+                            id="launch_weekly_review_hour_local"
+                            type="number"
+                            min="0"
+                            max="23"
+                            name="launch[weekly_review_hour_local]"
+                            value={@launch["weekly_review_hour_local"]}
+                            class="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
+                          />
+                        </div>
+                      <% end %>
+
+                      <%= if field_visible?(@selected_spec, "brief_max_items") do %>
+                        <div>
+                          <label for="launch_brief_max_items" class="block text-sm font-medium text-slate-700">
+                            Items per brief
+                          </label>
+                          <input
+                            id="launch_brief_max_items"
+                            type="number"
+                            min="1"
+                            max="5"
+                            name="launch[brief_max_items]"
+                            value={@launch["brief_max_items"]}
+                            class="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
+                          />
+                        </div>
+                      <% end %>
+                    </div>
+                  </div>
+                <% end %>
+
                 <div class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
                   <div>
                     <label for="launch_budget_llm_calls" class="block text-sm font-medium text-slate-700">
