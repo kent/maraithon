@@ -39,7 +39,7 @@ Agent = Prompt + State + Subscriptions + Tools
 - **Subscriptions**: Event streams it's watching (GitHub, Slack, calendars, etc.)
 - **Tools**: Actions it can take
 
-An agent doesn't wake up on a schedule. It's **subscribed** to the world and reacts instantly to events.
+Maraithon is **event-first**: agents react immediately to inbound events, and use durable wakeups only where periodic re-checks are explicitly part of the behavior (for example inbox follow-through reviews and OAuth token refresh).
 
 ### What Makes This Powerful
 
@@ -50,10 +50,16 @@ Cron job runs → Agent wakes up → Checks for changes → Does work → Dies
 
 **Maraithon Approach:**
 ```
-Event happens → Agent receives it instantly → Responds → Stays alive
+Event happens → Agent receives it instantly → Responds → Keeps context alive
+                   + durable wakeups for recovery/periodic review
 ```
 
-Your agent is **always watching**, **always remembering**, and **always ready**. No polling. No cold starts. No missed events.
+Your agent is **always watching**, **always remembering**, and **always ready**.
+
+- Event-first runtime for low-latency reactions.
+- Durable scheduler for wakeups that must survive restarts.
+- OTP supervision for crash recovery without losing runtime state.
+- Production observability (agent events, effect logs, Fly logs, spend tracking).
 
 ## Architecture
 
@@ -102,11 +108,11 @@ Your agent is **always watching**, **always remembering**, and **always ready**.
 ╚══════════════════════════════════════════════════════════════════════════════════════╝
 ```
 
-**Connectors** receive webhooks from external services and publish normalized events to PubSub. Built-in connectors for GitHub, Google Calendar, Gmail, Slack, WhatsApp, Linear, and Telegram.
+**Connectors** receive webhooks from external services and publish normalized events to PubSub. Built-in connectors include GitHub, Google Calendar, Gmail, Slack, WhatsApp, Linear, Telegram, and Notion OAuth.
 
-**Agent Runtime** manages agent lifecycle, state persistence, LLM calls, and tool execution. Built on OTP for fault tolerance and supervision.
+**Agent Runtime** manages agent lifecycle, state persistence, LLM calls, and tool execution. It runs as OTP services with supervised workers for scheduling, effect dispatch, insight notification, and token refresh.
 
-**Tools** are actions agents can take to interact with the world.
+**Tools** are actions agents can take to interact with the world, constrained by explicit allowlists per agent.
 
 ## Quick Start
 
@@ -152,6 +158,15 @@ The current production shape is intentionally simple:
 
 This is the right shape for a single-user or small-team ambient agent deployment. Do not scale app machines horizontally until the database capacity and runtime polling strategy are adjusted to match.
 
+### Why This Shape Wins
+
+For real production agents, this is a high-leverage setup because it keeps runtime, connector state, and operator controls in one coherent system.
+
+- Single deployment unit: Phoenix UI, API, connectors, and OTP runtime ship together.
+- Durable operational state: agents, events, OAuth grants, and scheduled wakeups all live in Postgres.
+- Fail-safe token lifecycle: proactive refresh with explicit `reauth_required` state instead of silent token churn.
+- Fast operator loop: same system handles telemetry, reconnects, and agent intervention without jumping between tools.
+
 ## Behaviors
 
 Agents are defined by **behaviors**—modules that implement how agents think and act.
@@ -177,13 +192,31 @@ Define agent behavior through a prompt, no code required:
 
 Build specialized behaviors in Elixir:
 
-- `CodebaseAdvisor` - Reviews code and suggests improvements
-- `RepoPlanner` - Generates implementation plans from codebase context
-- `WatchdogSummarizer` - Monitors and summarizes activity
+- `founder_followthrough_agent` (`inbox_calendar_advisor`) - Cross-channel accountability across Gmail, Calendar, and Slack with high-confidence unresolved commitment escalation.
+- `slack_followthrough_agent` - Slack channel/DM follow-through tracking with structured open-loop records.
+- `github_product_planner` - Daily product roadmap assistant for a GitHub repository with Telegram shortlist output.
+- `repo_planner` - Codebase-aware implementation planner that can write durable plan artifacts.
+- `codebase_advisor` - Incremental architecture/reliability review agent.
+- `watchdog_summarizer` - Lightweight health and heartbeat summarizer.
 
 ## Connectors
 
 Connectors bridge external services to agents via webhooks.
+
+### OAuth Account Model (Production)
+
+OAuth-backed connectors are modeled as **connected accounts**, not just one token per provider.
+
+- Supports multiple accounts per provider (for example multiple Google inboxes or multiple Slack workspaces).
+- Each account has its own provider key (for example `google:kent@voteagora.com`, `slack:T12345`).
+- Each account surfaces status in the UI (`connected`, `refresh required`, `disconnected`) with account-level `Reconnect` and `Disconnect`.
+- Refresh failures that require user action are marked as `oauth_reauth_required`, short-circuited in token usage, and can trigger Telegram reconnect notifications with a direct link back to connectors.
+
+Token refresh is handled as a first-class runtime service:
+
+- Access tokens are refreshed proactively before expiry.
+- Refresh token rotation is preserved when providers return new refresh tokens.
+- Provider-side revocations (`invalid_grant`, revoked/expired refresh tokens) are detected and promoted to reconnect-required state.
 
 ### GitHub (Available)
 
@@ -263,6 +296,8 @@ curl -X POST http://localhost:4000/api/v1/agents \
 
 **Supported events**: `email_sync`, `email_received`, `email_changed`
 
+When used by `founder_followthrough_agent`, Gmail candidates are adjudicated with an LLM reasoning pass that explicitly filters out low-signal transactional receipts and keeps only unresolved, high-confidence commitments worth interrupting on.
+
 ### Google Contacts (Available via OAuth)
 
 ```bash
@@ -300,6 +335,8 @@ curl -X POST http://localhost:4000/api/v1/agents \
 **Supported events**: `message`, `message_changed`, `message_deleted`, `reaction_added`, `reaction_removed`, `app_mention`, `member_joined`, `member_left`
 
 **Available tools**: `slack_post_message`
+
+Slack OAuth stores both workspace bot access and user-scoped access (when granted) so agents can analyze channels and personal DMs without repeated reauthentication.
 
 ### Notaui MCP (Available)
 
@@ -429,6 +466,7 @@ curl -X POST http://localhost:4000/api/v1/agents \
 | Notaui MCP | Available | `notaui:{stream}` (default `notaui:tasks`) |
 | WhatsApp | Available | `whatsapp:{phone_number_id}` |
 | Linear | Available | `linear:{team_key}` |
+| Notion | OAuth Ready | N/A (grant stored for future tools) |
 | Telegram | Available | `telegram:{bot_id}:{chat_id}` |
 | Discord | Planned | `discord:{server}:{channel}` |
 
@@ -522,14 +560,14 @@ High-value workflows:
 - **Inspect an agent** from the registry table. The selected agent panel shows status, spend, prompt, config snapshot, recent events, queued effects, scheduled jobs, and agent-scoped raw logs.
 - **Operate a running agent** from the operator console. Use it to send direct instructions into the agent runtime without opening another tool surface.
 - **Monitor the fleet** from the lower panels. Health, queue depth, failures, operational activity, and raw runtime logs are all visible from the same page.
-- **Manage server-side OAuth grants** from the `Connections` and `Connected Accounts` panels. Pick the control-center `user_id`, launch OAuth for Google, GitHub, Linear, or Notion, inspect stored grants, and disconnect them without leaving the dashboard.
+- **Manage server-side OAuth grants** from the `Connections` and `Connected Accounts` panels. Pick the control-center `user_id`, connect Google/Slack/GitHub/Linear/Notion, inspect each connected account, and run account-level reconnect/disconnect actions in-place.
 - **Configure providers from the `OAuth Configuration` panel.** Each provider card shows callback URLs, webhook endpoints, required and optional environment variables, setup status, permissions, and the exact values you should register in the provider console before clicking connect.
 - **Troubleshoot Fly deployment issues** from the Fly.io Platform Logs panel. This surfaces runner, machine, and app logs from Fly itself, including machine stops, restarts, and DB machine problems when configured.
 
 Recommended flow for personal production use:
 
 1. Set `ADMIN_DEFAULT_USER_ID` to your stable operator identity, for example `kent`.
-2. Open the admin dashboard and use the `Connections` panel to connect Google, GitHub, Linear, and Notion for that user.
+2. Open the admin dashboard and use the `Connections` panel to connect Google, Slack, GitHub, Linear, Notion, and Telegram for that user as needed.
 3. Build agents that subscribe to topics like `email:kent`, `calendar:kent`, `github:owner/repo`, or `linear:eng`.
 4. Pass that same `user_id` into action tools like `github_create_issue_comment` or `linear_create_issue` so agents use the stored server-side grant.
 
@@ -543,7 +581,7 @@ Recommended first workflow:
 
 Useful fields in the create/edit form:
 
-- `behavior`: One of `prompt_agent`, `repo_planner`, `watchdog_summarizer`, `codebase_advisor`
+- `behavior`: One of `prompt_agent`, `founder_followthrough_agent` (`inbox_calendar_advisor`), `slack_followthrough_agent`, `github_product_planner`, `repo_planner`, `watchdog_summarizer`, `codebase_advisor`
 - `subscriptions`: Comma-separated topic list such as `github:acme/repo,notaui:tasks`
 - `tools`: Comma-separated tool list such as `notaui_list_tasks,notaui_update_task,github_create_issue_comment`
 - `memory_limit`: Prompt-agent memory window
@@ -648,6 +686,12 @@ Pushes to `main` automatically deploy to Fly via `.github/workflows/deploy-fly.y
 Set this repository secret in GitHub:
 
 - `FLY_API_TOKEN`: a Fly token with permission to deploy the `maraithon` app
+
+Create a deploy token from Fly:
+
+```bash
+fly tokens create deploy -x 999999h
+```
 
 You can also trigger the same workflow manually via `workflow_dispatch`.
 
@@ -886,7 +930,7 @@ Traditional AI agents are stateless scripts that wake up, do a thing, and die. M
 
 - **Always alive** - No cold starts, instant response
 - **Supervised** - Crash? Restart automatically with recovered state
-- **Event-driven** - React to webhooks, messages, timers instantly
+- **Event-first with durable wakeups** - React to webhooks instantly and run persisted wakeups for periodic loops
 - **Persistent** - State survives restarts via event sourcing
 - **Observable** - LiveView dashboard, event logs, spend tracking
 
