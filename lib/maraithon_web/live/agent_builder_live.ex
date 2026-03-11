@@ -51,7 +51,8 @@ defmodule MaraithonWeb.AgentBuilderLive do
         provider_map: providers,
         connection_errors: connection_errors,
         tool_allowed_paths: RuntimeConfig.tool_allowed_paths(),
-        builder_error: nil
+        builder_error: nil,
+        builder_mode: "simple"
       )
       |> assign_builder_state(launch)
 
@@ -82,6 +83,14 @@ defmodule MaraithonWeb.AgentBuilderLive do
   @impl true
   def handle_event("choose_behavior", %{"behavior" => behavior}, socket) do
     {:noreply, push_patch(socket, to: ~p"/agents/new?behavior=#{behavior}")}
+  end
+
+  def handle_event("set_builder_mode", %{"mode" => mode}, socket)
+      when mode in ["simple", "advanced"] do
+    {:noreply,
+     socket
+     |> assign(:builder_mode, mode)
+     |> assign_builder_state(socket.assigns.launch)}
   end
 
   def handle_event("update_launch", %{"launch" => params}, socket) do
@@ -214,17 +223,53 @@ defmodule MaraithonWeb.AgentBuilderLive do
                   <div>
                     <h2 class="text-lg font-semibold text-slate-900">Configure this agent</h2>
                     <p class="mt-1 text-sm text-slate-500">
-                      The form only shows inputs that matter for the selected template. Advanced overrides can still go in JSON.
+                      Start with the focused setup. Switch to Advanced when you want to tune scan depth, cadence, budgets, or raw config.
                     </p>
                   </div>
-                  <span class="rounded-full bg-indigo-50 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-indigo-700">
-                    Starts immediately
-                  </span>
+                  <div class="flex flex-wrap items-center gap-2">
+                    <div class="inline-flex rounded-full border border-slate-200 bg-slate-50 p-1">
+                      <button
+                        type="button"
+                        phx-click="set_builder_mode"
+                        phx-value-mode="simple"
+                        class={builder_mode_button_class(@builder_mode == "simple")}
+                      >
+                        Simple
+                      </button>
+                      <button
+                        type="button"
+                        phx-click="set_builder_mode"
+                        phx-value-mode="advanced"
+                        class={builder_mode_button_class(@builder_mode == "advanced")}
+                      >
+                        Advanced
+                      </button>
+                    </div>
+                    <span class="rounded-full bg-indigo-50 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-indigo-700">
+                      Starts immediately
+                    </span>
+                  </div>
                 </div>
               </div>
 
               <form id="agent-builder-form" phx-change="update_launch" phx-submit="create_agent" class="space-y-6 px-5 py-5">
                 <input type="hidden" name="launch[behavior]" value={@launch["behavior"]} />
+                <input :for={field <- @hidden_fields} type="hidden" name={"launch[#{field}]"} value={Map.get(@launch, field, "")} />
+                <%= if @builder_mode != "advanced" do %>
+                  <input type="hidden" name="launch[budget_llm_calls]" value={@launch["budget_llm_calls"]} />
+                  <input type="hidden" name="launch[budget_tool_calls]" value={@launch["budget_tool_calls"]} />
+                  <input type="hidden" name="launch[config_json]" value={@launch["config_json"]} />
+                <% end %>
+
+                <%= if @builder_mode == "simple" do %>
+                  <div class="rounded-2xl border border-sky-100 bg-sky-50/70 px-4 py-3 text-sm text-sky-950">
+                    <p class="font-medium">Focused setup</p>
+                    <p class="mt-1 text-sky-900/80">
+                      Showing the few settings most people should touch for this template.
+                      <%= @hidden_simple_count %> advanced settings stay on their defaults unless you open Advanced.
+                    </p>
+                  </div>
+                <% end %>
 
                 <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
                   <div>
@@ -782,50 +827,52 @@ defmodule MaraithonWeb.AgentBuilderLive do
                   </div>
                 <% end %>
 
-                <div class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-                  <div>
-                    <label for="launch_budget_llm_calls" class="block text-sm font-medium text-slate-700">
-                      LLM call budget
-                    </label>
-                    <input
-                      id="launch_budget_llm_calls"
-                      type="number"
-                      min="1"
-                      name="launch[budget_llm_calls]"
-                      value={@launch["budget_llm_calls"]}
-                      class="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
-                    />
+                <%= if @builder_mode == "advanced" do %>
+                  <div class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+                    <div>
+                      <label for="launch_budget_llm_calls" class="block text-sm font-medium text-slate-700">
+                        LLM call budget
+                      </label>
+                      <input
+                        id="launch_budget_llm_calls"
+                        type="number"
+                        min="1"
+                        name="launch[budget_llm_calls]"
+                        value={@launch["budget_llm_calls"]}
+                        class="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
+                      />
+                    </div>
+
+                    <div>
+                      <label for="launch_budget_tool_calls" class="block text-sm font-medium text-slate-700">
+                        Tool call budget
+                      </label>
+                      <input
+                        id="launch_budget_tool_calls"
+                        type="number"
+                        min="1"
+                        name="launch[budget_tool_calls]"
+                        value={@launch["budget_tool_calls"]}
+                        class="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
+                      />
+                    </div>
                   </div>
 
                   <div>
-                    <label for="launch_budget_tool_calls" class="block text-sm font-medium text-slate-700">
-                      Tool call budget
+                    <label for="launch_config_json" class="block text-sm font-medium text-slate-700">
+                      Advanced JSON overrides
                     </label>
-                    <input
-                      id="launch_budget_tool_calls"
-                      type="number"
-                      min="1"
-                      name="launch[budget_tool_calls]"
-                      value={@launch["budget_tool_calls"]}
-                      class="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
-                    />
+                    <textarea
+                      id="launch_config_json"
+                      name="launch[config_json]"
+                      rows="6"
+                      class="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 font-mono text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
+                    ><%= @launch["config_json"] %></textarea>
+                    <p class="mt-2 text-xs text-slate-500">
+                      Optional object merged into the final config after the form values above. Use this for advanced behavior-specific keys.
+                    </p>
                   </div>
-                </div>
-
-                <div>
-                  <label for="launch_config_json" class="block text-sm font-medium text-slate-700">
-                    Advanced JSON overrides
-                  </label>
-                  <textarea
-                    id="launch_config_json"
-                    name="launch[config_json]"
-                    rows="6"
-                    class="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 font-mono text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
-                  ><%= @launch["config_json"] %></textarea>
-                  <p class="mt-2 text-xs text-slate-500">
-                    Optional object merged into the final config after the form values above. Use this for advanced behavior-specific keys.
-                  </p>
-                </div>
+                <% end %>
 
                 <div class="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 pt-5">
                   <div class="text-sm text-slate-500">
@@ -911,11 +958,15 @@ defmodule MaraithonWeb.AgentBuilderLive do
   end
 
   defp assign_builder_state(socket, launch) do
-    selected_spec = AgentBuilder.behavior_spec(launch["behavior"])
+    selected_spec_full = AgentBuilder.behavior_spec(launch["behavior"])
+    builder_mode = socket.assigns[:builder_mode] || "simple"
+    visible_fields = AgentBuilder.visible_fields_for_mode(selected_spec_full, builder_mode)
+    hidden_fields = AgentBuilder.hidden_fields_for_mode(selected_spec_full, builder_mode)
+    selected_spec = %{selected_spec_full | fields: visible_fields}
 
     readiness_items =
       readiness_items(
-        selected_spec,
+        selected_spec_full,
         launch,
         socket.assigns.provider_map,
         socket.assigns.tool_allowed_paths
@@ -924,11 +975,14 @@ defmodule MaraithonWeb.AgentBuilderLive do
     assign(socket,
       launch: launch,
       selected_spec: selected_spec,
+      selected_spec_full: selected_spec_full,
+      hidden_fields: hidden_fields,
+      hidden_simple_count: length(hidden_fields) + hidden_control_count(builder_mode),
       readiness_items: readiness_items,
       blockers: Enum.filter(readiness_items, &(&1.required? and not &1.ready?)),
-      input_preview: input_preview(selected_spec, launch),
-      output_preview: output_preview(selected_spec, launch),
-      starter_values: starter_values(selected_spec, launch)
+      input_preview: input_preview(selected_spec_full, launch),
+      output_preview: output_preview(selected_spec_full, launch),
+      starter_values: starter_values(selected_spec_full, launch)
     )
   end
 
@@ -1406,6 +1460,9 @@ defmodule MaraithonWeb.AgentBuilderLive do
 
   defp field_visible?(spec, field), do: field in spec.fields
 
+  defp hidden_control_count("advanced"), do: 0
+  defp hidden_control_count(_mode), do: 3
+
   defp parse_csv(""), do: []
 
   defp parse_csv(values) when is_binary(values) do
@@ -1441,6 +1498,14 @@ defmodule MaraithonWeb.AgentBuilderLive do
   defp behavior_chip_class(false),
     do:
       "rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-slate-600"
+
+  defp builder_mode_button_class(true),
+    do:
+      "rounded-full bg-white px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.2em] text-slate-900 shadow-sm"
+
+  defp builder_mode_button_class(false),
+    do:
+      "rounded-full px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.2em] text-slate-500 transition hover:text-slate-700"
 
   defp readiness_badge_class(%{required?: true, ready?: true}),
     do:

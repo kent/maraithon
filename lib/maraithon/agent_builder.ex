@@ -63,6 +63,7 @@ defmodule Maraithon.AgentBuilder do
         "Long-running context shaped by the memory limit"
       ],
       fields: ~w(prompt subscriptions tools memory_limit),
+      simple_fields: ~w(prompt subscriptions tools),
       defaults: %{},
       requirements: [],
       suggestions: [
@@ -88,6 +89,7 @@ defmodule Maraithon.AgentBuilder do
         "A daily planning loop grounded in the current state of the selected repository"
       ],
       fields: ~w(repo_full_name base_branch feature_limit wakeup_interval_ms),
+      simple_fields: ~w(repo_full_name base_branch feature_limit),
       defaults: %{
         "prompt" => "",
         "tools" => "",
@@ -141,6 +143,7 @@ defmodule Maraithon.AgentBuilder do
       ],
       fields:
         ~w(email_scan_limit event_scan_limit prep_window_hours team_id channel_scan_limit dm_scan_limit lookback_hours max_insights_per_cycle min_confidence timezone_offset_hours morning_brief_hour_local end_of_day_brief_hour_local weekly_review_day_local weekly_review_hour_local brief_max_items),
+      simple_fields: ~w(team_id timezone_offset_hours),
       defaults: %{
         "prompt" => "",
         "tools" => "",
@@ -231,6 +234,7 @@ defmodule Maraithon.AgentBuilder do
       ],
       fields:
         ~w(team_id channel_scan_limit dm_scan_limit lookback_hours max_insights_per_cycle min_confidence wakeup_interval_ms),
+      simple_fields: ~w(team_id),
       defaults: %{
         "prompt" => "",
         "tools" => "",
@@ -413,6 +417,20 @@ defmodule Maraithon.AgentBuilder do
     id
     |> resolve_behavior_id()
     |> then(&Map.get(@behavior_spec_by_id, &1, hd(@behavior_specs)))
+  end
+
+  def visible_fields_for_mode(%{} = spec, "advanced"), do: spec.fields
+
+  def visible_fields_for_mode(%{} = spec, _mode) do
+    case Map.get(spec, :simple_fields) do
+      fields when is_list(fields) and fields != [] -> fields
+      _ -> spec.fields
+    end
+  end
+
+  def hidden_fields_for_mode(%{} = spec, mode) do
+    visible = MapSet.new(visible_fields_for_mode(spec, mode))
+    Enum.reject(spec.fields, &MapSet.member?(visible, &1))
   end
 
   def default_launch_params, do: launch_params_for_behavior("prompt_agent")

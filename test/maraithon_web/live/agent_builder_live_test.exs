@@ -24,6 +24,8 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
       assert html =~ "What comes out"
       assert html =~ "Permission readiness"
       assert html =~ "Prompt Agent"
+      assert html =~ "Focused setup"
+      refute html =~ "Advanced JSON overrides"
     end
 
     test "shows blockers when inbox advisor permissions are missing", %{conn: conn} do
@@ -83,11 +85,36 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
       assert html =~ "Slack Personal DMs"
       assert html =~ "Blocked"
     end
+
+    test "uses simple mode by default and reveals advanced controls on demand", %{conn: conn} do
+      {:ok, view, _html} = live(conn, "/agents/new?behavior=inbox_calendar_advisor")
+
+      html = render(view)
+
+      assert html =~ "Focused setup"
+      refute has_element?(view, "label[for=launch_email_scan_limit]")
+      refute has_element?(view, "#launch_morning_brief_hour_local")
+      refute html =~ "Advanced JSON overrides"
+
+      html =
+        view
+        |> element("button[phx-click=set_builder_mode][phx-value-mode=\"advanced\"]")
+        |> render_click()
+
+      assert html =~ "Chief-of-Staff Briefing"
+      assert html =~ "Email scan limit"
+      assert html =~ "Advanced JSON overrides"
+    end
   end
 
   describe "creation" do
     test "creates a prompt agent and redirects to the dashboard", %{conn: conn} do
       {:ok, view, _html} = live(conn, "/agents/new")
+
+      _html =
+        view
+        |> element("button[phx-click=set_builder_mode][phx-value-mode=\"advanced\"]")
+        |> render_click()
 
       result =
         view
@@ -168,6 +195,11 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
         })
 
       {:ok, view, _html} = live(conn, "/agents/new?behavior=github_product_planner")
+
+      _html =
+        view
+        |> element("button[phx-click=set_builder_mode][phx-value-mode=\"advanced\"]")
+        |> render_click()
 
       result =
         view
