@@ -92,6 +92,8 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
       html = render(view)
 
       assert html =~ "Focused setup"
+      assert html =~ "Coverage and spend"
+      assert html =~ "Balanced"
       refute has_element?(view, "label[for=launch_email_scan_limit]")
       refute has_element?(view, "#launch_morning_brief_hour_local")
       refute html =~ "Advanced JSON overrides"
@@ -108,6 +110,41 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
   end
 
   describe "creation" do
+    test "creates a prompt agent from simple mode using cost defaults", %{conn: conn} do
+      {:ok, view, _html} = live(conn, "/agents/new")
+
+      result =
+        view
+        |> form("#agent-builder-form",
+          launch: %{
+            behavior: "prompt_agent",
+            builder_mode: "simple",
+            cost_profile: "lean",
+            name: "lean-builder-agent",
+            prompt: "Watch repo issues and summarize changes.",
+            subscriptions: "github:acme/repo",
+            tools: "read_file,search_files"
+          }
+        )
+        |> render_submit()
+
+      [agent] = Agents.list_agents(user_id: @user_email)
+
+      assert agent.behavior == "prompt_agent"
+      assert agent.config["name"] == "lean-builder-agent"
+      assert agent.config["memory_limit"] == 20
+      assert agent.config["budget"]["llm_calls"] == 80
+      assert agent.config["budget"]["tool_calls"] == 120
+
+      assert {:error, {:live_redirect, %{to: "/dashboard?id=" <> redirect_id}}} = result
+      assert redirect_id == agent.id
+
+      case Registry.lookup(AgentRegistry, agent.id) do
+        [{pid, _value}] -> assert :ok = AgentSupervisor.stop_agent(pid)
+        [] -> :ok
+      end
+    end
+
     test "creates a prompt agent and redirects to the dashboard", %{conn: conn} do
       {:ok, view, _html} = live(conn, "/agents/new")
 

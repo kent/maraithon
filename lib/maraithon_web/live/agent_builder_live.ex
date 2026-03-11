@@ -48,6 +48,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
         page_title: "Build Agent",
         current_path: "/agents/new",
         behavior_specs: AgentBuilder.behavior_specs(),
+        cost_profile_options: AgentBuilder.cost_profile_options(),
         provider_map: providers,
         connection_errors: connection_errors,
         tool_allowed_paths: RuntimeConfig.tool_allowed_paths(),
@@ -63,11 +64,15 @@ defmodule MaraithonWeb.AgentBuilderLive do
   def handle_params(params, uri, socket) do
     behavior = Map.get(params, "behavior")
     current_behavior = socket.assigns.launch["behavior"]
+    builder_mode = socket.assigns[:builder_mode] || "simple"
 
     launch =
       cond do
         is_binary(behavior) and behavior != current_behavior ->
-          AgentBuilder.launch_params_for_behavior(behavior)
+          behavior
+          |> AgentBuilder.launch_params_for_behavior()
+          |> Map.put("builder_mode", builder_mode)
+          |> AgentBuilder.normalize_launch_params()
 
         true ->
           socket.assigns.launch
@@ -87,10 +92,15 @@ defmodule MaraithonWeb.AgentBuilderLive do
 
   def handle_event("set_builder_mode", %{"mode" => mode}, socket)
       when mode in ["simple", "advanced"] do
+    launch =
+      socket.assigns.launch
+      |> Map.put("builder_mode", mode)
+      |> AgentBuilder.normalize_launch_params()
+
     {:noreply,
      socket
      |> assign(:builder_mode, mode)
-     |> assign_builder_state(socket.assigns.launch)}
+     |> assign_builder_state(launch)}
   end
 
   def handle_event("update_launch", %{"launch" => params}, socket) do
@@ -254,6 +264,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
 
               <form id="agent-builder-form" phx-change="update_launch" phx-submit="create_agent" class="space-y-6 px-5 py-5">
                 <input type="hidden" name="launch[behavior]" value={@launch["behavior"]} />
+                <input type="hidden" name="launch[builder_mode]" value={@builder_mode} />
                 <input :for={field <- @hidden_fields} type="hidden" name={"launch[#{field}]"} value={Map.get(@launch, field, "")} />
                 <%= if @builder_mode != "advanced" do %>
                   <input type="hidden" name="launch[budget_llm_calls]" value={@launch["budget_llm_calls"]} />
@@ -265,7 +276,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
                   <div class="rounded-2xl border border-sky-100 bg-sky-50/70 px-4 py-3 text-sm text-sky-950">
                     <p class="font-medium">Focused setup</p>
                     <p class="mt-1 text-sky-900/80">
-                      Showing the few settings most people should touch for this template.
+                      Start by choosing the coverage and spend level you want. Maraithon will set the scan depth, cadence, and budgets for you.
                       <%= @hidden_simple_count %> advanced settings stay on their defaults unless you open Advanced.
                     </p>
                   </div>
@@ -295,6 +306,44 @@ defmodule MaraithonWeb.AgentBuilderLive do
                     <p class="mt-1 text-sm text-slate-600"><%= @selected_spec.summary %></p>
                   </div>
                 </div>
+
+                <%= if field_visible?(@selected_spec, "cost_profile") do %>
+                  <div class="space-y-4 rounded-2xl border border-violet-100 bg-violet-50/60 p-4">
+                    <div>
+                      <p class="text-sm font-medium text-violet-950">Coverage and spend</p>
+                      <p class="mt-1 text-xs text-violet-900/80">
+                        Pick how aggressive Maraithon should be. This drives the hidden scan limits, cadence, memory, and budgets for this template.
+                      </p>
+                    </div>
+
+                    <div class="grid grid-cols-1 gap-3 xl:grid-cols-3">
+                      <label
+                        :for={option <- @cost_profile_options}
+                        class={cost_profile_card_class(@launch["cost_profile"] == option.id)}
+                      >
+                        <input
+                          type="radio"
+                          name="launch[cost_profile]"
+                          value={option.id}
+                          checked={@launch["cost_profile"] == option.id}
+                          class="sr-only"
+                        />
+                        <div class="flex items-start justify-between gap-3">
+                          <div>
+                            <p class="text-sm font-semibold text-slate-900"><%= option.label %></p>
+                            <p class="mt-1 text-xs leading-5 text-slate-600"><%= option.description %></p>
+                          </div>
+                          <span class="rounded-full bg-white/80 px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-violet-700">
+                            <%= if @launch["cost_profile"] == option.id, do: "Selected", else: "Option" %>
+                          </span>
+                        </div>
+                        <p class="mt-3 text-xs leading-5 text-slate-700">
+                          <%= cost_profile_summary(@selected_spec_full.id, option.id) %>
+                        </p>
+                      </label>
+                    </div>
+                  </div>
+                <% end %>
 
                 <%= if field_visible?(@selected_spec, "prompt") do %>
                   <div>
@@ -1198,6 +1247,10 @@ defmodule MaraithonWeb.AgentBuilderLive do
       end
 
     [
+      %{
+        title: "Operating profile",
+        body: cost_profile_summary("prompt_agent", launch["cost_profile"])
+      },
       %{title: "Current subscriptions", body: subscriptions},
       %{title: "Current tool allowlist", body: tools}
     ]
@@ -1244,6 +1297,10 @@ defmodule MaraithonWeb.AgentBuilderLive do
   defp dynamic_input_preview("inbox_calendar_advisor", launch) do
     [
       %{
+        title: "Operating profile",
+        body: cost_profile_summary("inbox_calendar_advisor", launch["cost_profile"])
+      },
+      %{
         title: "Scan coverage",
         body:
           "Checks up to #{launch["email_scan_limit"]} inbox emails, #{launch["event_scan_limit"]} calendar events, #{launch["channel_scan_limit"]} Slack channel messages, and #{launch["dm_scan_limit"]} Slack DM messages each cycle."
@@ -1267,6 +1324,10 @@ defmodule MaraithonWeb.AgentBuilderLive do
   defp dynamic_input_preview("slack_followthrough_agent", launch) do
     [
       %{
+        title: "Operating profile",
+        body: cost_profile_summary("slack_followthrough_agent", launch["cost_profile"])
+      },
+      %{
         title: "Workspace scope",
         body:
           if(launch["team_id"] == "",
@@ -1289,6 +1350,10 @@ defmodule MaraithonWeb.AgentBuilderLive do
 
   defp dynamic_input_preview("github_product_planner", launch) do
     [
+      %{
+        title: "Operating profile",
+        body: cost_profile_summary("github_product_planner", launch["cost_profile"])
+      },
       %{
         title: "Repository review target",
         body:
@@ -1382,6 +1447,13 @@ defmodule MaraithonWeb.AgentBuilderLive do
     case spec.id do
       "prompt_agent" ->
         [
+          %{
+            label: "Cost profile",
+            value:
+              launch["cost_profile"]
+              |> cost_profile_label()
+              |> Kernel.<>(" agent spend")
+          },
           %{label: "Memory limit", value: launch["memory_limit"] <> " events"},
           %{label: "LLM call budget", value: launch["budget_llm_calls"]},
           %{label: "Tool call budget", value: launch["budget_tool_calls"]}
@@ -1389,6 +1461,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
 
       "inbox_calendar_advisor" ->
         [
+          %{label: "Cost profile", value: cost_profile_label(launch["cost_profile"])},
           %{label: "Email scan limit", value: launch["email_scan_limit"]},
           %{label: "Event scan limit", value: launch["event_scan_limit"]},
           %{
@@ -1400,6 +1473,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
 
       "slack_followthrough_agent" ->
         [
+          %{label: "Cost profile", value: cost_profile_label(launch["cost_profile"])},
           %{
             label: "Slack team",
             value: if(launch["team_id"] == "", do: "All connected teams", else: launch["team_id"])
@@ -1437,6 +1511,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
 
       "github_product_planner" ->
         [
+          %{label: "Cost profile", value: cost_profile_label(launch["cost_profile"])},
           %{
             label: "Repository",
             value: blank_fallback(launch["repo_full_name"], "Set `owner/repo`")
@@ -1462,6 +1537,64 @@ defmodule MaraithonWeb.AgentBuilderLive do
 
   defp hidden_control_count("advanced"), do: 0
   defp hidden_control_count(_mode), do: 3
+
+  defp cost_profile_label("lean"), do: "Lean"
+  defp cost_profile_label("balanced"), do: "Balanced"
+  defp cost_profile_label("thorough"), do: "Thorough"
+  defp cost_profile_label(_profile), do: "Balanced"
+
+  defp cost_profile_summary("prompt_agent", "lean"),
+    do:
+      "Lower memory and lower budgets. Best when you want a lightweight helper, not a constantly reasoning agent."
+
+  defp cost_profile_summary("prompt_agent", "balanced"),
+    do:
+      "Keeps enough memory and budget for steady reasoning without overspending on every wakeup."
+
+  defp cost_profile_summary("prompt_agent", "thorough"),
+    do:
+      "Uses deeper memory and higher budgets for richer reasoning across longer-running conversations."
+
+  defp cost_profile_summary("github_product_planner", "lean"),
+    do: "Reviews the repo less often and keeps the shortlist tight to minimize daily spend."
+
+  defp cost_profile_summary("github_product_planner", "balanced"),
+    do: "Daily planning pass with enough budget to catch meaningful roadmap changes."
+
+  defp cost_profile_summary("github_product_planner", "thorough"),
+    do: "Checks more frequently with a larger planning budget for fast-moving repositories."
+
+  defp cost_profile_summary("inbox_calendar_advisor", "lean"),
+    do:
+      "Tighter Gmail, Calendar, and Slack scans with a higher confidence bar so only the clearest open loops interrupt you."
+
+  defp cost_profile_summary("inbox_calendar_advisor", "balanced"),
+    do:
+      "Good default coverage across inbox, meetings, and Slack with moderate spend and a practical interruption threshold."
+
+  defp cost_profile_summary("inbox_calendar_advisor", "thorough"),
+    do:
+      "Deeper cross-channel scans, lower confidence threshold, and more budget for founders who want broader followthrough coverage."
+
+  defp cost_profile_summary("slack_followthrough_agent", "lean"),
+    do: "Smaller channel and DM scans with fewer interrupts and the lowest recurring cost."
+
+  defp cost_profile_summary("slack_followthrough_agent", "balanced"),
+    do:
+      "Good default Slack coverage with moderate scanning depth and practical urgency filtering."
+
+  defp cost_profile_summary("slack_followthrough_agent", "thorough"),
+    do:
+      "Broader Slack coverage, faster wakeups, and more budget when Slack is your main operating system."
+
+  defp cost_profile_summary(_behavior, "lean"),
+    do: "Lower spend with tighter scans and fewer wakeups."
+
+  defp cost_profile_summary(_behavior, "balanced"),
+    do: "Default spend and coverage for most teams."
+
+  defp cost_profile_summary(_behavior, "thorough"),
+    do: "Higher spend for deeper coverage and more proactive behavior."
 
   defp parse_csv(""), do: []
 
@@ -1506,6 +1639,14 @@ defmodule MaraithonWeb.AgentBuilderLive do
   defp builder_mode_button_class(false),
     do:
       "rounded-full px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.2em] text-slate-500 transition hover:text-slate-700"
+
+  defp cost_profile_card_class(true),
+    do:
+      "block cursor-pointer rounded-2xl border border-violet-300 bg-white px-4 py-4 shadow-sm ring-2 ring-violet-200"
+
+  defp cost_profile_card_class(false),
+    do:
+      "block cursor-pointer rounded-2xl border border-violet-100 bg-white/80 px-4 py-4 transition hover:border-violet-200 hover:bg-white"
 
   defp readiness_badge_class(%{required?: true, ready?: true}),
     do:

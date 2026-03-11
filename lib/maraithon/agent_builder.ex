@@ -10,6 +10,8 @@ defmodule Maraithon.AgentBuilder do
 
   @launch_defaults %{
     "behavior" => "prompt_agent",
+    "builder_mode" => "simple",
+    "cost_profile" => "balanced",
     "name" => "",
     "prompt" => @default_prompt,
     "subscriptions" => "",
@@ -63,7 +65,7 @@ defmodule Maraithon.AgentBuilder do
         "Long-running context shaped by the memory limit"
       ],
       fields: ~w(prompt subscriptions tools memory_limit),
-      simple_fields: ~w(prompt subscriptions tools),
+      simple_fields: ~w(prompt subscriptions tools cost_profile),
       defaults: %{},
       requirements: [],
       suggestions: [
@@ -89,7 +91,7 @@ defmodule Maraithon.AgentBuilder do
         "A daily planning loop grounded in the current state of the selected repository"
       ],
       fields: ~w(repo_full_name base_branch feature_limit wakeup_interval_ms),
-      simple_fields: ~w(repo_full_name base_branch feature_limit),
+      simple_fields: ~w(repo_full_name base_branch feature_limit cost_profile),
       defaults: %{
         "prompt" => "",
         "tools" => "",
@@ -143,7 +145,7 @@ defmodule Maraithon.AgentBuilder do
       ],
       fields:
         ~w(email_scan_limit event_scan_limit prep_window_hours team_id channel_scan_limit dm_scan_limit lookback_hours max_insights_per_cycle min_confidence timezone_offset_hours morning_brief_hour_local end_of_day_brief_hour_local weekly_review_day_local weekly_review_hour_local brief_max_items),
-      simple_fields: ~w(team_id timezone_offset_hours),
+      simple_fields: ~w(team_id timezone_offset_hours cost_profile),
       defaults: %{
         "prompt" => "",
         "tools" => "",
@@ -234,7 +236,7 @@ defmodule Maraithon.AgentBuilder do
       ],
       fields:
         ~w(team_id channel_scan_limit dm_scan_limit lookback_hours max_insights_per_cycle min_confidence wakeup_interval_ms),
-      simple_fields: ~w(team_id),
+      simple_fields: ~w(team_id cost_profile),
       defaults: %{
         "prompt" => "",
         "tools" => "",
@@ -409,6 +411,116 @@ defmodule Maraithon.AgentBuilder do
     "founder_followthrough_agent" => "inbox_calendar_advisor"
   }
 
+  @cost_profiles %{
+    "prompt_agent" => %{
+      "lean" => %{
+        "memory_limit" => "20",
+        "budget_llm_calls" => "80",
+        "budget_tool_calls" => "120"
+      },
+      "balanced" => %{
+        "memory_limit" => "50",
+        "budget_llm_calls" => "200",
+        "budget_tool_calls" => "300"
+      },
+      "thorough" => %{
+        "memory_limit" => "90",
+        "budget_llm_calls" => "400",
+        "budget_tool_calls" => "600"
+      }
+    },
+    "github_product_planner" => %{
+      "lean" => %{
+        "feature_limit" => "2",
+        "wakeup_interval_ms" => "172800000",
+        "budget_llm_calls" => "30",
+        "budget_tool_calls" => "10"
+      },
+      "balanced" => %{
+        "feature_limit" => "3",
+        "wakeup_interval_ms" => "86400000",
+        "budget_llm_calls" => "60",
+        "budget_tool_calls" => "20"
+      },
+      "thorough" => %{
+        "feature_limit" => "3",
+        "wakeup_interval_ms" => "43200000",
+        "budget_llm_calls" => "120",
+        "budget_tool_calls" => "40"
+      }
+    },
+    "inbox_calendar_advisor" => %{
+      "lean" => %{
+        "email_scan_limit" => "8",
+        "event_scan_limit" => "6",
+        "prep_window_hours" => "24",
+        "channel_scan_limit" => "40",
+        "dm_scan_limit" => "20",
+        "lookback_hours" => "24",
+        "max_insights_per_cycle" => "3",
+        "min_confidence" => "0.8",
+        "budget_llm_calls" => "120",
+        "budget_tool_calls" => "220"
+      },
+      "balanced" => %{
+        "email_scan_limit" => "14",
+        "event_scan_limit" => "12",
+        "prep_window_hours" => "36",
+        "channel_scan_limit" => "80",
+        "dm_scan_limit" => "50",
+        "lookback_hours" => "48",
+        "max_insights_per_cycle" => "5",
+        "min_confidence" => "0.72",
+        "budget_llm_calls" => "240",
+        "budget_tool_calls" => "420"
+      },
+      "thorough" => %{
+        "email_scan_limit" => "24",
+        "event_scan_limit" => "18",
+        "prep_window_hours" => "48",
+        "channel_scan_limit" => "120",
+        "dm_scan_limit" => "80",
+        "lookback_hours" => "72",
+        "max_insights_per_cycle" => "7",
+        "min_confidence" => "0.66",
+        "budget_llm_calls" => "420",
+        "budget_tool_calls" => "750"
+      }
+    },
+    "slack_followthrough_agent" => %{
+      "lean" => %{
+        "channel_scan_limit" => "40",
+        "dm_scan_limit" => "20",
+        "lookback_hours" => "24",
+        "max_insights_per_cycle" => "3",
+        "min_confidence" => "0.82",
+        "wakeup_interval_ms" => "900000",
+        "budget_llm_calls" => "90",
+        "budget_tool_calls" => "180"
+      },
+      "balanced" => %{
+        "channel_scan_limit" => "80",
+        "dm_scan_limit" => "50",
+        "lookback_hours" => "48",
+        "max_insights_per_cycle" => "5",
+        "min_confidence" => "0.75",
+        "wakeup_interval_ms" => "600000",
+        "budget_llm_calls" => "180",
+        "budget_tool_calls" => "320"
+      },
+      "thorough" => %{
+        "channel_scan_limit" => "120",
+        "dm_scan_limit" => "80",
+        "lookback_hours" => "72",
+        "max_insights_per_cycle" => "7",
+        "min_confidence" => "0.68",
+        "wakeup_interval_ms" => "300000",
+        "budget_llm_calls" => "320",
+        "budget_tool_calls" => "550"
+      }
+    }
+  }
+
   @behavior_spec_by_id Map.new(@behavior_specs, &{&1.id, &1})
 
   def behavior_specs, do: @behavior_specs
@@ -417,6 +529,26 @@ defmodule Maraithon.AgentBuilder do
     id
     |> resolve_behavior_id()
     |> then(&Map.get(@behavior_spec_by_id, &1, hd(@behavior_specs)))
+  end
+
+  def cost_profile_options do
+    [
+      %{
+        id: "lean",
+        label: "Lean",
+        description: "Lowest spend. Tight scans and fewer interrupts."
+      },
+      %{
+        id: "balanced",
+        label: "Balanced",
+        description: "Default. Good coverage without turning into a firehose."
+      },
+      %{
+        id: "thorough",
+        label: "Thorough",
+        description: "Higher spend for deeper scanning and more proactive coverage."
+      }
+    ]
   end
 
   def visible_fields_for_mode(%{} = spec, "advanced"), do: spec.fields
@@ -436,11 +568,9 @@ defmodule Maraithon.AgentBuilder do
   def default_launch_params, do: launch_params_for_behavior("prompt_agent")
 
   def launch_params_for_behavior(id) when is_binary(id) do
-    spec = behavior_spec(id)
-
-    @launch_defaults
-    |> Map.merge(spec.defaults)
-    |> Map.put("behavior", id)
+    id
+    |> base_launch_params_for_behavior()
+    |> apply_cost_profile()
   end
 
   def normalize_launch_params(params) when is_map(params) do
@@ -450,20 +580,49 @@ defmodule Maraithon.AgentBuilder do
         _ -> @launch_defaults["behavior"]
       end
 
-    defaults = launch_params_for_behavior(behavior)
+    defaults = base_launch_params_for_behavior(behavior)
 
-    Enum.reduce(defaults, %{}, fn {key, default}, acc ->
-      value =
-        case Map.get(params, key, default) do
-          nil -> default
-          value -> to_string(value)
-        end
+    normalized =
+      Enum.reduce(defaults, %{}, fn {key, default}, acc ->
+        value =
+          case Map.get(params, key, default) do
+            nil -> default
+            value -> to_string(value)
+          end
 
-      Map.put(acc, key, String.trim(value))
-    end)
+        Map.put(acc, key, String.trim(value))
+      end)
+
+    apply_cost_profile(normalized)
   end
 
   def normalize_launch_params(_params), do: default_launch_params()
+
+  defp base_launch_params_for_behavior(id) do
+    spec = behavior_spec(id)
+
+    @launch_defaults
+    |> Map.merge(spec.defaults)
+    |> Map.put("behavior", id)
+  end
+
+  defp apply_cost_profile(%{"builder_mode" => "advanced"} = launch), do: launch
+
+  defp apply_cost_profile(%{"behavior" => behavior} = launch) do
+    resolved_behavior = resolve_behavior_id(behavior)
+    profile = normalize_cost_profile(Map.get(launch, "cost_profile"))
+    overrides = get_in(@cost_profiles, [resolved_behavior, profile]) || %{}
+
+    Map.merge(launch, overrides)
+    |> Map.put("cost_profile", profile)
+  end
+
+  defp apply_cost_profile(launch), do: launch
+
+  defp normalize_cost_profile(profile) when profile in ["lean", "balanced", "thorough"],
+    do: profile
+
+  defp normalize_cost_profile(_profile), do: "balanced"
 
   def launch_params_from_agent(%Agent{} = agent) do
     config = agent.config || %{}
@@ -473,6 +632,7 @@ defmodule Maraithon.AgentBuilder do
     launch_params_for_behavior(behavior)
     |> Map.merge(%{
       "behavior" => behavior,
+      "builder_mode" => "advanced",
       "name" => config["name"] || "",
       "prompt" => config["prompt"] || "",
       "subscriptions" => Enum.join(config["subscribe"] || [], ","),
@@ -505,6 +665,12 @@ defmodule Maraithon.AgentBuilder do
       "channel_scan_limit" => stringify(config["channel_scan_limit"]),
       "dm_scan_limit" => stringify(config["dm_scan_limit"]),
       "lookback_hours" => stringify(config["lookback_hours"]),
+      "timezone_offset_hours" => stringify(config["timezone_offset_hours"]),
+      "morning_brief_hour_local" => stringify(config["morning_brief_hour_local"]),
+      "end_of_day_brief_hour_local" => stringify(config["end_of_day_brief_hour_local"]),
+      "weekly_review_day_local" => stringify(config["weekly_review_day_local"]),
+      "weekly_review_hour_local" => stringify(config["weekly_review_hour_local"]),
+      "brief_max_items" => stringify(config["brief_max_items"]),
       "write_plan_files" => stringify(Map.get(config, "write_plan_files", true))
     })
   end

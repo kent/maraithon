@@ -847,6 +847,11 @@ defmodule MaraithonWeb.DashboardLive do
 
             <%= if @launch_mode == :edit do %>
               <form id="launch-agent-form" phx-submit="launch_agent" class="space-y-4">
+                <input
+                  type="hidden"
+                  name="launch[builder_mode]"
+                  value={Map.get(@launch, "builder_mode", "advanced")}
+                />
                 <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
                   <div>
                     <label for="launch_behavior" class="block text-sm font-medium text-gray-700">
