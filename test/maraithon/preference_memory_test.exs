@@ -1,0 +1,126 @@
+defmodule Maraithon.PreferenceMemoryTest do
+  use Maraithon.DataCase, async: false
+
+  alias Maraithon.Accounts
+  alias Maraithon.Agents
+  alias Maraithon.Insights.Insight
+  alias Maraithon.PreferenceMemory
+
+  setup do
+    user_id = "preference-memory@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, _agent} =
+      Agents.create_agent(%{
+        user_id: user_id,
+        behavior: "founder_followthrough_agent",
+        config: %{"timezone_offset_hours" => -5}
+      })
+
+    %{user_id: user_id}
+  end
+
+  test "stores explicit preference rules and renders a summary", %{user_id: user_id} do
+    llm_complete = fn _prompt ->
+      {:ok,
+       Jason.encode!(%{
+         "reply" =>
+           "Understood. I'll stop surfacing receipt-style noise unless there's a real ask.",
+         "rules" => [
+           %{
+             "id" => "ignore_receipts",
+             "kind" => "content_filter",
+             "label" => "Ignore receipt-style notifications",
+             "instruction" =>
+               "Suppress receipts, invoices, payment confirmations, and order confirmations unless there is a clear human ask or unresolved commitment.",
+             "applies_to" => ["gmail", "calendar", "slack", "telegram"],
+             "confidence" => 0.97,
+             "filters" => %{
+               "topics" => ["receipts", "invoices", "payment_confirmations"],
+               "require_human_ask_to_override" => true
+             }
+           }
+         ]
+       })}
+    end
+
+    assert {:ok, %{reply: reply, learned: [rule]}} =
+             PreferenceMemory.apply_explicit_instruction(
+               user_id,
+               "ignore receipts",
+               llm_complete: llm_complete
+             )
+
+    assert reply =~ "receipt-style noise"
+    assert rule["id"] == "ignore_receipts"
+    assert [%{"id" => "ignore_receipts"}] = PreferenceMemory.active_rules(user_id)
+    assert PreferenceMemory.render_summary(user_id) =~ "`ignore_receipts`"
+  end
+
+  test "quiet hours suppress internal telegram interruptions but allow external ones", %{
+    user_id: user_id
+  } do
+    llm_complete = fn _prompt ->
+      {:ok,
+       Jason.encode!(%{
+         "reply" => "After hours, I'll only interrupt for external loops.",
+         "rules" => [
+           %{
+             "id" => "after_hours_external_only",
+             "kind" => "quiet_hours",
+             "label" => "After-hours Telegram only for external loops",
+             "instruction" =>
+               "After 8pm local time, suppress Telegram interruptions unless the counterparty is external.",
+             "applies_to" => ["telegram"],
+             "confidence" => 0.94,
+             "filters" => %{
+               "start_hour_local" => 20,
+               "end_hour_local" => 8,
+               "allow_if_external" => true
+             }
+           }
+         ]
+       })}
+    end
+
+    assert {:ok, _result} =
+             PreferenceMemory.apply_explicit_instruction(
+               user_id,
+               "don't interrupt after 8pm unless external",
+               llm_complete: llm_complete
+             )
+
+    quiet_time = DateTime.from_naive!(~N[2026-03-12 02:30:00], "Etc/UTC")
+
+    internal_insight = %Insight{
+      user_id: user_id,
+      source: "gmail",
+      category: "reply_urgent",
+      title: "Internal billing thread",
+      summary: "An internal receipt thread.",
+      recommended_action: "Ignore it.",
+      metadata: %{
+        "account" => "kent@runner.now",
+        "from" => "ops@runner.now",
+        "to" => "kent@runner.now"
+      }
+    }
+
+    external_insight = %Insight{
+      user_id: user_id,
+      source: "gmail",
+      category: "reply_urgent",
+      title: "Investor follow-up",
+      summary: "External follow-up still open.",
+      recommended_action: "Reply now.",
+      metadata: %{
+        "account" => "kent@runner.now",
+        "from" => "partner@sequoiacap.com",
+        "to" => "kent@runner.now"
+      }
+    }
+
+    refute PreferenceMemory.allow_telegram_interrupt?(user_id, internal_insight, quiet_time)
+    assert PreferenceMemory.allow_telegram_interrupt?(user_id, external_insight, quiet_time)
+  end
+end

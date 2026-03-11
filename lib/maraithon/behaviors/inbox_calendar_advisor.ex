@@ -995,6 +995,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
     candidates_json = Jason.encode!(candidates)
     feedback_json = Jason.encode!(feedback_context[:recent_feedback] || [])
     threshold_json = Jason.encode!(feedback_context[:threshold_profile] || %{})
+    preference_json = Jason.encode!(feedback_context[:preference_profile] || %{})
 
     """
     You are a founder accountability assistant for Gmail + Calendar follow-through.
@@ -1005,6 +1006,9 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
 
     Recent Telegram feedback JSON:
     #{feedback_json}
+
+    Durable preference memory JSON:
+    #{preference_json}
 
     Input candidates JSON:
     #{candidates_json}
@@ -1023,6 +1027,9 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
       (payment confirmations, invoices, password resets, marketing/autonotifications)
       unless there is a clear human ask or explicit founder commitment that is still open.
     - If an item is mostly informational/receipt-like, omit it from output instead of rewording it.
+    - Respect the durable preference memory above. Explicit remembered preferences outrank generic priors.
+    - If the preferences imply after-hours Telegram suppression, reflect that in interrupt_now and telegram_fit_score.
+    - If the preferences imply a topic or counterparty class should be urgent, bias toward surfacing it.
     - Examples to exclude:
       1. "Your payment was successful"
       2. "Your Tuesday afternoon order with Uber Eats"

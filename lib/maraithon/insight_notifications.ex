@@ -12,6 +12,7 @@ defmodule Maraithon.InsightNotifications do
   alias Maraithon.InsightNotifications.{Delivery, ThresholdProfile}
   alias Maraithon.Insights
   alias Maraithon.Insights.Insight
+  alias Maraithon.PreferenceMemory
   alias Maraithon.Repo
 
   require Logger
@@ -94,6 +95,7 @@ defmodule Maraithon.InsightNotifications do
 
   defp stage_for_account(account) do
     destination = account.external_account_id || get_in(account.metadata, ["chat_id"])
+    now = DateTime.utc_now()
 
     if is_binary(destination) and String.trim(destination) != "" do
       {:ok, profile} = get_or_create_profile(account.user_id)
@@ -102,7 +104,9 @@ defmodule Maraithon.InsightNotifications do
       |> Enum.reduce(0, fn insight, count ->
         score = insight_score(insight)
 
-        if score >= profile.score_threshold and not delivery_exists?(insight.id, destination) do
+        if score >= profile.score_threshold and
+             PreferenceMemory.allow_telegram_interrupt?(account.user_id, insight, now) and
+             not delivery_exists?(insight.id, destination) do
           attrs = %{
             insight_id: insight.id,
             user_id: account.user_id,
@@ -174,8 +178,8 @@ defmodule Maraithon.InsightNotifications do
     with {:ok, delivery_id, feedback} <- parse_feedback_data(callback_data),
          %Delivery{} = delivery <- Repo.get(Delivery, delivery_id),
          true <- delivery.channel == "telegram" and to_string(delivery.destination) == chat_id,
-         {:ok, _updated_delivery} <- apply_feedback(delivery, feedback) do
-      maybe_answer_callback(callback_id, feedback_ack_text(feedback))
+         {:ok, updated_delivery} <- apply_feedback(delivery, feedback) do
+      maybe_answer_callback(callback_id, feedback_ack_text(updated_delivery, feedback))
       :ok
     else
       {:error, :already_recorded} ->
@@ -227,7 +231,7 @@ defmodule Maraithon.InsightNotifications do
         updated_delivery
       end)
       |> case do
-        {:ok, updated_delivery} -> {:ok, updated_delivery}
+        {:ok, updated_delivery} -> {:ok, Repo.preload(updated_delivery, :insight)}
         {:error, reason} -> {:error, reason}
       end
     end
@@ -261,8 +265,85 @@ defmodule Maraithon.InsightNotifications do
         link_telegram_chat(chat_id, text, read_map(data, "from"))
 
       true ->
+        maybe_handle_preference_command(chat_id, text)
+    end
+  end
+
+  defp maybe_handle_preference_command(chat_id, text) when is_binary(chat_id) do
+    command_text = String.trim(text || "")
+
+    case ConnectedAccounts.get_connected_by_external_account("telegram", chat_id) do
+      nil ->
+        maybe_reply_preference_help(chat_id, command_text)
+
+      account ->
+        handle_connected_preference_command(account.user_id, chat_id, command_text)
+    end
+  end
+
+  defp maybe_handle_preference_command(_chat_id, _text), do: :ok
+
+  defp handle_connected_preference_command(user_id, chat_id, text) do
+    cond do
+      text in ["/preferences", "/prefs", "/memory"] ->
+        telegram_module().send_message(chat_id, PreferenceMemory.render_summary(user_id))
+        :ok
+
+      String.starts_with?(text, "/prefer") or String.starts_with?(text, "/policy") ->
+        instruction = text |> String.split(~r/\s+/, parts: 2) |> Enum.at(1, "")
+
+        case PreferenceMemory.apply_explicit_instruction(user_id, instruction) do
+          {:ok, %{reply: reply}} -> telegram_module().send_message(chat_id, reply)
+          {:error, _reason} -> telegram_module().send_message(chat_id, preference_help_text())
+        end
+
+        :ok
+
+      String.starts_with?(text, "/forget") ->
+        rule_id = text |> String.split(~r/\s+/, parts: 2) |> Enum.at(1, "")
+
+        case PreferenceMemory.forget_rule(user_id, rule_id) do
+          {:ok, reply} ->
+            telegram_module().send_message(chat_id, reply)
+
+          {:error, :rule_not_found} ->
+            telegram_module().send_message(chat_id, "No saved rule matched that id.")
+
+          {:error, _reason} ->
+            telegram_module().send_message(chat_id, preference_help_text())
+        end
+
+        :ok
+
+      true ->
         :ok
     end
+  end
+
+  defp maybe_reply_preference_help(chat_id, command_text) do
+    if command_text in ["/preferences", "/prefs", "/memory"] or
+         String.starts_with?(command_text, "/prefer") or
+         String.starts_with?(command_text, "/policy") or
+         String.starts_with?(command_text, "/forget") do
+      telegram_module().send_message(
+        chat_id,
+        "Link this chat first with /start your@email.com, then use /prefer or /preferences."
+      )
+    else
+      :ok
+    end
+  end
+
+  defp preference_help_text do
+    """
+    Preference commands:
+    /preferences
+    /prefer ignore receipts
+    /prefer treat investors as urgent
+    /prefer don't interrupt after 8pm unless external
+    /forget RULE_ID
+    """
+    |> String.trim()
   end
 
   defp link_telegram_chat(chat_id, command_text, from_user) do
@@ -377,9 +458,28 @@ defmodule Maraithon.InsightNotifications do
     :ok
   end
 
-  defp feedback_ack_text("helpful"), do: "Thanks, we will send similar insights."
-  defp feedback_ack_text("not_helpful"), do: "Got it, we will be more selective."
-  defp feedback_ack_text(_), do: "Feedback saved."
+  defp feedback_ack_text(%Delivery{} = delivery, feedback) do
+    learned_reply =
+      case PreferenceMemory.learn_from_feedback(delivery.user_id, delivery.insight, feedback) do
+        {:ok, %{reply: reply}} when is_binary(reply) and reply != "" -> reply
+        _ -> nil
+      end
+
+    base =
+      case feedback do
+        "helpful" -> "Thanks, we will send similar insights."
+        "not_helpful" -> "Got it, we will be more selective."
+        _ -> "Feedback saved."
+      end
+
+    if is_binary(learned_reply),
+      do: truncate_callback_text("#{base} #{learned_reply}"),
+      else: base
+  end
+
+  defp truncate_callback_text(text) when is_binary(text) do
+    if String.length(text) <= 180, do: text, else: String.slice(text, 0, 177) <> "..."
+  end
 
   defp delivery_exists?(insight_id, destination) do
     Delivery

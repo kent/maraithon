@@ -16,7 +16,13 @@ defmodule Maraithon.TestSupport.CapturingTelegram do
     {:ok, %{"message_id" => 123}}
   end
 
-  def answer_callback_query(_callback_query_id, _opts \\ []) do
+  def answer_callback_query(_callback_query_id, opts \\ []) do
+    if pid = Process.whereis(:capturing_telegram_recorder) do
+      Agent.update(pid, fn messages ->
+        [%{type: :callback, opts: opts} | messages]
+      end)
+    end
+
     {:ok, true}
   end
 

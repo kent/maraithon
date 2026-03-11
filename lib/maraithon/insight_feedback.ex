@@ -6,6 +6,7 @@ defmodule Maraithon.InsightFeedback do
   import Ecto.Query
 
   alias Maraithon.InsightNotifications.{Delivery, ThresholdProfile}
+  alias Maraithon.PreferenceMemory
   alias Maraithon.Repo
 
   @default_recent_limit 8
@@ -17,12 +18,17 @@ defmodule Maraithon.InsightFeedback do
 
     %{
       threshold_profile: threshold_profile(user_id),
-      recent_feedback: recent_feedback(user_id, limit: limit)
+      recent_feedback: recent_feedback(user_id, limit: limit),
+      preference_profile: PreferenceMemory.prompt_context(user_id)
     }
   end
 
   def prompt_context(_user_id, _opts) do
-    %{threshold_profile: nil, recent_feedback: []}
+    %{
+      threshold_profile: nil,
+      recent_feedback: [],
+      preference_profile: PreferenceMemory.prompt_context(nil)
+    }
   end
 
   defp threshold_profile(user_id) do

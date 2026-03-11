@@ -6,6 +6,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisorTest do
   alias Maraithon.Behaviors.InboxCalendarAdvisor
   alias Maraithon.InsightNotifications.Delivery
   alias Maraithon.Insights
+  alias Maraithon.PreferenceMemory
   alias Maraithon.Repo
 
   setup do
@@ -104,6 +105,30 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisorTest do
         })
       )
 
+      {:ok, _preference} =
+        PreferenceMemory.apply_explicit_instruction(
+          user_id,
+          "treat investors as urgent",
+          llm_complete: fn _prompt ->
+            {:ok,
+             Jason.encode!(%{
+               "reply" => "Understood. I'll bias investor-related loops toward urgency.",
+               "rules" => [
+                 %{
+                   "id" => "treat_investors_urgent",
+                   "kind" => "urgency_boost",
+                   "label" => "Treat investors as urgent",
+                   "instruction" =>
+                     "Bias investor-related Gmail, Calendar, and Slack loops toward higher urgency and faster interruption.",
+                   "applies_to" => ["gmail", "calendar", "slack", "telegram"],
+                   "confidence" => 0.94,
+                   "filters" => %{"topics" => ["investor"], "priority_bias" => "high"}
+                 }
+               ]
+             })}
+          end
+        )
+
       state = InboxCalendarAdvisor.init(%{"user_id" => user_id})
 
       payload = %{
@@ -127,7 +152,9 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisorTest do
       prompt = get_in(params, ["messages", Access.at(0), "content"])
 
       assert prompt =~ "Recent Telegram feedback JSON"
+      assert prompt =~ "Durable preference memory JSON"
       assert prompt =~ "Customer escalation follow-up"
+      assert prompt =~ "Treat investors as urgent"
       assert prompt =~ "telegram_fit_score"
     end
 
