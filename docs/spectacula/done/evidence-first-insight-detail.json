@@ -1,0 +1,87 @@
+{
+  "spec_id": "evidence-first-insight-detail",
+  "slug": "evidence-first-insight-detail",
+  "title": "Evidence-First Insight Detail",
+  "stage": "done",
+  "spec_path": "../specs/evidence-first-insight-detail.md",
+  "created_at": "2026-03-12T13:55:10Z",
+  "started_at": "2026-03-12T14:28:57Z",
+  "updated_at": "2026-03-12T14:57:08Z",
+  "summary": "Implemented evidence-first insight detail across the dashboard, shared detail normalization, Telegram explanation parity, metadata enrichment, and telemetry, then cleared the final admin log-buffer test blocker.",
+  "next_action": "No further implementation work is pending. Optional manual product validation can review dashboard detail copy and Telegram explanation output.",
+  "blockers": [],
+  "reference_examples": [
+    "docs/plans/telegram_conversational_memory_spec.md"
+  ],
+  "verification": {
+    "format": "passed",
+    "lint": "not_applicable",
+    "typecheck": "not_applicable",
+    "build": "passed",
+    "tests": "passed",
+    "spec_review": "passed",
+    "notes": "`mix precommit` passed on 2026-03-12 after implementing the shared insight-detail contract, dashboard accordion/detail rendering, Telegram parity, metadata.detail enrichment, and test synchronization for direct LogBuffer writes. The project has no separate lint or typecheck gate beyond compile/test."
+  },
+  "resume_context": {
+    "last_completed_step": "Implemented the spec end to end and verified it with the full repo precommit gate.",
+    "pending_steps": [],
+    "open_questions": [],
+    "last_reviewed_sections": [
+      "1. Overview and Goals",
+      "2. Current State and Problem",
+      "4. UX / Interaction Model",
+      "6. Data And Domain Model",
+      "7. Backend / Service / Context Changes",
+      "9. Observability And Instrumentation",
+      "11. Rollout / Migration Plan",
+      "13. Definition Of Done",
+      "14. Open Questions And Assumptions"
+    ],
+    "artifacts": [
+      "docs/spectacula/specs/evidence-first-insight-detail.md",
+      "lib/maraithon_web/live/dashboard_live.ex",
+      "lib/maraithon/insights.ex",
+      "lib/maraithon/insights/detail.ex",
+      "lib/maraithon/behaviors/inbox_calendar_advisor.ex",
+      "lib/maraithon/telegram_router.ex"
+    ],
+    "notes": "Key follow-through included pruning expanded-card state across refreshes, filtering agent logs before applying log limits, and synchronizing tests that inject LogBuffer entries directly."
+  },
+  "history": [
+    {
+      "at": "2026-03-12T13:55:10Z",
+      "event": "spec_created",
+      "from_stage": null,
+      "to_stage": "specs",
+      "note": "Initial draft created from repo context, existing insight metadata contracts, and user clarifications."
+    },
+    {
+      "at": "2026-03-12T14:17:53Z",
+      "event": "spec_audited",
+      "from_stage": "specs",
+      "to_stage": "specs",
+      "note": "Audit found remaining gaps in dashboard refresh behavior, explanation-path parity, and telemetry plus rollout specificity."
+    },
+    {
+      "at": "2026-03-12T14:25:38Z",
+      "event": "spec_upgraded",
+      "from_stage": "specs",
+      "to_stage": "specs",
+      "note": "Rewrote the draft to add refresh-safe state rules, shared explanation parity, privacy-safe delivery presentation, explicit telemetry contracts, rollout, and definition-of-done criteria."
+    },
+    {
+      "at": "2026-03-12T14:28:57Z",
+      "event": "implementation_started",
+      "from_stage": "specs",
+      "to_stage": "inprogress",
+      "note": "Implementation began for the dashboard detail builder, render path, telemetry, and Telegram explanation parity."
+    },
+    {
+      "at": "2026-03-12T14:57:08Z",
+      "event": "implementation_completed",
+      "from_stage": "inprogress",
+      "to_stage": "done",
+      "note": "Implemented the evidence-first insight detail contract, verified with `mix precommit`, and closed the remaining admin log-buffer test issue."
+    }
+  ]
+}

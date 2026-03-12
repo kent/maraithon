@@ -27,6 +27,8 @@ defmodule Maraithon.AdminTest do
         metadata: %{agent_id: agent.id}
       })
 
+      _ = :sys.get_state(Maraithon.LogBuffer)
+
       {:ok, _failed_effect} =
         %Effect{}
         |> Effect.changeset(%{
@@ -181,6 +183,8 @@ defmodule Maraithon.AdminTest do
         metadata: %{agent_id: agent.id}
       })
 
+      _ = :sys.get_state(Maraithon.LogBuffer)
+
       on_exit(fn ->
         Maraithon.LogBuffer.clear()
       end)
@@ -205,6 +209,8 @@ defmodule Maraithon.AdminTest do
         message: "agent query failed",
         metadata: %{"agent_id" => "agent-123"}
       })
+
+      _ = :sys.get_state(Maraithon.LogBuffer)
 
       on_exit(fn ->
         Maraithon.LogBuffer.clear()

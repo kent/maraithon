@@ -5,6 +5,8 @@ defmodule Maraithon.Insights do
 
   import Ecto.Query
 
+  alias Maraithon.InsightNotifications.Delivery
+  alias Maraithon.Insights.Detail
   alias Maraithon.Insights.Insight
   alias Maraithon.Repo
 
@@ -12,15 +14,25 @@ defmodule Maraithon.Insights do
 
   def list_open_for_user(user_id, opts \\ []) when is_binary(user_id) do
     limit = Keyword.get(opts, :limit, 20)
-    now = DateTime.utc_now()
 
-    Insight
-    |> where([i], i.user_id == ^user_id)
-    |> where([i], i.status in ^@open_statuses)
-    |> where([i], i.status != "snoozed" or is_nil(i.snoozed_until) or i.snoozed_until <= ^now)
-    |> order_by([i], desc: i.priority, asc_nulls_last: i.due_at, desc: i.inserted_at)
+    user_id
+    |> open_for_user_query()
     |> limit(^limit)
     |> Repo.all()
+  end
+
+  def list_open_with_details_for_user(user_id, opts \\ []) when is_binary(user_id) do
+    insights = list_open_for_user(user_id, opts)
+    deliveries_by_insight_id = deliveries_by_insight_id(user_id, insights)
+
+    Enum.map(insights, fn insight ->
+      deliveries = Map.get(deliveries_by_insight_id, insight.id, [])
+
+      %{
+        insight: insight,
+        detail: Detail.build(insight, deliveries)
+      }
+    end)
   end
 
   def list_recent_for_user(user_id, opts \\ []) when is_binary(user_id) do
@@ -100,6 +112,29 @@ defmodule Maraithon.Insights do
       conflict_target: [:user_id, :dedupe_key],
       returning: true
     )
+  end
+
+  defp open_for_user_query(user_id) when is_binary(user_id) do
+    now = DateTime.utc_now()
+
+    Insight
+    |> where([i], i.user_id == ^user_id)
+    |> where([i], i.status in ^@open_statuses)
+    |> where([i], i.status != "snoozed" or is_nil(i.snoozed_until) or i.snoozed_until <= ^now)
+    |> order_by([i], desc: i.priority, asc_nulls_last: i.due_at, desc: i.inserted_at)
+  end
+
+  defp deliveries_by_insight_id(_user_id, []), do: %{}
+
+  defp deliveries_by_insight_id(user_id, insights)
+       when is_binary(user_id) and is_list(insights) do
+    insight_ids = Enum.map(insights, & &1.id)
+
+    Delivery
+    |> where([d], d.user_id == ^user_id and d.insight_id in ^insight_ids)
+    |> order_by([d], desc_nulls_last: d.sent_at, desc: d.inserted_at)
+    |> Repo.all()
+    |> Enum.group_by(& &1.insight_id)
   end
 
   defp update_status(user_id, insight_id, status) do

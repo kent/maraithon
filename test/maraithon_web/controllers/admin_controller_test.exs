@@ -26,6 +26,8 @@ defmodule MaraithonWeb.AdminControllerTest do
         metadata: %{agent_id: agent.id}
       })
 
+      _ = :sys.get_state(Maraithon.LogBuffer)
+
       on_exit(fn ->
         Maraithon.LogBuffer.clear()
       end)
@@ -82,6 +84,8 @@ defmodule MaraithonWeb.AdminControllerTest do
         message: "inspection log entry",
         metadata: %{agent_id: agent.id}
       })
+
+      _ = :sys.get_state(Maraithon.LogBuffer)
 
       on_exit(fn ->
         Maraithon.LogBuffer.clear()

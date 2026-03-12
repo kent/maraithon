@@ -892,6 +892,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
             |> Map.put("next_action", merged_record["next_action"])
             |> Map.put("feedback_tuned", true)
           end)
+          |> put_detail_metadata()
         end
       end
     end
@@ -1372,6 +1373,83 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
         |> Map.put("next_action", read_string(record, "next_action", metadata["next_action"]))
       end
     end)
+    |> put_detail_metadata()
+  end
+
+  defp put_detail_metadata(candidate) when is_map(candidate) do
+    metadata = read_map(candidate, "metadata")
+    existing_detail = read_map(metadata, "detail")
+    record = read_map(metadata, "record")
+
+    detail =
+      compact_map(%{
+        "promise_text" =>
+          read_string(existing_detail, "promise_text", nil) ||
+            read_string(record, "commitment", nil) ||
+            read_string(metadata, "commitment", nil),
+        "requested_by" =>
+          read_string(existing_detail, "requested_by", nil) ||
+            read_string(record, "person", nil) ||
+            read_string(metadata, "person", nil),
+        "open_loop_reason" =>
+          read_string(existing_detail, "open_loop_reason", nil) ||
+            read_string(metadata, "reasoning_summary", nil) ||
+            read_string(metadata, "why_now", nil) ||
+            read_string(metadata, "context_brief", nil),
+        "checked_evidence" =>
+          case detail_evidence_items(candidate, metadata, record) do
+            [] -> read_list(existing_detail, "checked_evidence")
+            items -> items
+          end,
+        "evaluated_at" =>
+          read_string(existing_detail, "evaluated_at", nil) ||
+            DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()
+      })
+
+    if detail == %{} do
+      candidate
+    else
+      put_in(candidate, ["metadata", "detail"], detail)
+    end
+  end
+
+  defp put_detail_metadata(candidate), do: candidate
+
+  defp detail_evidence_items(candidate, metadata, record) do
+    source_ref =
+      read_string(record, "source", nil) ||
+        read_string(metadata, "source", nil) ||
+        read_string(candidate, "source_id", nil)
+
+    evidence =
+      case read_string_list(record, "evidence", @max_evidence_points) do
+        [] -> read_string_list(metadata, "evidence", @max_evidence_points)
+        values -> values
+      end
+
+    evidence_items =
+      Enum.map(evidence, fn line ->
+        compact_map(%{
+          "kind" => "source_evidence",
+          "label" => line,
+          "source_ref" => source_ref
+        })
+      end)
+
+    deadline_item =
+      case read_string(record, "deadline", nil) || to_iso8601(read_datetime(candidate, "due_at")) do
+        nil ->
+          nil
+
+        deadline ->
+          compact_map(%{
+            "kind" => "deadline",
+            "label" => "Deadline",
+            "detail" => "Due #{deadline}"
+          })
+      end
+
+    compact_list(evidence_items ++ List.wrap(deadline_item))
   end
 
   defp contains_any?(text, terms) when is_binary(text) do
@@ -1659,6 +1737,15 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
       {_key, []}, acc -> acc
       {_key, ""}, acc -> acc
       {key, value}, acc -> Map.put(acc, key, value)
+    end)
+  end
+
+  defp compact_list(values) when is_list(values) do
+    Enum.reject(values, fn
+      nil -> true
+      %{} = value -> value == %{}
+      "" -> true
+      _ -> false
     end)
   end
 

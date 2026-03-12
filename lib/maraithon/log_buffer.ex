@@ -27,6 +27,15 @@ defmodule Maraithon.LogBuffer do
     end
   end
 
+  def recent_matching(limit, matcher)
+      when is_integer(limit) and limit > 0 and is_function(matcher, 1) do
+    if Process.whereis(__MODULE__) do
+      GenServer.call(__MODULE__, {:recent_matching, limit, matcher})
+    else
+      []
+    end
+  end
+
   def clear do
     if Process.whereis(__MODULE__) do
       GenServer.call(__MODULE__, :clear)
@@ -61,6 +70,17 @@ defmodule Maraithon.LogBuffer do
       |> :queue.to_list()
       |> Enum.take(-limit)
       |> Enum.reverse()
+
+    {:reply, entries, state}
+  end
+
+  def handle_call({:recent_matching, limit, matcher}, _from, state) do
+    entries =
+      state.entries
+      |> :queue.to_list()
+      |> Enum.reverse()
+      |> Enum.filter(matcher)
+      |> Enum.take(limit)
 
     {:reply, entries, state}
   end

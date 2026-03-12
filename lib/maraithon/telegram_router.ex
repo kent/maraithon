@@ -3,9 +3,12 @@ defmodule Maraithon.TelegramRouter do
   Orchestrates Telegram freeform chat, reply-thread learning, and action requests.
   """
 
+  import Ecto.Query
+
   alias Maraithon.ConnectedAccounts
   alias Maraithon.InsightNotifications.Actions
   alias Maraithon.InsightNotifications.Delivery
+  alias Maraithon.Insights.Detail
   alias Maraithon.PreferenceMemory
   alias Maraithon.Repo
   alias Maraithon.TelegramConversations
@@ -598,48 +601,22 @@ defmodule Maraithon.TelegramRouter do
   defp clarification_depth(_conversation), do: 0
 
   defp explain_insight(%Delivery{} = delivery, insight, interpretation) do
-    metadata = (insight || delivery.insight).metadata || %{}
-    why_now = Map.get(metadata, "why_now") || Map.get(metadata, "context_brief")
+    insight = insight || delivery.insight
 
-    evidence_lines =
-      metadata
-      |> Map.get("record", %{})
-      |> Map.get("evidence", [])
-      |> List.wrap()
-      |> Enum.filter(&is_binary/1)
-      |> Enum.take(3)
+    detail =
+      insight
+      |> insight_deliveries(delivery)
+      |> then(&Detail.build(insight, &1))
 
-    evidence_text =
-      case evidence_lines do
-        [] -> "I didn’t find completion evidence after the original commitment."
-        lines -> Enum.map_join(lines, "\n", fn line -> "- #{line}" end)
-      end
+    Detail.summary_text(detail, insight, extra_reply: Map.get(interpretation, "assistant_reply"))
+  end
 
-    why_now_text =
-      case why_now do
-        value when is_binary(value) and value != "" -> value
-        _ -> "This still appears open based on the source evidence I checked."
-      end
-
-    extra_reply =
-      case Map.get(interpretation, "assistant_reply") do
-        value when is_binary(value) and value != "" -> "\n\n#{value}"
-        _ -> ""
-      end
-
-    """
-    I surfaced this because it still looks like an open loop.
-
-    Why now:
-    #{why_now_text}
-
-    Evidence checked:
-    #{evidence_text}
-
-    Recommended action:
-    #{(insight || delivery.insight).recommended_action}#{extra_reply}
-    """
-    |> String.trim()
+  defp insight_deliveries(%{id: insight_id}, %Delivery{user_id: user_id})
+       when is_binary(insight_id) and is_binary(user_id) do
+    Delivery
+    |> where([d], d.insight_id == ^insight_id and d.user_id == ^user_id)
+    |> order_by([d], desc_nulls_last: d.sent_at, desc: d.inserted_at)
+    |> Repo.all()
   end
 
   defp create_linear_task(%Delivery{} = delivery) do

@@ -118,6 +118,7 @@ defmodule MaraithonWeb.DashboardLiveTest do
 
   alias Maraithon.Agents
   alias Maraithon.Effects.Effect
+  alias Maraithon.InsightNotifications.Delivery
   alias Maraithon.Insights
   alias Maraithon.OAuth
   alias Maraithon.Runtime.ScheduledJob
@@ -332,6 +333,8 @@ defmodule MaraithonWeb.DashboardLiveTest do
         metadata: %{"agent_id" => "agent-123"}
       })
 
+      _ = :sys.get_state(Maraithon.LogBuffer)
+
       on_exit(fn ->
         Maraithon.LogBuffer.clear()
       end)
@@ -364,6 +367,272 @@ defmodule MaraithonWeb.DashboardLiveTest do
 
       assert html =~ "Fly.io Platform Logs"
       assert html =~ "Configure `FLY_API_TOKEN` and `FLY_LOG_APPS`"
+    end
+  end
+
+  describe "evidence-first insight detail" do
+    test "renders cards collapsed by default and expands inline detail", %{conn: conn} do
+      {:ok, agent} =
+        create_agent(%{
+          behavior: "inbox_calendar_advisor",
+          config: %{},
+          status: "running",
+          started_at: DateTime.utc_now()
+        })
+
+      {:ok, [insight]} =
+        Insights.record_many(@user_email, agent.id, [
+          %{
+            "source" => "gmail",
+            "category" => "commitment_unresolved",
+            "title" => "Send the pricing doc to Sarah",
+            "summary" => "The pricing doc still appears open.",
+            "recommended_action" => "Send the pricing doc now.",
+            "priority" => 96,
+            "confidence" => 0.94,
+            "dedupe_key" => "dashboard:detail:expanded",
+            "metadata" => %{
+              "why_now" => "No sent artifact confirms delivery yet.",
+              "record" => %{
+                "commitment" => "Send the pricing doc to Sarah",
+                "person" => "Sarah",
+                "status" => "unresolved",
+                "evidence" => ["No follow-up email or attachment was found."],
+                "next_action" => "Send the promised follow-through now."
+              }
+            }
+          }
+        ])
+
+      {:ok, _delivery} =
+        create_insight_delivery(insight.id, %{
+          status: "sent",
+          sent_at: ~U[2026-03-12 14:00:00Z]
+        })
+
+      {:ok, view, html} = live(conn, "/dashboard")
+
+      assert html =~ "Show evidence"
+      refute html =~ "Exact promise"
+
+      html =
+        view
+        |> element("button[phx-click=toggle_insight_detail][phx-value-id=\"#{insight.id}\"]")
+        |> render_click()
+
+      assert html =~ "Exact promise"
+      assert html =~ "Send the pricing doc to Sarah"
+      assert html =~ "Who asked"
+      assert html =~ "Sarah"
+      assert html =~ "Delivery evidence checked"
+      assert html =~ "Telegram linked chat"
+      assert html =~ "Why Maraithon still thinks this is open"
+    end
+
+    test "shows explicit data gaps for sparse insights", %{conn: conn} do
+      {:ok, agent} =
+        create_agent(%{
+          behavior: "prompt_agent",
+          config: %{},
+          status: "running",
+          started_at: DateTime.utc_now()
+        })
+
+      {:ok, [insight]} =
+        Insights.record_many(@user_email, agent.id, [
+          %{
+            "source" => "github",
+            "category" => "product_opportunity",
+            "title" => "Review roadmap opportunity",
+            "summary" => "A product opportunity remains open.",
+            "recommended_action" => "Review the roadmap next step.",
+            "priority" => 72,
+            "confidence" => 0.7,
+            "dedupe_key" => "dashboard:detail:gaps"
+          }
+        ])
+
+      {:ok, view, _html} = live(conn, "/dashboard")
+
+      html =
+        view
+        |> element("button[phx-click=toggle_insight_detail][phx-value-id=\"#{insight.id}\"]")
+        |> render_click()
+
+      assert html =~ "Requester not captured for this insight."
+      assert html =~ "No persisted evidence bullets were captured for this insight."
+      assert html =~ "No delivery attempts recorded."
+      assert html =~ "Data gaps"
+    end
+
+    test "keeps expanded insights open across refreshes", %{conn: conn} do
+      {:ok, agent} =
+        create_agent(%{
+          behavior: "inbox_calendar_advisor",
+          config: %{},
+          status: "running",
+          started_at: DateTime.utc_now()
+        })
+
+      {:ok, [insight]} =
+        Insights.record_many(@user_email, agent.id, [
+          %{
+            "source" => "gmail",
+            "category" => "reply_urgent",
+            "title" => "Reply to the founder update",
+            "summary" => "A reply is still owed.",
+            "recommended_action" => "Reply now with the update.",
+            "priority" => 88,
+            "confidence" => 0.82,
+            "dedupe_key" => "dashboard:detail:refresh",
+            "metadata" => %{
+              "record" => %{
+                "commitment" => "Reply to the founder update",
+                "person" => "Sarah",
+                "status" => "unresolved",
+                "evidence" => ["No sent reply was found."],
+                "next_action" => "Reply now with the update."
+              }
+            }
+          }
+        ])
+
+      {:ok, view, _html} = live(conn, "/dashboard")
+
+      _html =
+        view
+        |> element("button[phx-click=toggle_insight_detail][phx-value-id=\"#{insight.id}\"]")
+        |> render_click()
+
+      send(view.pid, :refresh)
+      html = render(view)
+
+      assert html =~ "Exact promise"
+      assert html =~ "Reply to the founder update"
+    end
+
+    test "keeps insight actions working after expansion", %{conn: conn} do
+      {:ok, agent} =
+        create_agent(%{
+          behavior: "inbox_calendar_advisor",
+          config: %{},
+          status: "running",
+          started_at: DateTime.utc_now()
+        })
+
+      {:ok, [insight]} =
+        Insights.record_many(@user_email, agent.id, [
+          %{
+            "source" => "gmail",
+            "category" => "commitment_unresolved",
+            "title" => "Send the investor update",
+            "summary" => "The investor update still appears open.",
+            "recommended_action" => "Send the investor update now.",
+            "priority" => 93,
+            "confidence" => 0.91,
+            "dedupe_key" => "dashboard:detail:action",
+            "metadata" => %{
+              "record" => %{
+                "commitment" => "Send the investor update",
+                "person" => "Investors",
+                "status" => "unresolved",
+                "evidence" => ["No sent update was found."],
+                "next_action" => "Send the investor update now."
+              }
+            }
+          }
+        ])
+
+      {:ok, view, _html} = live(conn, "/dashboard")
+
+      _html =
+        view
+        |> element("button[phx-click=toggle_insight_detail][phx-value-id=\"#{insight.id}\"]")
+        |> render_click()
+
+      _html =
+        view
+        |> element("button[phx-click=ack_insight][phx-value-id=\"#{insight.id}\"]")
+        |> render_click()
+
+      html = render(view)
+
+      assert html =~ "Insight acknowledged"
+      assert html =~ "No actionable insights yet."
+      refute has_element?(view, "button[phx-click=ack_insight][phx-value-id=\"#{insight.id}\"]")
+    end
+
+    test "emits coverage, expand, collapse, and action telemetry", %{conn: conn} do
+      attach_insight_detail_telemetry(self())
+
+      {:ok, agent} =
+        create_agent(%{
+          behavior: "inbox_calendar_advisor",
+          config: %{},
+          status: "running",
+          started_at: DateTime.utc_now()
+        })
+
+      {:ok, [insight]} =
+        Insights.record_many(@user_email, agent.id, [
+          %{
+            "source" => "gmail",
+            "category" => "commitment_unresolved",
+            "title" => "Send the board packet",
+            "summary" => "The board packet still appears open.",
+            "recommended_action" => "Send the board packet now.",
+            "priority" => 97,
+            "confidence" => 0.95,
+            "dedupe_key" => "dashboard:detail:telemetry",
+            "metadata" => %{
+              "record" => %{
+                "commitment" => "Send the board packet",
+                "person" => "Board",
+                "status" => "unresolved",
+                "evidence" => ["No sent packet was found."],
+                "next_action" => "Send the board packet now."
+              }
+            }
+          }
+        ])
+
+      {:ok, view, _html} = live(conn, "/dashboard")
+
+      assert_receive {:insight_detail_telemetry,
+                      [:maraithon, :dashboard, :insight_detail, :coverage], %{insight_count: 1},
+                      %{source: :dashboard_refresh}}
+
+      _html =
+        view
+        |> element("button[phx-click=toggle_insight_detail][phx-value-id=\"#{insight.id}\"]")
+        |> render_click()
+
+      assert_receive {:insight_detail_telemetry,
+                      [:maraithon, :dashboard, :insight_detail, :expanded], %{count: 1}, metadata}
+
+      assert metadata.category == "commitment_unresolved"
+      assert metadata.has_promise_text == true
+
+      _html =
+        view
+        |> element("button[phx-click=toggle_insight_detail][phx-value-id=\"#{insight.id}\"]")
+        |> render_click()
+
+      assert_receive {:insight_detail_telemetry,
+                      [:maraithon, :dashboard, :insight_detail, :collapsed], %{count: 1},
+                      _metadata}
+
+      _html =
+        view
+        |> element("button[phx-click=dismiss_insight][phx-value-id=\"#{insight.id}\"]")
+        |> render_click()
+
+      assert_receive {:insight_detail_telemetry,
+                      [:maraithon, :dashboard, :insight_detail, :action], %{count: 1},
+                      action_metadata}
+
+      assert action_metadata.action == "dismiss"
+      assert action_metadata.detail_opened_before_action == true
     end
   end
 
@@ -445,7 +714,12 @@ defmodule MaraithonWeb.DashboardLiveTest do
         |> render_click()
 
       assert Agents.get_agent(agent.id) == nil
-      refute render(view) =~ "delete-me"
+
+      html = render(view)
+
+      assert html =~ "Agent deleted"
+      assert html =~ "No agents yet. Build one from the dedicated builder."
+      refute has_element?(view, "button[phx-click=delete_agent][phx-value-id=\"#{agent.id}\"]")
     end
   end
 
@@ -831,6 +1105,8 @@ defmodule MaraithonWeb.DashboardLiveTest do
         metadata: %{agent_id: agent.id}
       })
 
+      _ = :sys.get_state(Maraithon.LogBuffer)
+
       on_exit(fn ->
         Maraithon.LogBuffer.clear()
       end)
@@ -926,5 +1202,44 @@ defmodule MaraithonWeb.DashboardLiveTest do
   defp create_agent(attrs) do
     attrs = Map.put_new(attrs, :user_id, @user_email)
     Agents.create_agent(attrs)
+  end
+
+  defp create_insight_delivery(insight_id, attrs) do
+    defaults = %{
+      insight_id: insight_id,
+      user_id: @user_email,
+      channel: "telegram",
+      destination: "12345",
+      score: 0.94,
+      threshold: 0.8,
+      status: "pending"
+    }
+
+    %Delivery{}
+    |> Delivery.changeset(Map.merge(defaults, attrs))
+    |> Maraithon.Repo.insert()
+  end
+
+  defp attach_insight_detail_telemetry(test_pid) do
+    handler_id = "dashboard-insight-detail-#{System.unique_integer([:positive])}"
+
+    :ok =
+      :telemetry.attach_many(
+        handler_id,
+        [
+          [:maraithon, :dashboard, :insight_detail, :expanded],
+          [:maraithon, :dashboard, :insight_detail, :collapsed],
+          [:maraithon, :dashboard, :insight_detail, :action],
+          [:maraithon, :dashboard, :insight_detail, :coverage]
+        ],
+        fn event, measurements, metadata, pid ->
+          send(pid, {:insight_detail_telemetry, event, measurements, metadata})
+        end,
+        test_pid
+      )
+
+    on_exit(fn ->
+      :telemetry.detach(handler_id)
+    end)
   end
 end

@@ -522,14 +522,11 @@ defmodule Maraithon.Admin do
   end
 
   defp recent_agent_logs(agent_id, limit) do
-    limit
-    |> recent_logs()
-    |> Enum.filter(fn log ->
+    LogBuffer.recent_matching(limit, fn log ->
       case log.metadata do
         %{"agent_id" => ^agent_id} -> true
         _ -> false
       end
     end)
-    |> Enum.take(limit)
   end
 end

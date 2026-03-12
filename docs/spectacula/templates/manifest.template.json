@@ -1,0 +1,45 @@
+{
+  "spec_id": "<slug>",
+  "slug": "<slug>",
+  "title": "<Specification Title>",
+  "stage": "specs",
+  "spec_path": "../specs/<slug>.md",
+  "created_at": "<ISO-8601 timestamp>",
+  "updated_at": "<ISO-8601 timestamp>",
+  "summary": "Draft spec created and awaiting clarification.",
+  "next_action": "Answer open questions and refine the draft.",
+  "blockers": [],
+  "reference_examples": [],
+  "verification": {
+    "format": "pending",
+    "lint": "pending",
+    "typecheck": "pending",
+    "build": "pending",
+    "tests": "pending",
+    "spec_review": "pending",
+    "notes": ""
+  },
+  "resume_context": {
+    "last_completed_step": "Created initial draft from template.",
+    "pending_steps": [
+      "Fill in the major sections",
+      "Resolve open questions",
+      "Approve the spec"
+    ],
+    "open_questions": [],
+    "last_reviewed_sections": [],
+    "artifacts": [
+      "docs/spectacula/specs/<slug>.md"
+    ],
+    "notes": ""
+  },
+  "history": [
+    {
+      "at": "<ISO-8601 timestamp>",
+      "event": "spec_created",
+      "from_stage": null,
+      "to_stage": "specs",
+      "note": "Initial draft created from template."
+    }
+  ]
+}

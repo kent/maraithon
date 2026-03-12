@@ -118,7 +118,33 @@ defmodule Maraithon.TelegramRouterTest do
        })}
     end)
 
-    delivery = create_and_dispatch_gmail_delivery(user_id, agent.id)
+    delivery =
+      create_and_dispatch_gmail_delivery(user_id, agent.id, %{
+        "metadata" => %{
+          "context_brief" => "Legacy explanation should not win.",
+          "detail" => %{
+            "promise_text" => "Send the deck to Sarah",
+            "requested_by" => "Sarah",
+            "open_loop_reason" =>
+              "Stored detail rationale says the promised deck was never sent.",
+            "checked_evidence" => [
+              %{
+                "kind" => "source_evidence",
+                "label" => "Promise stated in email thread",
+                "detail" => "I'll send the deck by Friday.",
+                "source_ref" => "gmail:thread:1"
+              }
+            ]
+          },
+          "record" => %{
+            "person" => "Sarah",
+            "commitment" => "Send the deck to Sarah",
+            "evidence" => ["Legacy record evidence should not lead the explanation."],
+            "next_action" =>
+              "Send the promised follow-through now and explicitly confirm delivery in the same thread."
+          }
+        }
+      })
 
     :ok =
       InsightNotifications.handle_telegram_event(%{
@@ -381,7 +407,25 @@ defmodule Maraithon.TelegramRouterTest do
        })}
     end)
 
-    delivery = create_and_dispatch_gmail_delivery(user_id, agent.id)
+    delivery =
+      create_and_dispatch_gmail_delivery(user_id, agent.id, %{
+        "metadata" => %{
+          "detail" => %{
+            "promise_text" => "Send the deck to Sarah",
+            "requested_by" => "Sarah",
+            "open_loop_reason" =>
+              "Stored detail rationale says the promised deck was never sent.",
+            "checked_evidence" => [
+              %{
+                "kind" => "source_evidence",
+                "label" => "Promise stated in email thread",
+                "detail" => "I'll send the deck by Friday.",
+                "source_ref" => "gmail:thread:1"
+              }
+            ]
+          }
+        }
+      })
 
     :ok =
       InsightNotifications.handle_telegram_event(%{
@@ -398,7 +442,8 @@ defmodule Maraithon.TelegramRouterTest do
     assert reply.text =~ "Why now:"
     assert reply.text =~ "Evidence checked:"
     assert reply.text =~ "Recommended action:"
-    assert reply.text =~ "direct promise"
+    assert reply.text =~ "Stored detail rationale says the promised deck was never sent."
+    assert reply.text =~ "Promise stated in email thread"
   end
 
   test "clarification questions are tracked and cleared when the user answers", %{

@@ -1,11 +1,14 @@
 defmodule Maraithon.InsightsTest do
   use Maraithon.DataCase, async: true
 
+  alias Maraithon.Accounts
   alias Maraithon.Agents
+  alias Maraithon.InsightNotifications.Delivery
   alias Maraithon.Insights
 
   setup do
     user_id = "insights-user@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
 
     {:ok, agent} =
       Agents.create_agent(%{
@@ -92,6 +95,68 @@ defmodule Maraithon.InsightsTest do
 
       refute snoozed.id in open_ids
       assert length(open_ids) == 1
+    end
+  end
+
+  describe "list_open_with_details_for_user/2" do
+    test "preserves ordering and loads related delivery detail", %{user_id: user_id, agent: agent} do
+      {:ok, [first]} =
+        Insights.record_many(user_id, agent.id, [
+          %{
+            "source" => "gmail",
+            "category" => "commitment_unresolved",
+            "title" => "Send the pricing doc to Sarah",
+            "summary" => "The pricing doc still appears open.",
+            "recommended_action" => "Send the pricing doc now.",
+            "priority" => 95,
+            "confidence" => 0.92,
+            "dedupe_key" => "detail:first",
+            "metadata" => %{
+              "record" => %{
+                "commitment" => "Send the pricing doc to Sarah",
+                "person" => "Sarah",
+                "status" => "unresolved",
+                "evidence" => ["No follow-up email was found."],
+                "next_action" => "Send the promised follow-through now."
+              }
+            }
+          }
+        ])
+
+      {:ok, [second]} =
+        Insights.record_many(user_id, agent.id, [
+          %{
+            "source" => "calendar",
+            "category" => "meeting_follow_up",
+            "title" => "Send the board recap",
+            "summary" => "The board recap still appears open.",
+            "recommended_action" => "Send owners and next steps.",
+            "priority" => 70,
+            "confidence" => 0.75,
+            "dedupe_key" => "detail:second"
+          }
+        ])
+
+      {:ok, _delivery} =
+        %Delivery{}
+        |> Delivery.changeset(%{
+          insight_id: first.id,
+          user_id: user_id,
+          channel: "telegram",
+          destination: "12345",
+          score: 0.95,
+          threshold: 0.8,
+          status: "sent",
+          sent_at: DateTime.utc_now()
+        })
+        |> Repo.insert()
+
+      cards = Insights.list_open_with_details_for_user(user_id)
+
+      assert Enum.map(cards, & &1.insight.id) == [first.id, second.id]
+      assert hd(cards).detail.promise_text.text == "Send the pricing doc to Sarah"
+      assert hd(cards).detail.delivery_evidence != []
+      assert List.last(cards).detail.delivery_evidence == []
     end
   end
 

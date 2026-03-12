@@ -6,6 +6,7 @@ defmodule MaraithonWeb.DashboardLive do
   alias Maraithon.Agents
   alias Maraithon.Behaviors
   alias Maraithon.Connections
+  alias Maraithon.Insights.Detail
   alias Maraithon.Insights
   alias Maraithon.OnboardingProof
   alias Maraithon.Runtime
@@ -62,6 +63,8 @@ defmodule MaraithonWeb.DashboardLive do
         dashboard_errors: [],
         inspection_errors: [],
         insights: [],
+        expanded_insight_ids: MapSet.new(),
+        detail_opened_insight_ids: MapSet.new(),
         onboarding_preview: empty_onboarding_preview(),
         onboarding_preview_eligible?: OnboardingProof.eligible?(user_id)
       )
@@ -216,9 +219,45 @@ defmodule MaraithonWeb.DashboardLive do
     end
   end
 
+  def handle_event("toggle_insight_detail", %{"id" => insight_id}, socket) do
+    case insight_card(socket, insight_id) do
+      %{insight: insight, detail: detail} ->
+        expanded? = MapSet.member?(socket.assigns.expanded_insight_ids, insight_id)
+
+        expanded_insight_ids =
+          if expanded? do
+            MapSet.delete(socket.assigns.expanded_insight_ids, insight_id)
+          else
+            MapSet.put(socket.assigns.expanded_insight_ids, insight_id)
+          end
+
+        detail_opened_insight_ids =
+          if expanded? do
+            socket.assigns.detail_opened_insight_ids
+          else
+            MapSet.put(socket.assigns.detail_opened_insight_ids, insight_id)
+          end
+
+        emit_insight_detail_toggle_telemetry(expanded?, insight, detail)
+
+        {:noreply,
+         assign(socket,
+           expanded_insight_ids: expanded_insight_ids,
+           detail_opened_insight_ids: detail_opened_insight_ids
+         )}
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
   def handle_event("ack_insight", %{"id" => insight_id}, socket) do
+    card = insight_card(socket, insight_id)
+
     case Insights.acknowledge(current_user_id(socket), insight_id) do
       {:ok, _insight} ->
+        maybe_emit_insight_action_telemetry(socket, "acknowledge", card, insight_id)
+
         {:noreply, socket |> refresh_insights() |> put_flash(:info, "Insight acknowledged")}
 
       {:error, :not_found} ->
@@ -230,8 +269,12 @@ defmodule MaraithonWeb.DashboardLive do
   end
 
   def handle_event("dismiss_insight", %{"id" => insight_id}, socket) do
+    card = insight_card(socket, insight_id)
+
     case Insights.dismiss(current_user_id(socket), insight_id) do
       {:ok, _insight} ->
+        maybe_emit_insight_action_telemetry(socket, "dismiss", card, insight_id)
+
         {:noreply, socket |> refresh_insights() |> put_flash(:info, "Insight dismissed")}
 
       {:error, :not_found} ->
@@ -244,9 +287,12 @@ defmodule MaraithonWeb.DashboardLive do
 
   def handle_event("snooze_insight", %{"id" => insight_id}, socket) do
     snooze_until = DateTime.add(DateTime.utc_now(), 4, :hour)
+    card = insight_card(socket, insight_id)
 
     case Insights.snooze(current_user_id(socket), insight_id, snooze_until) do
       {:ok, _insight} ->
+        maybe_emit_insight_action_telemetry(socket, "snooze", card, insight_id)
+
         {:noreply,
          socket
          |> refresh_insights()
@@ -633,7 +679,10 @@ defmodule MaraithonWeb.DashboardLive do
         </div>
 
         <div class="divide-y divide-slate-200">
-          <%= for insight <- @insights do %>
+          <%= for card <- @insights do %>
+            <% insight = card.insight %>
+            <% detail = card.detail %>
+            <% expanded? = MapSet.member?(@expanded_insight_ids, insight.id) %>
             <div class="px-4 py-4 sm:px-6">
               <div class="flex flex-wrap items-start justify-between gap-3">
                 <div class="min-w-0 flex-1">
@@ -676,6 +725,125 @@ defmodule MaraithonWeb.DashboardLive do
                         <li>- <%= idea %></li>
                       <% end %>
                     </ul>
+                  <% end %>
+                  <button
+                    type="button"
+                    phx-click="toggle_insight_detail"
+                    phx-value-id={insight.id}
+                    aria-expanded={to_string(expanded?)}
+                    aria-controls={"insight-detail-#{insight.id}"}
+                    class="mt-3 inline-flex items-center rounded-md border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100"
+                  >
+                    <%= if expanded?, do: "Hide evidence", else: "Show evidence" %>
+                  </button>
+
+                  <%= if expanded? do %>
+                    <div
+                      id={"insight-detail-#{insight.id}"}
+                      class="mt-4 space-y-4 rounded-xl border border-slate-200 bg-slate-50/80 p-4"
+                    >
+                      <.insight_detail_section
+                        title="Exact promise"
+                        value={detail_text(detail.promise_text) || "Exact promise not captured for this insight."}
+                        origin={detail_origin_label(detail.promise_text)}
+                      />
+                      <.insight_detail_section
+                        title="Who asked"
+                        value={detail_text(detail.requested_by) || "Requester not captured for this insight."}
+                        origin={detail_origin_label(detail.requested_by)}
+                      />
+                      <div class="space-y-2">
+                        <div class="flex items-center gap-2">
+                          <p class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                            Evidence checked
+                          </p>
+                        </div>
+                        <%= if detail.evidence_checked == [] do %>
+                          <p class="text-sm text-slate-600">
+                            No persisted evidence bullets were captured for this insight.
+                          </p>
+                        <% else %>
+                          <ul class="space-y-2 text-sm text-slate-700">
+                            <%= for item <- detail.evidence_checked do %>
+                              <li class="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                                <p class="font-medium text-slate-900"><%= item.label %></p>
+                                <p :if={item.detail} class="mt-1 text-slate-600"><%= item.detail %></p>
+                                <p class="mt-1 text-xs text-slate-500">
+                                  <%= evidence_metadata(item) %>
+                                </p>
+                              </li>
+                            <% end %>
+                          </ul>
+                        <% end %>
+                      </div>
+                      <div class="space-y-2">
+                        <div class="flex items-center gap-2">
+                          <p class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                            Delivery evidence checked
+                          </p>
+                        </div>
+                        <%= if detail.delivery_evidence == [] do %>
+                          <p class="text-sm text-slate-600">No delivery attempts recorded.</p>
+                        <% else %>
+                          <ul class="space-y-2 text-sm text-slate-700">
+                            <%= for delivery <- detail.delivery_evidence do %>
+                              <li class="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                                <div class="flex flex-wrap items-center gap-2">
+                                  <span class="font-medium text-slate-900">
+                                    <%= humanize_text_token(delivery.channel) %>
+                                  </span>
+                                  <span class="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700">
+                                    <%= humanize_text_token(delivery.status) %>
+                                  </span>
+                                </div>
+                                <p class="mt-1 text-slate-600"><%= delivery.destination_label %></p>
+                                <p class="mt-1 text-xs text-slate-500">
+                                  <%= delivery_metadata(delivery) %>
+                                </p>
+                              </li>
+                            <% end %>
+                          </ul>
+                        <% end %>
+                      </div>
+                      <div class="space-y-2">
+                        <div class="flex items-center gap-2">
+                          <p class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                            Why Maraithon still thinks this is open
+                          </p>
+                          <span
+                            :if={detail.open_loop_reason}
+                            class="rounded-full bg-white px-2 py-0.5 text-[11px] font-medium text-slate-600 ring-1 ring-slate-200"
+                          >
+                            <%= reason_origin_label(detail.open_loop_reason) %>
+                          </span>
+                        </div>
+                        <%= if detail.open_loop_reason do %>
+                          <p class="text-sm text-slate-700"><%= detail.open_loop_reason.text %></p>
+                          <ul
+                            :if={detail.open_loop_reason.origin == :derived and detail.open_loop_reason.factors != []}
+                            class="space-y-1 text-sm text-slate-600"
+                          >
+                            <%= for factor <- detail.open_loop_reason.factors do %>
+                              <li>- <%= factor %></li>
+                            <% end %>
+                          </ul>
+                        <% else %>
+                          <p class="text-sm text-slate-600">
+                            Open-loop reason could not be reconstructed from persisted data.
+                          </p>
+                        <% end %>
+                      </div>
+                      <div :if={detail.data_gaps != []} class="space-y-2">
+                        <p class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                          Data gaps
+                        </p>
+                        <ul class="space-y-1 text-sm text-slate-600">
+                          <%= for gap <- detail.data_gaps do %>
+                            <li>- <%= gap %></li>
+                          <% end %>
+                        </ul>
+                      </div>
+                    </div>
                   <% end %>
                 </div>
                 <div class="flex flex-wrap gap-2">
@@ -1723,7 +1891,65 @@ defmodule MaraithonWeb.DashboardLive do
   end
 
   defp refresh_insights(socket) do
-    assign(socket, :insights, Insights.list_open_for_user(current_user_id(socket), limit: 20))
+    cards = Insights.list_open_with_details_for_user(current_user_id(socket), limit: 20)
+    visible_ids = MapSet.new(Enum.map(cards, & &1.insight.id))
+
+    emit_insight_detail_coverage_telemetry(cards)
+
+    assign(socket,
+      insights: cards,
+      expanded_insight_ids: MapSet.intersection(socket.assigns.expanded_insight_ids, visible_ids),
+      detail_opened_insight_ids:
+        MapSet.intersection(socket.assigns.detail_opened_insight_ids, visible_ids)
+    )
+  end
+
+  defp insight_card(socket, insight_id) when is_binary(insight_id) do
+    Enum.find(socket.assigns.insights, fn
+      %{insight: %{id: ^insight_id}} -> true
+      _ -> false
+    end)
+  end
+
+  defp insight_card(_socket, _insight_id), do: nil
+
+  defp emit_insight_detail_toggle_telemetry(expanded?, insight, detail) do
+    event =
+      if expanded? do
+        [:maraithon, :dashboard, :insight_detail, :collapsed]
+      else
+        [:maraithon, :dashboard, :insight_detail, :expanded]
+      end
+
+    :telemetry.execute(event, %{count: 1}, Detail.telemetry_metadata(insight, detail))
+  end
+
+  defp maybe_emit_insight_action_telemetry(
+         socket,
+         action,
+         %{insight: insight, detail: detail},
+         insight_id
+       )
+       when is_binary(action) do
+    metadata =
+      Detail.telemetry_metadata(insight, detail)
+      |> Map.put(:action, action)
+      |> Map.put(
+        :detail_opened_before_action,
+        MapSet.member?(socket.assigns.detail_opened_insight_ids, insight_id)
+      )
+
+    :telemetry.execute([:maraithon, :dashboard, :insight_detail, :action], %{count: 1}, metadata)
+  end
+
+  defp maybe_emit_insight_action_telemetry(_socket, _action, _card, _insight_id), do: :ok
+
+  defp emit_insight_detail_coverage_telemetry(cards) when is_list(cards) do
+    :telemetry.execute(
+      [:maraithon, :dashboard, :insight_detail, :coverage],
+      Detail.coverage_measurements(cards),
+      %{source: :dashboard_refresh}
+    )
   end
 
   defp refresh_selected_agent(socket, id, opts \\ []) do
@@ -2201,6 +2427,86 @@ defmodule MaraithonWeb.DashboardLive do
   end
 
   defp normalized_text(_value), do: nil
+
+  defp detail_text(%{text: text}) when is_binary(text), do: text
+  defp detail_text(_value), do: nil
+
+  defp detail_origin_label(%{origin: :stored}), do: "Stored"
+  defp detail_origin_label(%{origin: :reconstructed}), do: "Reconstructed"
+  defp detail_origin_label(%{origin: :derived}), do: "Derived"
+  defp detail_origin_label(_value), do: nil
+
+  defp reason_origin_label(%{origin: :stored}), do: "Stored rationale"
+  defp reason_origin_label(%{origin: :derived}), do: "Derived from persisted evidence"
+  defp reason_origin_label(_value), do: nil
+
+  defp evidence_metadata(item) when is_map(item) do
+    [
+      humanize_text_token(item.kind),
+      format_datetime(item.occurred_at),
+      item.source_ref
+    ]
+    |> Enum.reject(&blank_metadata?/1)
+    |> Enum.join(" · ")
+  end
+
+  defp evidence_metadata(_item), do: nil
+
+  defp delivery_metadata(delivery) when is_map(delivery) do
+    [
+      format_datetime(delivery.sent_at),
+      delivery.feedback && "feedback #{humanize_text_token(delivery.feedback)}",
+      delivery.feedback_at && format_datetime(delivery.feedback_at),
+      delivery.error_message && "error #{delivery.error_message}"
+    ]
+    |> Enum.reject(&blank_metadata?/1)
+    |> Enum.join(" · ")
+  end
+
+  defp delivery_metadata(_delivery), do: nil
+
+  defp humanize_text_token(value) when is_atom(value),
+    do: value |> Atom.to_string() |> humanize_text_token()
+
+  defp humanize_text_token(value) when is_binary(value) do
+    value
+    |> String.replace("_", " ")
+    |> String.trim()
+    |> case do
+      "" -> nil
+      text -> String.capitalize(text)
+    end
+  end
+
+  defp humanize_text_token(_value), do: nil
+
+  defp blank_metadata?(nil), do: true
+  defp blank_metadata?(""), do: true
+  defp blank_metadata?("N/A"), do: true
+  defp blank_metadata?(_value), do: false
+
+  attr :title, :string, required: true
+  attr :value, :string, default: nil
+  attr :origin, :string, default: nil
+
+  defp insight_detail_section(assigns) do
+    ~H"""
+    <div class="space-y-2">
+      <div class="flex items-center gap-2">
+        <p class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+          <%= @title %>
+        </p>
+        <span
+          :if={@origin}
+          class="rounded-full bg-white px-2 py-0.5 text-[11px] font-medium text-slate-600 ring-1 ring-slate-200"
+        >
+          <%= @origin %>
+        </span>
+      </div>
+      <p class="text-sm text-slate-700"><%= @value %></p>
+    </div>
+    """
+  end
 
   defp agent_name(config), do: config["name"] || "unnamed_agent"
 
