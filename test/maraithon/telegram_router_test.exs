@@ -305,6 +305,135 @@ defmodule Maraithon.TelegramRouterTest do
     assert conversation.status == "open"
   end
 
+  test "question-about-insight replies include why-now and evidence", %{
+    user_id: user_id,
+    agent: agent
+  } do
+    set_interpreter(fn _prompt ->
+      {:ok,
+       Jason.encode!(%{
+         "intent" => "question_about_insight",
+         "confidence" => 0.93,
+         "scope" => "thread_local",
+         "needs_clarification" => false,
+         "assistant_reply" => "This was a direct promise with no completion evidence.",
+         "candidate_rules" => [],
+         "candidate_action" => nil,
+         "feedback_target" => %{},
+         "memory_summary_updates" => [],
+         "explanation" => "The operator is asking for rationale."
+       })}
+    end)
+
+    delivery = create_and_dispatch_gmail_delivery(user_id, agent.id)
+
+    :ok =
+      InsightNotifications.handle_telegram_event(%{
+        type: "message",
+        data: %{
+          chat_id: 12345,
+          message_id: 90041,
+          text: "Why did you send this?",
+          reply_to: %{message_id: delivery.provider_message_id}
+        }
+      })
+
+    reply = last_telegram_message(:send)
+    assert reply.text =~ "Why now:"
+    assert reply.text =~ "Evidence checked:"
+    assert reply.text =~ "Recommended action:"
+    assert reply.text =~ "direct promise"
+  end
+
+  test "clarification questions are tracked and cleared when the user answers", %{
+    user_id: user_id
+  } do
+    start_supervised!(%{
+      id: :telegram_interpreter_sequence,
+      start: {Agent, :start_link, [fn -> 0 end, [name: :telegram_interpreter_sequence]]}
+    })
+
+    set_interpreter(fn _prompt ->
+      call_number =
+        Agent.get_and_update(:telegram_interpreter_sequence, fn current ->
+          {current, current + 1}
+        end)
+
+      if call_number == 0 do
+        {:ok,
+         Jason.encode!(%{
+           "intent" => "unknown",
+           "confidence" => 0.52,
+           "scope" => "thread_local",
+           "needs_clarification" => true,
+           "clarifying_question" =>
+             "Do you want me to remember this as a general rule, or only for this one thread?",
+           "assistant_reply" => nil,
+           "candidate_rules" => [],
+           "candidate_action" => nil,
+           "feedback_target" => %{},
+           "memory_summary_updates" => [],
+           "explanation" => "The scope is ambiguous."
+         })}
+      else
+        {:ok,
+         Jason.encode!(%{
+           "intent" => "feedback_general",
+           "confidence" => 0.95,
+           "scope" => "durable",
+           "needs_clarification" => false,
+           "assistant_reply" => "Understood. I’ll treat these as a saved noise preference.",
+           "candidate_rules" => [
+             %{
+               "id" => "downrank_generic_noise",
+               "kind" => "content_filter",
+               "label" => "Downrank generic noise",
+               "instruction" =>
+                 "Downrank generic low-signal notifications unless they imply real follow-up work.",
+               "applies_to" => ["gmail", "telegram"],
+               "confidence" => 0.95,
+               "filters" => %{"topics" => ["generic_noise"]}
+             }
+           ],
+           "candidate_action" => nil,
+           "feedback_target" => %{},
+           "memory_summary_updates" => [],
+           "explanation" => "The user clarified that the preference is durable."
+         })}
+      end
+    end)
+
+    :ok =
+      InsightNotifications.handle_telegram_event(%{
+        type: "message",
+        data: %{chat_id: 12345, message_id: 90042, text: "Make these less noisy"}
+      })
+
+    conversation =
+      Repo.one!(
+        from conversation in Conversation,
+          where: conversation.user_id == ^user_id,
+          order_by: [desc: conversation.inserted_at],
+          limit: 1
+      )
+
+    assert conversation.metadata["pending_clarification"]
+    assert conversation.metadata["clarification_depth"] == 1
+
+    clarification = last_telegram_message(:send)
+    assert clarification.text =~ "general rule"
+
+    :ok =
+      InsightNotifications.handle_telegram_event(%{
+        type: "message",
+        data: %{chat_id: 12345, message_id: 90043, text: "General rule, not just this thread"}
+      })
+
+    updated = Repo.get!(Conversation, conversation.id)
+    refute updated.metadata["pending_clarification"]
+    assert [%{"id" => "downrank_generic_noise"}] = PreferenceMemory.active_rules(user_id)
+  end
+
   test "freeform action requests can execute a drafted Gmail send from Telegram", %{
     user_id: user_id,
     agent: agent
@@ -406,6 +535,52 @@ defmodule Maraithon.TelegramRouterTest do
     reply = last_telegram_message(:send)
     assert reply.text =~ "Completed"
     assert reply.text =~ "Sent via Gmail"
+  end
+
+  test "draft generation prompt includes long-term memory summaries and style rules", %{
+    user_id: user_id,
+    agent: agent
+  } do
+    start_supervised!(%{
+      id: :action_draft_prompt_recorder,
+      start: {Agent, :start_link, [fn -> [] end, [name: :action_draft_prompt_recorder]]}
+    })
+
+    {:ok, _saved_rules} =
+      PreferenceMemory.save_interpreted_rules(
+        user_id,
+        [
+          %{
+            "id" => "short_direct_replies",
+            "kind" => "style_preference",
+            "label" => "Prefer short direct replies",
+            "instruction" =>
+              "Prefer short, direct, low-apology drafts with a crisp ETA when possible.",
+            "applies_to" => ["gmail", "slack", "telegram"],
+            "confidence" => 0.97,
+            "filters" => %{}
+          }
+        ],
+        "telegram_inferred"
+      )
+
+    delivery = create_and_dispatch_gmail_delivery(user_id, agent.id)
+
+    :ok =
+      InsightNotifications.handle_telegram_event(%{
+        type: "callback_query",
+        data: %{
+          callback_id: "cb-gmail-draft-memory",
+          chat_id: 12345,
+          message_id: delivery.provider_message_id,
+          data: "insact:#{delivery.id}:draft"
+        }
+      })
+
+    [prompt | _] = Agent.get(:action_draft_prompt_recorder, & &1)
+    assert prompt =~ "Prefer short, direct, low-apology drafts"
+    assert prompt =~ "Operator prefers signal over noise and concise action drafts."
+    assert prompt =~ "\"style_preference\""
   end
 
   test "edited Telegram messages update the stored conversation turn", %{user_id: user_id} do

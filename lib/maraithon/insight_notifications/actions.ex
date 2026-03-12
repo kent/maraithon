@@ -10,6 +10,8 @@ defmodule Maraithon.InsightNotifications.Actions do
   alias Maraithon.Insights
   alias Maraithon.Insights.Insight
   alias Maraithon.LLM
+  alias Maraithon.OperatorMemory
+  alias Maraithon.PreferenceMemory
   alias Maraithon.Repo
   alias Maraithon.Tools
 
@@ -624,6 +626,8 @@ defmodule Maraithon.InsightNotifications.Actions do
   end
 
   defp email_prompt(spec, insight) do
+    memory = draft_memory_context(insight.user_id)
+
     """
     Write a concise email reply for a founder follow-through assistant.
 
@@ -635,13 +639,19 @@ defmodule Maraithon.InsightNotifications.Actions do
     - Do not claim attachments, delivery, or completed work unless explicitly proven.
     - If the promised artifact is not clearly available, send an honest progress update plus a firm ETA.
     - Close the loop in one message.
+    - Follow durable operator style and action preferences when they are relevant.
 
     Insight JSON:
     #{Jason.encode!(%{title: insight.title, summary: insight.summary, recommended_action: insight.recommended_action, person: spec["person"], context: spec["context"], to: spec["to"], subject: spec["subject"]})}
+
+    Draft memory JSON:
+    #{Jason.encode!(memory)}
     """
   end
 
   defp slack_prompt(spec, insight) do
+    memory = draft_memory_context(insight.user_id)
+
     """
     Write a concise Slack reply for an unresolved follow-through item.
 
@@ -652,10 +662,28 @@ defmodule Maraithon.InsightNotifications.Actions do
     - Be direct and short.
     - Include owner / next step / ETA when appropriate.
     - Do not claim work is already done unless proven.
+    - Follow durable operator style and action preferences when they are relevant.
 
     Insight JSON:
     #{Jason.encode!(%{title: insight.title, summary: insight.summary, recommended_action: insight.recommended_action, person: spec["person"], context: spec["context"]})}
+
+    Draft memory JSON:
+    #{Jason.encode!(memory)}
     """
+  end
+
+  defp draft_memory_context(user_id) when is_binary(user_id) do
+    %{
+      preference_memory: PreferenceMemory.prompt_context(user_id),
+      operator_summaries: OperatorMemory.summaries_for_prompt(user_id)
+    }
+  end
+
+  defp draft_memory_context(_user_id) do
+    %{
+      preference_memory: PreferenceMemory.prompt_context(nil),
+      operator_summaries: []
+    }
   end
 
   defp fallback_email_body(spec, insight) do

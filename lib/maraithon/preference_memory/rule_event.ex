@@ -13,7 +13,7 @@ defmodule Maraithon.PreferenceMemory.RuleEvent do
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
 
-  @event_types ~w(proposed auto_saved confirmed rejected updated applied reverted)
+  @event_types ~w(proposed auto_saved confirmed rejected updated applied reverted superseded)
 
   schema "insight_preference_rule_events" do
     field :user_id, :string

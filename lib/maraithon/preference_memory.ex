@@ -464,12 +464,15 @@ defmodule Maraithon.PreferenceMemory do
         persisted =
           Enum.map(normalized, fn rule ->
             confidence = rule_confidence(rule)
+            conflicts = conflicting_active_rules(user_id, rule)
+            stronger_conflict? = Enum.any?(conflicts, &stronger_conflict?(&1, rule, explicit?))
 
             status =
               cond do
                 explicit? -> "active"
                 save_policy == :active -> "active"
                 save_policy == :confirm -> "pending_confirmation"
+                stronger_conflict? -> "pending_confirmation"
                 confidence >= @autosave_threshold -> "active"
                 confidence >= @confirm_threshold -> "pending_confirmation"
                 true -> "rejected"
@@ -482,6 +485,10 @@ defmodule Maraithon.PreferenceMemory do
               |> maybe_put_confirmed_at(status, now)
 
             persisted_rule = upsert_rule!(attrs)
+
+            if status == "active" do
+              supersede_conflicts!(user_id, persisted_rule, conflicts, source)
+            end
 
             event_type =
               case status do
@@ -868,6 +875,61 @@ defmodule Maraithon.PreferenceMemory do
 
   defp active_rule_rows(_user_id), do: []
 
+  defp conflicting_active_rules(user_id, rule) when is_binary(user_id) and is_map(rule) do
+    incoming_label = non_empty_string(rule["label"])
+    incoming_kind = rule_kind(rule)
+
+    Rule
+    |> where(
+      [stored],
+      stored.user_id == ^user_id and stored.status == "active" and stored.kind == ^incoming_kind
+    )
+    |> Repo.all()
+    |> Enum.reject(fn stored ->
+      stored.label == incoming_label
+    end)
+    |> Enum.filter(&rules_conflict?(serialize_rule(&1), rule))
+  end
+
+  defp conflicting_active_rules(_user_id, _rule), do: []
+
+  defp stronger_conflict?(%Rule{} = stored, incoming_rule, incoming_explicit?) do
+    compare_trust(stored, incoming_rule, incoming_explicit?) == :gt
+  end
+
+  defp supersede_conflicts!(user_id, %Rule{} = persisted_rule, conflicts, source) do
+    Enum.each(conflicts, fn
+      %Rule{id: id} = conflict when id != persisted_rule.id ->
+        case compare_trust(
+               persisted_rule,
+               serialize_rule(conflict),
+               persisted_rule.source == "explicit_telegram"
+             ) do
+          result when result in [:gt, :eq] ->
+            conflict
+            |> Rule.changeset(%{status: "superseded"})
+            |> Repo.update!()
+
+            log_rule_event(
+              user_id,
+              conflict.id,
+              "superseded",
+              %{
+                "source" => source,
+                "superseded_by_rule_id" => persisted_rule.id,
+                "superseded_by_label" => persisted_rule.label
+              }
+            )
+
+          _ ->
+            :ok
+        end
+
+      _ ->
+        :ok
+    end)
+  end
+
   defp timezone_offset_hours(user_id) when is_binary(user_id) do
     Agent
     |> where(
@@ -918,6 +980,63 @@ defmodule Maraithon.PreferenceMemory do
   defp rule_kind(rule), do: non_empty_string(rule["kind"]) || ""
   defp rule_status(rule), do: non_empty_string(rule["status"]) || "active"
   defp rule_source(rule), do: non_empty_string(rule["source"]) || "feedback_inference"
+
+  defp rules_conflict?(stored_rule, incoming_rule) do
+    overlap?(stored_rule["applies_to"], incoming_rule["applies_to"]) and
+      kind_conflict?(rule_kind(stored_rule), stored_rule, incoming_rule)
+  end
+
+  defp kind_conflict?("content_filter", stored_rule, incoming_rule),
+    do: topic_overlap?(stored_rule, incoming_rule)
+
+  defp kind_conflict?("urgency_boost", stored_rule, incoming_rule),
+    do: topic_overlap?(stored_rule, incoming_rule)
+
+  defp kind_conflict?("quiet_hours", _stored_rule, _incoming_rule), do: true
+  defp kind_conflict?("routing_preference", _stored_rule, _incoming_rule), do: true
+  defp kind_conflict?("action_preference", _stored_rule, _incoming_rule), do: true
+  defp kind_conflict?("style_preference", _stored_rule, _incoming_rule), do: true
+  defp kind_conflict?(_, _stored_rule, _incoming_rule), do: false
+
+  defp topic_overlap?(stored_rule, incoming_rule) do
+    stored_topics = get_in(stored_rule, ["filters", "topics"]) |> normalize_topic_list()
+    incoming_topics = get_in(incoming_rule, ["filters", "topics"]) |> normalize_topic_list()
+
+    stored_topics == [] or incoming_topics == [] or
+      MapSet.disjoint?(MapSet.new(stored_topics), MapSet.new(incoming_topics)) == false
+  end
+
+  defp overlap?(left, right) do
+    left_values = normalize_applies_to(left)
+    right_values = normalize_applies_to(right)
+    MapSet.disjoint?(MapSet.new(left_values), MapSet.new(right_values)) == false
+  end
+
+  defp compare_trust(%Rule{} = stored_rule, incoming_rule, incoming_explicit?) do
+    compare_trust(serialize_rule(stored_rule), incoming_rule, incoming_explicit?)
+  end
+
+  defp compare_trust(stored_rule, incoming_rule, incoming_explicit?)
+       when is_map(stored_rule) and is_map(incoming_rule) do
+    stored_score = rule_trust_score(stored_rule, rule_source(stored_rule) == "explicit_telegram")
+    incoming_score = rule_trust_score(incoming_rule, incoming_explicit?)
+
+    cond do
+      stored_score > incoming_score -> :gt
+      stored_score < incoming_score -> :lt
+      true -> :eq
+    end
+  end
+
+  defp rule_trust_score(rule, explicit?) do
+    confirmed? = not is_nil(Map.get(rule, "confirmed_at"))
+
+    {
+      if(explicit?, do: 1, else: 0),
+      if(confirmed?, do: 1, else: 0),
+      clamp(rule_confidence(rule), 0.0, 1.0)
+    }
+  end
 
   defp serialize_rule(%Rule{} = rule) do
     memory_id = get_in(rule.evidence || %{}, ["memory_id"]) || rule.id

@@ -123,4 +123,46 @@ defmodule Maraithon.PreferenceMemoryTest do
     refute PreferenceMemory.allow_telegram_interrupt?(user_id, internal_insight, quiet_time)
     assert PreferenceMemory.allow_telegram_interrupt?(user_id, external_insight, quiet_time)
   end
+
+  test "conflicting inferred rules require confirmation when a stronger explicit rule exists", %{
+    user_id: user_id
+  } do
+    {:ok, [_saved]} =
+      PreferenceMemory.save_interpreted_rules(
+        user_id,
+        [
+          %{
+            "id" => "ignore_receipts_strict",
+            "kind" => "content_filter",
+            "label" => "Ignore routine receipts",
+            "instruction" => "Ignore routine receipts unless they imply real follow-up work.",
+            "applies_to" => ["gmail", "telegram"],
+            "confidence" => 0.98,
+            "filters" => %{"topics" => ["receipts"]}
+          }
+        ],
+        "explicit_telegram",
+        explicit?: true
+      )
+
+    {:ok, [pending]} =
+      PreferenceMemory.save_interpreted_rules(
+        user_id,
+        [
+          %{
+            "id" => "ignore_receipts_broader",
+            "kind" => "content_filter",
+            "label" => "Downrank receipt-style emails",
+            "instruction" => "Downrank receipt-like emails more broadly.",
+            "applies_to" => ["gmail", "telegram"],
+            "confidence" => 0.97,
+            "filters" => %{"topics" => ["receipts", "transactional_receipts"]}
+          }
+        ],
+        "telegram_inferred"
+      )
+
+    assert pending["status"] == "pending_confirmation"
+    assert [%{"id" => "ignore_receipts_strict"}] = PreferenceMemory.active_rules(user_id)
+  end
 end

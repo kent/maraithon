@@ -14,6 +14,10 @@ defmodule Maraithon.TelegramRouter do
 
   require Logger
 
+  @clarification_limit 3
+  @general_chat_window_seconds 5 * 60
+  @general_chat_rate_limit 20
+
   def handle_message(data) when is_map(data) do
     with chat_id when is_binary(chat_id) <- read_id_string(data, "chat_id"),
          text when is_binary(text) <- read_string(data, "text"),
@@ -28,40 +32,48 @@ defmodule Maraithon.TelegramRouter do
       linked_delivery = linked_delivery(chat_id, reply_to_message_id)
       linked_insight = linked_delivery && linked_delivery.insight
 
-      {:ok, conversation} =
-        TelegramConversations.start_or_continue(user_id, chat_id, %{
-          "reply_to_message_id" => reply_to_message_id,
-          "root_message_id" => source_message_id || reply_to_message_id,
-          "linked_delivery_id" => linked_delivery && linked_delivery.id,
-          "linked_insight_id" => linked_insight && linked_insight.id
-        })
+      if general_chat_rate_limited?(chat_id, reply_to_message_id, linked_delivery) do
+        send_ephemeral_reply(
+          chat_id,
+          source_message_id,
+          "You’re sending messages quickly. Reply to the exact item you want me to act on, or wait a moment and try again."
+        )
+      else
+        {:ok, conversation} =
+          TelegramConversations.start_or_continue(user_id, chat_id, %{
+            "reply_to_message_id" => reply_to_message_id,
+            "root_message_id" => source_message_id || reply_to_message_id,
+            "linked_delivery_id" => linked_delivery && linked_delivery.id,
+            "linked_insight_id" => linked_insight && linked_insight.id
+          })
 
-      {:ok, {_conversation, user_turn}} =
-        TelegramConversations.append_turn(conversation, %{
-          "role" => "user",
-          "telegram_message_id" => source_message_id,
-          "reply_to_message_id" => reply_to_message_id,
-          "text" => text
-        })
+        {:ok, {_conversation, user_turn}} =
+          TelegramConversations.append_turn(conversation, %{
+            "role" => "user",
+            "telegram_message_id" => source_message_id,
+            "reply_to_message_id" => reply_to_message_id,
+            "text" => text
+          })
 
-      cond do
-        awaiting_confirmation?(conversation) and affirmative?(text) ->
-          confirm_pending_rules(conversation, user_turn, chat_id, source_message_id)
+        cond do
+          awaiting_confirmation?(conversation) and affirmative?(text) ->
+            confirm_pending_rules(conversation, user_turn, chat_id, source_message_id)
 
-        awaiting_confirmation?(conversation) and negative?(text) ->
-          reject_pending_rules(conversation, user_turn, chat_id, source_message_id)
+          awaiting_confirmation?(conversation) and negative?(text) ->
+            reject_pending_rules(conversation, user_turn, chat_id, source_message_id)
 
-        true ->
-          interpret_and_respond(
-            user_id,
-            chat_id,
-            text,
-            source_message_id,
-            conversation,
-            user_turn,
-            linked_delivery,
-            linked_insight
-          )
+          true ->
+            interpret_and_respond(
+              user_id,
+              chat_id,
+              text,
+              source_message_id,
+              conversation,
+              user_turn,
+              linked_delivery,
+              linked_insight
+            )
+        end
       end
     else
       nil ->
@@ -122,6 +134,8 @@ defmodule Maraithon.TelegramRouter do
         insight: linked_insight
       })
 
+    conversation = maybe_clear_clarification(conversation, interpretation)
+
     case route_interpretation(
            user_id,
            chat_id,
@@ -145,6 +159,32 @@ defmodule Maraithon.TelegramRouter do
       :ok ->
         :ok
     end
+  end
+
+  defp route_interpretation(
+         _user_id,
+         _chat_id,
+         _source_message_id,
+         conversation,
+         _user_turn,
+         _delivery,
+         _insight,
+         %{"needs_clarification" => true} = interpretation
+       ) do
+    ask_clarifying_question(conversation, interpretation)
+  end
+
+  defp route_interpretation(
+         _user_id,
+         _chat_id,
+         _source_message_id,
+         _conversation,
+         _user_turn,
+         %Delivery{} = delivery,
+         insight,
+         %{"intent" => "question_about_insight"} = interpretation
+       ) do
+    {:ok, explain_insight(delivery, insight, interpretation), []}
   end
 
   defp route_interpretation(
@@ -244,31 +284,43 @@ defmodule Maraithon.TelegramRouter do
               "dismiss",
               "snooze",
               "explain",
-              "send"
+              "send",
+              "status",
+              "create_task"
             ] do
     case action do
       "explain" ->
+        {:ok, explain_insight(delivery, delivery.insight, %{"assistant_reply" => nil}), []}
+
+      "status" ->
         {:ok, Actions.render_message(delivery), []}
 
       "send" ->
         with {:ok, updated_delivery, _notice} <- ensure_draft_then_send(delivery) do
           {:ok, Actions.render_message(updated_delivery), []}
         else
-          {:error, reason} -> {:ok, "I couldn't send that yet: #{inspect(reason)}", []}
+          {:error, reason} -> {:ok, action_failure_text(reason), []}
         end
 
       "redraft" ->
         with {:ok, updated_delivery, _notice} <- Actions.perform_action(delivery, "regenerate") do
           {:ok, Actions.render_message(updated_delivery), []}
         else
-          {:error, reason} -> {:ok, "I couldn't redraft that yet: #{inspect(reason)}", []}
+          {:error, reason} -> {:ok, action_failure_text(reason), []}
+        end
+
+      "create_task" ->
+        with {:ok, result} <- create_linear_task(delivery) do
+          {:ok, render_task_created(result), []}
+        else
+          {:error, reason} -> {:ok, action_failure_text(reason), []}
         end
 
       other ->
         with {:ok, updated_delivery, _notice} <- Actions.perform_action(delivery, other) do
           {:ok, Actions.render_message(updated_delivery), []}
         else
-          {:error, reason} -> {:ok, "I couldn't do that yet: #{inspect(reason)}", []}
+          {:error, reason} -> {:ok, action_failure_text(reason), []}
         end
     end
   end
@@ -487,6 +539,182 @@ defmodule Maraithon.TelegramRouter do
           {:ok, drafted_delivery, "Draft ready for approval"}
         end
     end
+  end
+
+  defp general_chat_rate_limited?(chat_id, reply_to_message_id, linked_delivery)
+       when is_binary(chat_id) do
+    is_nil(reply_to_message_id) and is_nil(linked_delivery) and
+      TelegramConversations.recent_user_turn_count(chat_id, @general_chat_window_seconds) >=
+        @general_chat_rate_limit
+  end
+
+  defp general_chat_rate_limited?(_chat_id, _reply_to_message_id, _linked_delivery), do: false
+
+  defp maybe_clear_clarification(conversation, %{"needs_clarification" => true}), do: conversation
+
+  defp maybe_clear_clarification(%{metadata: metadata} = conversation, interpretation) do
+    if Map.get(metadata || %{}, "pending_clarification") == true and
+         Map.get(interpretation, "intent") != "unknown" do
+      case TelegramConversations.update_metadata(conversation, %{
+             "pending_clarification" => false,
+             "last_clarifying_question" => nil
+           }) do
+        {:ok, updated_conversation} -> updated_conversation
+        _ -> conversation
+      end
+    else
+      conversation
+    end
+  end
+
+  defp ask_clarifying_question(conversation, interpretation) do
+    depth = clarification_depth(conversation) + 1
+
+    if depth > @clarification_limit do
+      {:ok,
+       "I still can’t safely infer the right action. Reply to the exact item you mean, or tell me the precise rule or action you want.",
+       []}
+    else
+      question =
+        Map.get(interpretation, "clarifying_question") ||
+          Map.get(interpretation, "assistant_reply") ||
+          "Can you clarify what you want me to learn or do?"
+
+      _ =
+        TelegramConversations.update_metadata(conversation, %{
+          "pending_clarification" => true,
+          "clarification_depth" => depth,
+          "last_clarifying_question" => question
+        })
+
+      {:ok, question, []}
+    end
+  end
+
+  defp clarification_depth(%{metadata: %{"clarification_depth" => value}})
+       when is_integer(value) and value >= 0,
+       do: value
+
+  defp clarification_depth(_conversation), do: 0
+
+  defp explain_insight(%Delivery{} = delivery, insight, interpretation) do
+    metadata = (insight || delivery.insight).metadata || %{}
+    why_now = Map.get(metadata, "why_now") || Map.get(metadata, "context_brief")
+
+    evidence_lines =
+      metadata
+      |> Map.get("record", %{})
+      |> Map.get("evidence", [])
+      |> List.wrap()
+      |> Enum.filter(&is_binary/1)
+      |> Enum.take(3)
+
+    evidence_text =
+      case evidence_lines do
+        [] -> "I didn’t find completion evidence after the original commitment."
+        lines -> Enum.map_join(lines, "\n", fn line -> "- #{line}" end)
+      end
+
+    why_now_text =
+      case why_now do
+        value when is_binary(value) and value != "" -> value
+        _ -> "This still appears open based on the source evidence I checked."
+      end
+
+    extra_reply =
+      case Map.get(interpretation, "assistant_reply") do
+        value when is_binary(value) and value != "" -> "\n\n#{value}"
+        _ -> ""
+      end
+
+    """
+    I surfaced this because it still looks like an open loop.
+
+    Why now:
+    #{why_now_text}
+
+    Evidence checked:
+    #{evidence_text}
+
+    Recommended action:
+    #{(insight || delivery.insight).recommended_action}#{extra_reply}
+    """
+    |> String.trim()
+  end
+
+  defp create_linear_task(%Delivery{} = delivery) do
+    case ConnectedAccounts.get(delivery.user_id, "linear") do
+      %{metadata: metadata} ->
+        team_id =
+          get_in(metadata || %{}, ["default_team_id"]) || get_in(metadata || %{}, ["team_id"])
+
+        if is_binary(team_id) and String.trim(team_id) != "" do
+          Maraithon.Tools.execute("linear_create_issue", %{
+            "user_id" => delivery.user_id,
+            "team_id" => team_id,
+            "title" => delivery.insight.title,
+            "description" =>
+              Enum.join(
+                [
+                  delivery.insight.summary,
+                  "",
+                  "Recommended action:",
+                  delivery.insight.recommended_action
+                ],
+                "\n"
+              )
+          })
+        else
+          {:error, "linear_default_team_missing"}
+        end
+
+      _ ->
+        {:error, "linear_not_connected"}
+    end
+  end
+
+  defp render_task_created(%{"issue" => %{"identifier" => identifier, "url" => url}})
+       when is_binary(identifier) and is_binary(url) do
+    "Created Linear task #{identifier}: #{url}"
+  end
+
+  defp render_task_created(%{"issue" => %{"identifier" => identifier}})
+       when is_binary(identifier),
+       do: "Created Linear task #{identifier}."
+
+  defp render_task_created(_result), do: "Created a Linear task."
+
+  defp action_failure_text(reason) when is_binary(reason) do
+    case reason do
+      "google_account_reauth_required" ->
+        "I couldn't send that yet because Google needs reconnecting: #{connector_url("google")}"
+
+      "slack_workspace_reauth_required" ->
+        "I couldn't complete that because Slack needs reconnecting: #{connector_url("slack")}"
+
+      "linear_not_connected" ->
+        "I couldn't create a task because Linear isn't connected yet: #{connector_url("linear")}"
+
+      "linear_default_team_missing" ->
+        "I couldn't create a task because I don't know which Linear team to use yet."
+
+      other ->
+        "I couldn't do that yet: #{other}"
+    end
+  end
+
+  defp action_failure_text(reason), do: "I couldn't do that yet: #{inspect(reason)}"
+
+  defp connector_url(provider), do: "#{base_app_url()}/connectors/#{provider}"
+
+  defp base_app_url do
+    System.get_env("APP_BASE_URL") ||
+      Application.get_env(:maraithon, :app_base_url, "https://maraithon.com")
+  end
+
+  defp send_ephemeral_reply(chat_id, reply_to_message_id, text) do
+    _ = TelegramResponder.reply(chat_id, reply_to_message_id, text)
+    :ok
   end
 
   defp read_string(map, key, default \\ nil) when is_map(map) and is_binary(key) do

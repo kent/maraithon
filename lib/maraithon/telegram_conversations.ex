@@ -111,7 +111,9 @@ defmodule Maraithon.TelegramConversations do
 
   def find_by_reply(chat_id, reply_to_message_id)
       when is_binary(chat_id) and is_binary(reply_to_message_id) do
-    find_by_message(chat_id, reply_to_message_id)
+    chat_id
+    |> find_by_message(reply_to_message_id)
+    |> active_reply_conversation()
   end
 
   def find_by_reply(_chat_id, _reply_to_message_id), do: nil
@@ -139,6 +141,14 @@ defmodule Maraithon.TelegramConversations do
     |> Conversation.changeset(%{
       status: "awaiting_confirmation",
       metadata: Map.merge(conversation.metadata || %{}, read_map(attrs, "metadata"))
+    })
+    |> Repo.update()
+  end
+
+  def update_metadata(%Conversation{} = conversation, attrs) when is_map(attrs) do
+    conversation
+    |> Conversation.changeset(%{
+      metadata: Map.merge(conversation.metadata || %{}, attrs)
     })
     |> Repo.update()
   end
@@ -180,6 +190,19 @@ defmodule Maraithon.TelegramConversations do
     |> preload(:insight)
     |> limit(1)
     |> Repo.one()
+  end
+
+  def recent_user_turn_count(chat_id, window_seconds \\ @general_idle_seconds)
+      when is_binary(chat_id) and is_integer(window_seconds) and window_seconds > 0 do
+    threshold = DateTime.add(DateTime.utc_now(), -window_seconds, :second)
+
+    Turn
+    |> join(:inner, [turn], conversation in assoc(turn, :conversation))
+    |> where([turn, conversation], conversation.chat_id == ^chat_id and turn.role == "user")
+    |> where([turn, _conversation], turn.inserted_at >= ^threshold)
+    |> select([turn, _conversation], count(turn.id))
+    |> Repo.one()
+    |> Kernel.||(0)
   end
 
   defp find_open_linked(chat_id, delivery_id, insight_id) do
@@ -243,6 +266,48 @@ defmodule Maraithon.TelegramConversations do
     |> Enum.map_join("\n", fn turn ->
       "#{turn.role}: #{String.slice(turn.text || "", 0, 160)}"
     end)
+  end
+
+  defp active_reply_conversation(%Conversation{} = conversation) do
+    if expired_conversation?(conversation) do
+      nil
+    else
+      conversation
+    end
+  end
+
+  defp active_reply_conversation(_), do: nil
+
+  defp expired_conversation?(%Conversation{status: status})
+       when status not in ["open", "awaiting_confirmation"],
+       do: true
+
+  defp expired_conversation?(%Conversation{status: "awaiting_confirmation"}), do: false
+
+  defp expired_conversation?(%Conversation{} = conversation) do
+    reference_time =
+      conversation.last_turn_at || conversation.updated_at || conversation.inserted_at
+
+    idle_seconds =
+      if is_binary(conversation.linked_delivery_id) or is_binary(conversation.linked_insight_id) do
+        @linked_idle_seconds
+      else
+        @general_idle_seconds
+      end
+
+    stale? =
+      case reference_time do
+        %DateTime{} = value -> DateTime.diff(DateTime.utc_now(), value, :second) > idle_seconds
+        _ -> false
+      end
+
+    resolved? =
+      case conversation.linked_insight do
+        %{status: status} when status in ["acknowledged", "dismissed"] -> true
+        _ -> false
+      end
+
+    stale? or resolved?
   end
 
   defp read_string(map, key, default \\ nil) when is_map(map) do

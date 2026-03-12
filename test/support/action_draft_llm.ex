@@ -15,6 +15,8 @@ defmodule Maraithon.TestSupport.ActionDraftLLM do
         _ -> ""
       end
 
+    maybe_record_prompt(prompt)
+
     content =
       cond do
         String.contains?(prompt, "\"subject\":\"...\",\"body\":\"...\"") ->
@@ -36,5 +38,16 @@ defmodule Maraithon.TestSupport.ActionDraftLLM do
        finish_reason: "stop",
        usage: Spend.calculate_cost("test-action-draft", 100, 40)
      }}
+  end
+
+  defp maybe_record_prompt(prompt) do
+    case Process.whereis(:action_draft_prompt_recorder) do
+      nil ->
+        :ok
+
+      pid ->
+        Agent.update(pid, fn prompts -> [prompt | prompts] end)
+        :ok
+    end
   end
 end
