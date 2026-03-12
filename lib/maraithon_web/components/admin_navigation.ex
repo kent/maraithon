@@ -7,7 +7,7 @@ defmodule MaraithonWeb.AdminNavigation do
 
   @tabs [
     %{label: "Dashboard", path: "/dashboard"},
-    %{label: "Build Agent", path: "/agents/new"},
+    %{label: "Agents", path: "/agents"},
     %{label: "Connectors", path: "/connectors"},
     %{label: "How it works", path: "/how-it-works"}
   ]
@@ -97,6 +97,7 @@ defmodule MaraithonWeb.AdminNavigation do
   end
 
   defp active_tab?(path, "/dashboard"), do: path in ["/dashboard", "/admin"]
+  defp active_tab?(path, "/agents"), do: path in ["/agents", "/agents/new"]
   defp active_tab?(path, tab_path), do: path == tab_path
 
   defp admin_user?(%{is_admin: true}), do: true

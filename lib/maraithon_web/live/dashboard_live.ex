@@ -88,26 +88,8 @@ defmodule MaraithonWeb.DashboardLive do
       |> assign(:current_path, current_path_from_uri(uri))
       |> apply_dashboard_params(params, uri)
 
-    case Map.get(params, "id") do
-      id when is_binary(id) ->
-        case refresh_selected_agent(socket, id) do
-          {:ok, socket} ->
-            {:noreply, assign(socket, page_title: "Agent #{String.slice(id, 0, 8)}")}
-
-          {:not_found, socket} ->
-            {:noreply,
-             socket
-             |> assign(
-               selected_agent: nil,
-               events: [],
-               agent_spend: nil,
-               inspection: empty_inspection(),
-               inspection_errors: []
-             )
-             |> push_navigate(to: connection_home_path(socket, socket.assigns.connection_user_id))}
-        end
-
-      _ ->
+    case legacy_agents_path(params) do
+      nil ->
         {:noreply,
          assign(socket,
            selected_agent: nil,
@@ -117,6 +99,9 @@ defmodule MaraithonWeb.DashboardLive do
            inspection_errors: [],
            page_title: "Control Center"
          )}
+
+      to ->
+        {:noreply, push_navigate(socket, to: to)}
     end
   end
 
@@ -476,8 +461,8 @@ defmodule MaraithonWeb.DashboardLive do
                 You've connected real data. Maraithon is scanning a recent slice of Gmail, Calendar,
                 and Slack to show immediate value before you create anything.
               <% else %>
-                Create, edit, start, stop, delete, and inspect agents from one surface.
-                Drill into live runtime behavior, queued work, raw logs, and direct operator commands.
+                Watch fleet health, queues, failures, logs, and actionable insights from one control center.
+                Use the dedicated Agents workspace for CRUD, lifecycle control, logs, and deep inspection.
               <% end %>
             </p>
           </div>
@@ -491,12 +476,18 @@ defmodule MaraithonWeb.DashboardLive do
                 See Proof
               </a>
             <% else %>
-              <a
-                href={~p"/agents/new"}
+              <.link
+                navigate={"/agents"}
                 class="inline-flex items-center rounded-md border border-white/20 bg-white/10 px-3 py-2 text-sm font-medium text-white hover:bg-white/15"
               >
-                Build Agent
-              </a>
+                Manage Agents
+              </.link>
+              <.link
+                navigate={"/agents/new"}
+                class="inline-flex items-center rounded-md border border-white/20 bg-white/10 px-3 py-2 text-sm font-medium text-white hover:bg-white/15"
+              >
+                New Agent
+              </.link>
             <% end %>
             <button
               type="button"
@@ -884,307 +875,33 @@ defmodule MaraithonWeb.DashboardLive do
         </div>
       </section>
 
-      <section class="grid grid-cols-1 gap-6 xl:grid-cols-5">
-        <div class="overflow-hidden rounded-xl bg-white shadow xl:col-span-3">
-          <div class="border-b border-gray-200 px-4 py-4 sm:px-6">
-            <div class="flex items-center justify-between gap-3">
-              <div>
-                <h2 class="text-lg font-medium text-gray-900">Agent Registry</h2>
-                <p class="mt-1 text-sm text-gray-500">
-                  Full CRUD and control actions for every agent in the fleet.
-                </p>
-              </div>
-              <span class="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700">
-                <%= length(@agents) %> total
-              </span>
-            </div>
+      <section class="rounded-xl border border-cyan-100 bg-cyan-50/70 px-4 py-4 shadow-sm sm:px-6">
+        <div class="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 class="text-lg font-medium text-cyan-950">Agents moved into their own workspace</h2>
+            <p class="mt-1 text-sm text-cyan-900/80">
+              CRUD, lifecycle controls, logs, and deep inspection now live in the dedicated Agents tab.
+            </p>
           </div>
-
-          <div class="overflow-x-auto">
-            <table class="min-w-full divide-y divide-gray-200 text-sm">
-              <thead class="bg-gray-50">
-                <tr>
-                  <th class="px-4 py-3 text-left font-medium text-gray-500">Agent</th>
-                  <th class="px-4 py-3 text-left font-medium text-gray-500">Status</th>
-                  <th class="px-4 py-3 text-left font-medium text-gray-500">Subscriptions</th>
-                  <th class="px-4 py-3 text-left font-medium text-gray-500">Updated</th>
-                  <th class="px-4 py-3 text-right font-medium text-gray-500">Actions</th>
-                </tr>
-              </thead>
-              <tbody class="divide-y divide-gray-200 bg-white">
-                <%= for agent <- @agents do %>
-                  <tr class={if @selected_agent && @selected_agent.id == agent.id, do: "bg-indigo-50/70", else: ""}>
-                    <td class="px-4 py-4 align-top">
-                      <div class="font-medium text-gray-900"><%= agent_name(agent.config) %></div>
-                      <div class="text-xs text-gray-500"><%= agent.behavior %></div>
-                      <div class="mt-1 font-mono text-[11px] text-gray-400"><%= agent.id %></div>
-                    </td>
-                    <td class="px-4 py-4 align-top">
-                      <.status_badge status={agent.status} />
-                    </td>
-                    <td class="px-4 py-4 align-top text-xs text-gray-600">
-                      <%= subscriptions_preview(agent.config) %>
-                    </td>
-                    <td class="px-4 py-4 align-top text-xs text-gray-500">
-                      <%= format_datetime(agent.updated_at) %>
-                    </td>
-                    <td class="px-4 py-4 align-top">
-                      <div class="flex flex-wrap justify-end gap-2">
-                        <.link
-                          patch={"/dashboard?id=#{agent.id}"}
-                          class="inline-flex items-center rounded-md border border-gray-300 px-2.5 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
-                        >
-                          Inspect
-                        </.link>
-                        <button
-                          type="button"
-                          phx-click="edit_agent"
-                          phx-value-id={agent.id}
-                          class="inline-flex items-center rounded-md border border-gray-300 px-2.5 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
-                        >
-                          Edit
-                        </button>
-                        <%= if agent.status in ["running", "degraded"] do %>
-                          <button
-                            type="button"
-                            phx-click="stop_agent"
-                            phx-value-id={agent.id}
-                            class="inline-flex items-center rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-xs font-medium text-amber-800 hover:bg-amber-100"
-                          >
-                            Stop
-                          </button>
-                        <% else %>
-                          <button
-                            type="button"
-                            phx-click="start_agent"
-                            phx-value-id={agent.id}
-                            class="inline-flex items-center rounded-md border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-xs font-medium text-emerald-800 hover:bg-emerald-100"
-                          >
-                            Start
-                          </button>
-                        <% end %>
-                        <button
-                          type="button"
-                          phx-click="delete_agent"
-                          phx-value-id={agent.id}
-                          data-confirm="Delete this agent and all dependent records?"
-                          class="inline-flex items-center rounded-md border border-red-200 bg-red-50 px-2.5 py-1.5 text-xs font-medium text-red-700 hover:bg-red-100"
-                        >
-                          Delete
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                <% end %>
-                <%= if @agents == [] do %>
-                  <tr>
-                    <td colspan="5" class="px-4 py-12 text-center text-gray-500">
-                      No agents yet. Build one from the dedicated builder.
-                    </td>
-                  </tr>
-                <% end %>
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-        <div class="overflow-hidden rounded-xl bg-white shadow xl:col-span-2">
-          <div class="border-b border-gray-200 px-4 py-4 sm:px-6">
-            <div class="flex items-center justify-between gap-3">
-              <div>
-                <h2 class="text-lg font-medium text-gray-900"><%= launch_title(@launch_mode) %></h2>
-                <p class="mt-1 text-sm text-gray-500"><%= launch_subtitle(@launch_mode) %></p>
-              </div>
-              <%= if @launch_mode == :edit do %>
-                <button
-                  type="button"
-                  phx-click="new_agent"
-                  class="inline-flex items-center rounded-md border border-gray-300 px-3 py-2 text-xs font-medium text-gray-700 hover:bg-gray-50"
-                >
-                  Cancel Edit
-                </button>
-              <% end %>
-            </div>
-          </div>
-          <div class="px-4 py-5 sm:px-6">
-            <%= if @launch_error do %>
-              <div class="mb-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-                <%= @launch_error %>
-              </div>
-            <% end %>
-
-            <%= if @launch_mode == :edit do %>
-              <form id="launch-agent-form" phx-submit="launch_agent" class="space-y-4">
-                <input
-                  type="hidden"
-                  name="launch[builder_mode]"
-                  value={Map.get(@launch, "builder_mode", "advanced")}
-                />
-                <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
-                  <div>
-                    <label for="launch_behavior" class="block text-sm font-medium text-gray-700">
-                      Behavior
-                    </label>
-                    <select
-                      id="launch_behavior"
-                      name="launch[behavior]"
-                      class="mt-1 block w-full rounded-md border-gray-300 text-sm shadow-sm"
-                    >
-                      <%= for behavior <- @behaviors do %>
-                        <option value={behavior} selected={behavior == @launch["behavior"]}>
-                          <%= behavior %>
-                        </option>
-                      <% end %>
-                    </select>
-                  </div>
-                  <div>
-                    <label for="launch_name" class="block text-sm font-medium text-gray-700">
-                      Name
-                    </label>
-                    <input
-                      id="launch_name"
-                      type="text"
-                      name="launch[name]"
-                      value={@launch["name"]}
-                      placeholder="optional display name"
-                      class="mt-1 block w-full rounded-md border-gray-300 text-sm shadow-sm"
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <label for="launch_prompt" class="block text-sm font-medium text-gray-700">
-                    Prompt
-                  </label>
-                  <textarea
-                    id="launch_prompt"
-                    name="launch[prompt]"
-                    rows="4"
-                    class="mt-1 block w-full rounded-md border-gray-300 text-sm shadow-sm"
-                  ><%= @launch["prompt"] %></textarea>
-                </div>
-
-                <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
-                  <div>
-                    <label for="launch_subscriptions" class="block text-sm font-medium text-gray-700">
-                      Subscriptions
-                    </label>
-                    <input
-                      id="launch_subscriptions"
-                      type="text"
-                      name="launch[subscriptions]"
-                      value={@launch["subscriptions"]}
-                      placeholder="github:owner/repo,email:kent"
-                      class="mt-1 block w-full rounded-md border-gray-300 text-sm shadow-sm"
-                    />
-                  </div>
-                  <div>
-                    <label for="launch_tools" class="block text-sm font-medium text-gray-700">
-                      Tools
-                    </label>
-                    <input
-                      id="launch_tools"
-                      type="text"
-                      name="launch[tools]"
-                      value={@launch["tools"]}
-                      placeholder="read_file,search_files,http_get"
-                      class="mt-1 block w-full rounded-md border-gray-300 text-sm shadow-sm"
-                    />
-                  </div>
-                </div>
-
-                <div class="grid grid-cols-1 gap-4 md:grid-cols-3">
-                  <div>
-                    <label for="launch_memory_limit" class="block text-sm font-medium text-gray-700">
-                      Memory Limit
-                    </label>
-                    <input
-                      id="launch_memory_limit"
-                      type="number"
-                      min="1"
-                      name="launch[memory_limit]"
-                      value={@launch["memory_limit"]}
-                      class="mt-1 block w-full rounded-md border-gray-300 text-sm shadow-sm"
-                    />
-                  </div>
-                  <div>
-                    <label for="launch_budget_llm_calls" class="block text-sm font-medium text-gray-700">
-                      LLM Call Budget
-                    </label>
-                    <input
-                      id="launch_budget_llm_calls"
-                      type="number"
-                      min="1"
-                      name="launch[budget_llm_calls]"
-                      value={@launch["budget_llm_calls"]}
-                      class="mt-1 block w-full rounded-md border-gray-300 text-sm shadow-sm"
-                    />
-                  </div>
-                  <div>
-                    <label for="launch_budget_tool_calls" class="block text-sm font-medium text-gray-700">
-                      Tool Call Budget
-                    </label>
-                    <input
-                      id="launch_budget_tool_calls"
-                      type="number"
-                      min="1"
-                      name="launch[budget_tool_calls]"
-                      value={@launch["budget_tool_calls"]}
-                      class="mt-1 block w-full rounded-md border-gray-300 text-sm shadow-sm"
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <label for="launch_config_json" class="block text-sm font-medium text-gray-700">
-                    Additional Config JSON
-                  </label>
-                  <textarea
-                    id="launch_config_json"
-                    name="launch[config_json]"
-                    rows="5"
-                    class="mt-1 block w-full rounded-md border-gray-300 text-sm font-mono shadow-sm"
-                    placeholder={"{\"custom_key\":\"value\"}"}
-                  ><%= @launch["config_json"] %></textarea>
-                </div>
-
-                <div class="flex justify-end">
-                  <button
-                    type="submit"
-                    class="inline-flex items-center rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500"
-                  >
-                    <%= launch_submit_label(@launch_mode) %>
-                  </button>
-                </div>
-              </form>
-            <% else %>
-              <div class="rounded-xl border border-indigo-200 bg-indigo-50/60 p-5">
-                <p class="text-xs font-semibold uppercase tracking-[0.24em] text-indigo-700">
-                  Dedicated Builder
-                </p>
-                <h3 class="mt-3 text-xl font-semibold text-slate-900">Create agents on a focused page</h3>
-                <p class="mt-2 max-w-2xl text-sm text-slate-600">
-                  Use the dedicated builder to choose the right template, understand the exact inputs and outputs, confirm permissions, and start the agent with sensible defaults.
-                </p>
-                <div class="mt-4 flex flex-wrap gap-3">
-                  <a
-                    href={~p"/agents/new"}
-                    class="inline-flex items-center rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500"
-                  >
-                    Open Agent Builder
-                  </a>
-                  <p class="text-sm text-slate-500">
-                    The builder starts new agents immediately after creation and sends you back here to inspect them.
-                  </p>
-                </div>
-              </div>
-            <% end %>
+          <div class="flex flex-wrap gap-2">
+            <.link
+              navigate={"/agents"}
+              class="inline-flex items-center rounded-md bg-cyan-700 px-3 py-2 text-sm font-medium text-white hover:bg-cyan-600"
+            >
+              Manage Agents
+            </.link>
+            <.link
+              navigate={"/agents/new"}
+              class="inline-flex items-center rounded-md border border-cyan-200 bg-white px-3 py-2 text-sm font-medium text-cyan-900 hover:bg-cyan-50"
+            >
+              New Agent
+            </.link>
           </div>
         </div>
       </section>
 
-      <section class="grid grid-cols-1 gap-6 xl:grid-cols-5">
-        <div class="overflow-hidden rounded-xl bg-white shadow xl:col-span-3">
+      <section class="grid grid-cols-1 gap-6 xl:grid-cols-1">
+        <div class="overflow-hidden rounded-xl bg-white shadow">
           <div class="border-b border-gray-200 px-4 py-4 sm:px-6">
             <h2 class="text-lg font-medium text-gray-900">Health & Monitoring</h2>
           </div>
@@ -1248,336 +965,7 @@ defmodule MaraithonWeb.DashboardLive do
           </div>
         </div>
 
-        <div class="overflow-hidden rounded-xl bg-white shadow xl:col-span-2">
-          <div class="border-b border-gray-200 px-4 py-4 sm:px-6">
-            <h2 class="text-lg font-medium text-gray-900">Agent Details</h2>
-            <p class="mt-1 text-sm text-gray-500">
-              Selected agent inspection across runtime, spend, and configuration.
-            </p>
-          </div>
-          <%= if @inspection_errors != [] do %>
-            <div class="border-b border-amber-200 bg-amber-50 px-4 py-3 sm:px-6">
-              <%= for error <- @inspection_errors do %>
-                <div class="text-sm text-amber-900">
-                  <p class="font-medium"><%= error.message %></p>
-                  <p class="mt-1 text-xs text-amber-800"><%= error.details %></p>
-                </div>
-              <% end %>
-            </div>
-          <% end %>
-          <%= if @selected_agent do %>
-            <div class="space-y-4 px-4 py-5 sm:px-6">
-              <div class="flex items-start justify-between gap-3">
-                <div>
-                  <div class="text-lg font-medium text-gray-900">
-                    <%= agent_name(@selected_agent.config) %>
-                  </div>
-                  <div class="text-sm text-gray-500"><%= @selected_agent.behavior %></div>
-                </div>
-                <.status_badge status={@selected_agent.status} />
-              </div>
-
-              <dl class="grid grid-cols-1 gap-4 text-sm sm:grid-cols-2">
-                <div>
-                  <dt class="text-gray-500">Started</dt>
-                  <dd class="mt-1 text-gray-900"><%= format_datetime(@selected_agent.started_at) %></dd>
-                </div>
-                <div>
-                  <dt class="text-gray-500">Stopped</dt>
-                  <dd class="mt-1 text-gray-900"><%= format_datetime(@selected_agent.stopped_at) %></dd>
-                </div>
-                <div>
-                  <dt class="text-gray-500">Subscriptions</dt>
-                  <dd class="mt-1 text-gray-900"><%= subscriptions_preview(@selected_agent.config) %></dd>
-                </div>
-                <div>
-                  <dt class="text-gray-500">Tools</dt>
-                  <dd class="mt-1 text-gray-900"><%= tools_preview(@selected_agent.config) %></dd>
-                </div>
-                <div>
-                  <dt class="text-gray-500">Event Count</dt>
-                  <dd class="mt-1 text-gray-900"><%= @inspection.event_count %></dd>
-                </div>
-                <div>
-                  <dt class="text-gray-500">Agent Spend</dt>
-                  <dd class="mt-1 text-amber-700">
-                    $<%= Float.round(@agent_spend.total_cost, 4) %>
-                  </dd>
-                </div>
-                <%= if @selected_agent[:runtime] do %>
-                  <div>
-                    <dt class="text-gray-500">Process Memory</dt>
-                    <dd class="mt-1 text-gray-900"><%= format_bytes(@selected_agent.runtime.memory_bytes) %></dd>
-                  </div>
-                  <div>
-                    <dt class="text-gray-500">Mailbox</dt>
-                    <dd class="mt-1 text-gray-900"><%= @selected_agent.runtime.message_queue_len %></dd>
-                  </div>
-                <% end %>
-              </dl>
-
-              <div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
-                <div class="rounded-lg bg-amber-50 p-3">
-                  <div class="text-xs font-medium uppercase tracking-wide text-amber-700">
-                    Agent Spend
-                  </div>
-                  <dl class="mt-2 space-y-2 text-sm">
-                    <div class="flex items-center justify-between gap-3">
-                      <dt class="text-amber-700/80">LLM Calls</dt>
-                      <dd class="font-medium text-amber-950"><%= @agent_spend.llm_calls %></dd>
-                    </div>
-                    <div class="flex items-center justify-between gap-3">
-                      <dt class="text-amber-700/80">Input Tokens</dt>
-                      <dd class="font-medium text-amber-950"><%= @agent_spend.input_tokens %></dd>
-                    </div>
-                    <div class="flex items-center justify-between gap-3">
-                      <dt class="text-amber-700/80">Output Tokens</dt>
-                      <dd class="font-medium text-amber-950"><%= @agent_spend.output_tokens %></dd>
-                    </div>
-                    <div class="flex items-center justify-between gap-3 border-t border-amber-200 pt-2">
-                      <dt class="text-amber-700/80">Total Cost</dt>
-                      <dd class="font-semibold text-amber-950">
-                        $<%= Float.round(@agent_spend.total_cost, 4) %>
-                      </dd>
-                    </div>
-                  </dl>
-                </div>
-
-                <div class="rounded-lg bg-gray-50 p-3">
-                  <div class="text-xs font-medium uppercase tracking-wide text-gray-500">
-                    Config Snapshot
-                  </div>
-                  <pre class="mt-2 overflow-x-auto whitespace-pre-wrap break-all text-[11px] text-gray-700"><%= pretty_config(@selected_agent.config) %></pre>
-                </div>
-              </div>
-
-              <div class="rounded-lg bg-gray-50 p-3">
-                <div class="text-xs font-medium uppercase tracking-wide text-gray-500">Prompt</div>
-                <p class="mt-2 whitespace-pre-wrap text-sm text-gray-800"><%= agent_prompt(@selected_agent.config) %></p>
-              </div>
-
-              <div class="flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  phx-click="edit_agent"
-                  phx-value-id={@selected_agent.id}
-                  class="inline-flex items-center rounded-md border border-gray-300 px-3 py-2 text-xs font-medium text-gray-700 hover:bg-gray-50"
-                >
-                  Edit Definition
-                </button>
-                <%= if @selected_agent.status in ["running", "degraded"] do %>
-                  <button
-                    type="button"
-                    phx-click="stop_agent"
-                    phx-value-id={@selected_agent.id}
-                    class="inline-flex items-center rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800 hover:bg-amber-100"
-                  >
-                    Stop Agent
-                  </button>
-                <% else %>
-                  <button
-                    type="button"
-                    phx-click="start_agent"
-                    phx-value-id={@selected_agent.id}
-                    class="inline-flex items-center rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-800 hover:bg-emerald-100"
-                  >
-                    Start Agent
-                  </button>
-                <% end %>
-                <button
-                  type="button"
-                  phx-click="delete_agent"
-                  phx-value-id={@selected_agent.id}
-                  data-confirm="Delete this agent and all dependent records?"
-                  class="inline-flex items-center rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs font-medium text-red-700 hover:bg-red-100"
-                >
-                  Delete Agent
-                </button>
-              </div>
-            </div>
-          <% else %>
-            <div class="px-4 py-12 text-center text-gray-500">
-              Select an agent to view details, inspect state, queued work, and logs.
-            </div>
-          <% end %>
-        </div>
       </section>
-
-      <%= if @selected_agent do %>
-        <section class="grid grid-cols-1 gap-6 xl:grid-cols-3">
-          <div class="overflow-hidden rounded-xl bg-white shadow">
-            <div class="border-b border-gray-200 px-4 py-4 sm:px-6">
-              <h3 class="text-lg font-medium text-gray-900">Operator Console</h3>
-              <p class="mt-1 text-sm text-gray-500">
-                Send a direct message into the selected agent's runtime.
-              </p>
-            </div>
-            <div class="px-4 py-5 sm:px-6">
-              <form phx-submit="send_message" class="space-y-4">
-                <div>
-                  <label for="command_message" class="block text-sm font-medium text-gray-700">
-                    Message
-                  </label>
-                  <textarea
-                    id="command_message"
-                    name="command[message]"
-                    rows="4"
-                    class="mt-1 block w-full rounded-md border-gray-300 text-sm shadow-sm"
-                    placeholder="Summarize the last few events and tell me what needs attention."
-                  ><%= @command["message"] %></textarea>
-                </div>
-                <div class="flex justify-end">
-                  <button
-                    type="submit"
-                    disabled={@selected_agent.status not in ["running", "degraded"]}
-                    class="inline-flex items-center rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    Send Instruction
-                  </button>
-                </div>
-              </form>
-            </div>
-          </div>
-
-          <div class="overflow-hidden rounded-xl bg-white shadow">
-            <div class="border-b border-gray-200 px-4 py-4 sm:px-6">
-              <h3 class="text-lg font-medium text-gray-900">Effect Queue</h3>
-              <p class="mt-1 text-sm text-gray-500">
-                Inspect pending and historical effects for this agent.
-              </p>
-            </div>
-            <div class="space-y-3 px-4 py-5 sm:px-6">
-              <div class="grid grid-cols-3 gap-2 text-xs">
-                <.queue_metric title="Pending" value={@inspection.effect_counts.pending} />
-                <.queue_metric title="Claimed" value={@inspection.effect_counts.claimed} />
-                <.queue_metric
-                  title="Failed"
-                  value={@inspection.effect_counts.failed}
-                  value_class="text-red-600"
-                />
-              </div>
-
-              <div class="max-h-80 space-y-2 overflow-y-auto">
-                <%= for effect <- @inspection.recent_effects do %>
-                  <div class="rounded-lg border border-gray-200 p-3">
-                    <div class="flex items-center justify-between gap-3">
-                      <div class="text-sm font-medium text-gray-900"><%= effect.effect_type %></div>
-                      <span class={effect_status_class(effect.status)}><%= effect.status %></span>
-                    </div>
-                    <div class="mt-1 text-xs text-gray-500">
-                      attempts <%= effect.attempts %>
-                      <span class="mx-1">•</span>
-                      updated <%= format_time(effect.updated_at) %>
-                    </div>
-                    <div class="mt-2 rounded bg-gray-50 px-2 py-1 font-mono text-[11px] text-gray-600">
-                      <%= effect_preview(effect) %>
-                    </div>
-                  </div>
-                <% end %>
-                <%= if @inspection.recent_effects == [] do %>
-                  <p class="text-sm text-gray-500">No effects recorded yet.</p>
-                <% end %>
-              </div>
-            </div>
-          </div>
-
-          <div class="overflow-hidden rounded-xl bg-white shadow">
-            <div class="border-b border-gray-200 px-4 py-4 sm:px-6">
-              <h3 class="text-lg font-medium text-gray-900">Scheduled Jobs</h3>
-              <p class="mt-1 text-sm text-gray-500">
-                Wakeups, heartbeats, and checkpoints queued for this agent.
-              </p>
-            </div>
-            <div class="space-y-3 px-4 py-5 sm:px-6">
-              <div class="grid grid-cols-2 gap-2 text-xs">
-                <.queue_metric title="Pending" value={@inspection.job_counts.pending} />
-                <.queue_metric
-                  title="Dispatched"
-                  value={@inspection.job_counts.dispatched}
-                  value_class="text-amber-600"
-                />
-                <.queue_metric title="Delivered" value={@inspection.job_counts.delivered} />
-                <.queue_metric title="Cancelled" value={@inspection.job_counts.cancelled} />
-              </div>
-
-              <div class="max-h-80 space-y-2 overflow-y-auto">
-                <%= for job <- @inspection.recent_jobs do %>
-                  <div class="rounded-lg border border-gray-200 p-3">
-                    <div class="flex items-center justify-between gap-3">
-                      <div class="text-sm font-medium text-gray-900"><%= job.job_type %></div>
-                      <span class={job_status_class(job.status)}><%= job.status %></span>
-                    </div>
-                    <div class="mt-1 text-xs text-gray-500">
-                      fire at <%= format_datetime(job.fire_at) %>
-                      <span class="mx-1">•</span>
-                      attempts <%= job.attempts %>
-                    </div>
-                    <div class="mt-2 rounded bg-gray-50 px-2 py-1 font-mono text-[11px] text-gray-600">
-                      <%= payload_preview(job.payload) %>
-                    </div>
-                  </div>
-                <% end %>
-                <%= if @inspection.recent_jobs == [] do %>
-                  <p class="text-sm text-gray-500">No scheduled jobs recorded yet.</p>
-                <% end %>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <section class="grid grid-cols-1 gap-6 xl:grid-cols-2">
-          <div class="overflow-hidden rounded-xl bg-white shadow">
-            <div class="border-b border-gray-200 px-4 py-4 sm:px-6">
-              <h3 class="text-lg font-medium text-gray-900">Recent Events</h3>
-            </div>
-            <div class="max-h-96 space-y-2 overflow-y-auto px-4 py-4 sm:px-6">
-              <%= for event <- Enum.reverse(@events) do %>
-                <div class="rounded border border-gray-200 p-3 text-sm">
-                  <div class="flex items-center justify-between gap-3">
-                    <span class="font-medium text-indigo-600"><%= event.event_type %></span>
-                    <span class="text-xs text-gray-400">#<%= event.sequence_num %></span>
-                  </div>
-                  <div class="mt-1 text-xs text-gray-500"><%= format_datetime(event.created_at) %></div>
-                  <div class="mt-2 rounded bg-gray-50 px-2 py-1 font-mono text-[11px] text-gray-600">
-                    <%= payload_preview(event.payload) %>
-                  </div>
-                </div>
-              <% end %>
-              <%= if @events == [] do %>
-                <p class="text-sm text-gray-500">No events yet.</p>
-              <% end %>
-            </div>
-          </div>
-
-          <div class="overflow-hidden rounded-xl bg-slate-950 shadow">
-            <div class="border-b border-slate-800 px-4 py-4 sm:px-6">
-              <h3 class="text-lg font-medium text-slate-100">Agent Logs</h3>
-              <p class="mt-1 text-sm text-slate-400">
-                Raw log lines scoped to the selected agent's runtime metadata.
-              </p>
-            </div>
-            <div class="max-h-96 overflow-y-auto px-4 py-4 font-mono text-[11px] leading-5 sm:px-6">
-              <%= for log <- @inspection.recent_logs do %>
-                <div class="grid grid-cols-[auto_auto_1fr] gap-3 border-b border-slate-900 py-2">
-                  <span class="text-slate-500"><%= format_log_timestamp(log.timestamp) %></span>
-                  <span class={["font-semibold uppercase tracking-wide", log_level_class(log.level)]}>
-                    <%= log.level %>
-                  </span>
-                  <div class="min-w-0">
-                    <%= if metadata = log_metadata_preview(log.metadata) do %>
-                      <span class="mr-2 text-slate-500"><%= metadata %></span>
-                    <% end %>
-                    <span class="break-words whitespace-pre-wrap text-slate-100"><%= log.message %></span>
-                  </div>
-                </div>
-              <% end %>
-              <%= if @inspection.recent_logs == [] do %>
-                <p class="text-sm text-slate-500">No agent-scoped logs captured yet.</p>
-              <% end %>
-            </div>
-          </div>
-        </section>
-      <% end %>
 
       <section class="grid grid-cols-1 gap-6 xl:grid-cols-2">
         <div class="overflow-hidden rounded-xl bg-white shadow">
@@ -2044,19 +1432,6 @@ defmodule MaraithonWeb.DashboardLive do
     |> Enum.join("; ")
   end
 
-  defp launch_title(:edit), do: "Edit Agent"
-  defp launch_title(_), do: "Build Agent"
-
-  defp launch_subtitle(:edit),
-    do: "Update a definition. Running agents are restarted with the new config."
-
-  defp launch_subtitle(_),
-    do:
-      "Use the dedicated builder for clearer inputs, outputs, permissions, and suggested defaults."
-
-  defp launch_submit_label(:edit), do: "Save Changes"
-  defp launch_submit_label(_), do: "Create Agent"
-
   defp empty_spend do
     %{
       total_cost: 0.0,
@@ -2203,15 +1578,6 @@ defmodule MaraithonWeb.DashboardLive do
     socket.assigns.connection_return_to || "/dashboard"
   end
 
-  defp connection_home_path(socket, _user_id) do
-    socket.assigns.connection_return_to
-    |> URI.parse()
-    |> then(fn uri -> %URI{uri | query: home_query(uri.query)} end)
-    |> URI.to_string()
-  rescue
-    _ -> "/dashboard"
-  end
-
   defp connection_return_to_from_uri(uri) do
     uri = URI.parse(uri)
 
@@ -2240,12 +1606,25 @@ defmodule MaraithonWeb.DashboardLive do
     _ -> "/dashboard"
   end
 
-  defp home_query(query) do
-    (query || "")
-    |> URI.decode_query()
-    |> Map.drop(["id"])
-    |> URI.encode_query()
+  defp legacy_agents_path(%{"id" => _id} = params) do
+    query =
+      params
+      |> Map.take(["id", "panel", "status", "q"])
+      |> Enum.reject(fn
+        {"panel", value} -> value not in ["inspect", "edit"]
+        {"status", value} -> value in [nil, "", "all"]
+        {"q", value} -> value in [nil, ""]
+        {_key, value} -> is_nil(value) or value == ""
+      end)
+      |> URI.encode_query()
+
+    case query do
+      "" -> "/agents"
+      encoded -> "/agents?" <> encoded
+    end
   end
+
+  defp legacy_agents_path(_params), do: nil
 
   defp current_user_id(socket), do: socket.assigns.current_user.id
 
@@ -2508,70 +1887,6 @@ defmodule MaraithonWeb.DashboardLive do
     """
   end
 
-  defp agent_name(config), do: config["name"] || "unnamed_agent"
-
-  defp agent_prompt(config),
-    do: config["prompt"] || AgentBuilder.default_launch_params()["prompt"]
-
-  defp pretty_config(config) when is_map(config) do
-    Jason.encode!(config, pretty: true)
-  rescue
-    _ -> inspect(config, pretty: true, limit: :infinity)
-  end
-
-  defp pretty_config(config), do: inspect(config, pretty: true, limit: :infinity)
-
-  defp subscriptions_preview(config) do
-    case config["subscribe"] || [] do
-      [] -> "No subscriptions"
-      values -> values |> Enum.take(3) |> Enum.join(", ") |> truncate(70)
-    end
-  end
-
-  defp tools_preview(config) do
-    case config["tools"] || [] do
-      [] -> "No tools"
-      values -> values |> Enum.join(", ") |> truncate(70)
-    end
-  end
-
-  defp effect_preview(effect) do
-    cond do
-      is_binary(effect.error) and effect.error != "" ->
-        effect.error
-
-      is_map(effect.result) and effect.result != %{} ->
-        payload_preview(effect.result)
-
-      true ->
-        payload_preview(effect.params)
-    end
-  end
-
-  defp effect_status_class("failed"),
-    do: "rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700"
-
-  defp effect_status_class("completed"),
-    do: "rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700"
-
-  defp effect_status_class("claimed"),
-    do: "rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700"
-
-  defp effect_status_class(_),
-    do: "rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700"
-
-  defp job_status_class("cancelled"),
-    do: "rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700"
-
-  defp job_status_class("delivered"),
-    do: "rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700"
-
-  defp job_status_class("dispatched"),
-    do: "rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700"
-
-  defp job_status_class(_),
-    do: "rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700"
-
   defp health_badge_class(:healthy), do: "bg-green-100 text-green-800"
   defp health_badge_class(:unhealthy), do: "bg-red-100 text-red-800"
   defp health_badge_class(_), do: "bg-gray-100 text-gray-700"
@@ -2731,9 +2046,4 @@ defmodule MaraithonWeb.DashboardLive do
 
   defp format_datetime(%DateTime{} = dt), do: Calendar.strftime(dt, "%Y-%m-%d %H:%M:%S UTC")
   defp format_datetime(%NaiveDateTime{} = dt), do: Calendar.strftime(dt, "%Y-%m-%d %H:%M:%S")
-
-  defp format_bytes(nil), do: "N/A"
-  defp format_bytes(bytes) when bytes < 1024, do: "#{bytes} B"
-  defp format_bytes(bytes) when bytes < 1024 * 1024, do: "#{Float.round(bytes / 1024, 1)} KB"
-  defp format_bytes(bytes), do: "#{Float.round(bytes / 1024 / 1024, 1)} MB"
 end

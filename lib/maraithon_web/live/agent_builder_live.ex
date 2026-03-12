@@ -118,7 +118,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
       {:noreply,
        socket
        |> put_flash(:info, "Agent #{String.slice(agent.id, 0, 8)} created")
-       |> push_navigate(to: "/dashboard?id=#{agent.id}")}
+       |> push_navigate(to: "/agents?id=#{agent.id}")}
     else
       [_ | _] = blocking_items ->
         {:noreply,
@@ -171,10 +171,10 @@ defmodule MaraithonWeb.AgentBuilderLive do
                 Review connectors
               </a>
               <a
-                href={~p"/dashboard"}
+                href={~p"/agents"}
                 class="inline-flex items-center rounded-full bg-white px-4 py-2 text-sm font-medium text-slate-900 hover:bg-slate-100"
               >
-                Back to dashboard
+                Back to agents
               </a>
             </div>
           </div>
@@ -296,7 +296,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
                       class="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
                     />
                     <p class="mt-2 text-xs text-slate-500">
-                      This is the name operators will see in the dashboard. If blank, Maraithon generates one.
+                      This is the name operators will see in the Agents workspace. If blank, Maraithon generates one.
                     </p>
                   </div>
 

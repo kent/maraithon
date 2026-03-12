@@ -1,0 +1,74 @@
+{
+  "spec_id": "dedicated-agents-tab",
+  "slug": "dedicated-agents-tab",
+  "title": "Dedicated Agents Tab",
+  "stage": "done",
+  "spec_path": "../specs/dedicated-agents-tab.md",
+  "created_at": "2026-03-12T15:06:56Z",
+  "started_at": "2026-03-12T15:32:07Z",
+  "updated_at": "2026-03-12T15:32:07Z",
+  "summary": "Implemented a dedicated `/agents` workspace with registry filters, inspect/edit panels, lifecycle controls, logs and runtime inspection, moved agent management out of `/dashboard`, and redirected the builder plus legacy dashboard links into the new flow.",
+  "next_action": "No further implementation work is pending. Optional manual product validation can confirm stop/delete behavior and the end-to-end `/agents` operator flow in production.",
+  "blockers": [],
+  "reference_examples": [
+    "docs/spectacula/specs/evidence-first-insight-detail.md"
+  ],
+  "verification": {
+    "format": "passed",
+    "lint": "not_applicable",
+    "typecheck": "not_applicable",
+    "build": "passed",
+    "tests": "passed",
+    "spec_review": "passed",
+    "notes": "`mix precommit` passed on 2026-03-12 after adding the new `AgentsLive` workspace, updating authenticated navigation and builder redirects, carving agent management out of `/dashboard`, covering legacy `/dashboard?id=...` redirects, and adding focused LiveView coverage for CRUD and lifecycle actions."
+  },
+  "resume_context": {
+    "last_completed_step": "Implemented the dedicated Agents workspace and verified the repo with the full precommit gate.",
+    "pending_steps": [],
+    "open_questions": [],
+    "last_reviewed_sections": [
+      "1. Overview and Goals",
+      "4. Information Architecture",
+      "5. Route and State Contract",
+      "6. Functional Requirements",
+      "7. Backend and LiveView Design",
+      "11. Validation Plan",
+      "13. Definition of Done"
+    ],
+    "artifacts": [
+      "docs/spectacula/specs/dedicated-agents-tab.md",
+      "lib/maraithon_web/live/agents_live.ex",
+      "lib/maraithon_web/components/admin_navigation.ex",
+      "lib/maraithon_web/live/agent_builder_live.ex",
+      "lib/maraithon_web/live/dashboard_live.ex",
+      "lib/maraithon_web/router.ex",
+      "test/maraithon_web/live/agents_live_test.exs",
+      "test/maraithon_web/live/agent_builder_live_test.exs",
+      "test/maraithon_web/live/dashboard_live_test.exs"
+    ],
+    "notes": "The key implementation decisions were to make `/agents` the only operator home for agent CRUD and runtime inspection, keep creation on `/agents/new` with redirects back into `/agents?id=...`, and replace dashboard agent controls with a narrower control-center CTA surface."
+  },
+  "history": [
+    {
+      "at": "2026-03-12T15:06:56Z",
+      "event": "spec_created",
+      "from_stage": null,
+      "to_stage": "specs",
+      "note": "Initial draft created from repo context and user decisions about dedicated agent management, `/agents/new` reuse, and dashboard simplification."
+    },
+    {
+      "at": "2026-03-12T15:32:07Z",
+      "event": "implementation_started",
+      "from_stage": "specs",
+      "to_stage": "inprogress",
+      "note": "Implementation began for the dedicated `/agents` LiveView, navigation update, builder redirect changes, dashboard carve-out, and lifecycle-action reliability tests."
+    },
+    {
+      "at": "2026-03-12T15:32:07Z",
+      "event": "implementation_completed",
+      "from_stage": "inprogress",
+      "to_stage": "done",
+      "note": "Implemented the dedicated Agents workspace, legacy dashboard redirects, updated builder/navigation flow, and verified the full repo with `mix precommit`."
+    }
+  ]
+}

@@ -16,6 +16,13 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
   end
 
   describe "rendering" do
+    test "highlights the Agents tab and links back to the agents workspace", %{conn: conn} do
+      {:ok, view, html} = live(conn, "/agents/new")
+
+      assert has_element?(view, "a[href='/agents'].bg-indigo-700", "Agents")
+      assert html =~ "Back to agents"
+    end
+
     test "shows clear inputs, outputs, and readiness guidance", %{conn: conn} do
       {:ok, _view, html} = live(conn, "/agents/new")
 
@@ -136,7 +143,7 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
       assert agent.config["budget"]["llm_calls"] == 80
       assert agent.config["budget"]["tool_calls"] == 120
 
-      assert {:error, {:live_redirect, %{to: "/dashboard?id=" <> redirect_id}}} = result
+      assert {:error, {:live_redirect, %{to: "/agents?id=" <> redirect_id}}} = result
       assert redirect_id == agent.id
 
       case Registry.lookup(AgentRegistry, agent.id) do
@@ -145,7 +152,7 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
       end
     end
 
-    test "creates a prompt agent and redirects to the dashboard", %{conn: conn} do
+    test "creates a prompt agent and redirects to the agents workspace", %{conn: conn} do
       {:ok, view, _html} = live(conn, "/agents/new")
 
       _html =
@@ -181,7 +188,7 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
       assert agent.config["budget"]["llm_calls"] == 120
       assert agent.config["budget"]["tool_calls"] == 240
 
-      assert {:error, {:live_redirect, %{to: "/dashboard?id=" <> redirect_id}}} = result
+      assert {:error, {:live_redirect, %{to: "/agents?id=" <> redirect_id}}} = result
       assert redirect_id == agent.id
 
       case Registry.lookup(AgentRegistry, agent.id) do
@@ -190,7 +197,7 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
       end
     end
 
-    test "creates a github product planner and redirects to the dashboard", %{conn: conn} do
+    test "creates a github product planner and redirects to the agents workspace", %{conn: conn} do
       github_config = Application.get_env(:maraithon, :github, [])
       telegram_config = Application.get_env(:maraithon, :telegram, [])
 
@@ -267,7 +274,7 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
       assert agent.config["budget"]["llm_calls"] == 40
       assert agent.config["budget"]["tool_calls"] == 10
 
-      assert {:error, {:live_redirect, %{to: "/dashboard?id=" <> redirect_id}}} = result
+      assert {:error, {:live_redirect, %{to: "/agents?id=" <> redirect_id}}} = result
       assert redirect_id == agent.id
 
       case Registry.lookup(AgentRegistry, agent.id) do

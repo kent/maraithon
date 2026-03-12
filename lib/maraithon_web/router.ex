@@ -83,6 +83,7 @@ defmodule MaraithonWeb.Router do
     live_session :authenticated,
       on_mount: [{MaraithonWeb.LiveUserAuth, :ensure_authenticated}] do
       live "/agents/new", AgentBuilderLive, :new
+      live "/agents", AgentsLive, :index
       live "/dashboard", DashboardLive, :index
     end
   end
