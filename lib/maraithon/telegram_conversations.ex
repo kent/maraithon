@@ -14,6 +14,8 @@ defmodule Maraithon.TelegramConversations do
 
   def start_or_continue(user_id, chat_id, attrs \\ %{})
       when is_binary(user_id) and is_binary(chat_id) and is_map(attrs) do
+    metadata = read_map(attrs, "metadata")
+    mode = read_string(attrs, "mode") || read_string(metadata, "mode")
     linked_delivery_id = read_string(attrs, "linked_delivery_id")
     linked_insight_id = read_string(attrs, "linked_insight_id")
     reply_to_message_id = read_string(attrs, "reply_to_message_id")
@@ -21,10 +23,15 @@ defmodule Maraithon.TelegramConversations do
     now = DateTime.utc_now()
 
     conversation =
-      find_by_reply(chat_id, reply_to_message_id) ||
-        open_pending_confirmation(chat_id) ||
-        find_open_linked(chat_id, linked_delivery_id, linked_insight_id) ||
-        find_recent_general(chat_id, now)
+      if mode == "push_thread" and is_nil(reply_to_message_id) and is_nil(linked_delivery_id) and
+           is_nil(linked_insight_id) do
+        nil
+      else
+        find_by_reply(chat_id, reply_to_message_id) ||
+          open_pending_confirmation(chat_id) ||
+          find_open_linked(chat_id, linked_delivery_id, linked_insight_id) ||
+          find_recent_general(chat_id, now)
+      end
 
     case conversation do
       %Conversation{} = existing ->
@@ -32,7 +39,10 @@ defmodule Maraithon.TelegramConversations do
         |> Conversation.changeset(%{
           status: existing.status,
           last_turn_at: now,
-          root_message_id: existing.root_message_id || root_message_id
+          root_message_id: existing.root_message_id || root_message_id,
+          linked_delivery_id: existing.linked_delivery_id || linked_delivery_id,
+          linked_insight_id: existing.linked_insight_id || linked_insight_id,
+          metadata: Map.merge(existing.metadata || %{}, read_map(attrs, "metadata"))
         })
         |> Repo.update()
 
@@ -46,7 +56,7 @@ defmodule Maraithon.TelegramConversations do
           linked_insight_id: linked_insight_id,
           status: "open",
           last_turn_at: now,
-          metadata: read_map(attrs, "metadata")
+          metadata: metadata
         })
         |> Repo.insert()
     end
@@ -182,6 +192,15 @@ defmodule Maraithon.TelegramConversations do
 
   def preload(%Conversation{} = conversation),
     do: Repo.preload(conversation, [:turns, :linked_delivery, :linked_insight])
+
+  def latest_for_chat(chat_id) when is_binary(chat_id) do
+    Conversation
+    |> where([c], c.chat_id == ^chat_id)
+    |> order_by([c], desc: c.updated_at)
+    |> preload([:linked_delivery, :linked_insight, :turns])
+    |> limit(1)
+    |> Repo.one()
+  end
 
   def latest_delivery_for_chat(chat_id) when is_binary(chat_id) do
     Delivery

@@ -213,7 +213,13 @@ defmodule Maraithon.Runtime.Agent do
       })
 
     if has_budget?(data) do
-      data = %{data | config: Map.put(data.config, "_last_message", message)}
+      config =
+        data.config
+        |> Map.put("_last_message", message)
+        |> Map.put("_last_message_metadata", metadata)
+        |> Map.put("_last_message_id", message_id)
+
+      data = %{data | config: config}
       {:next_state, :working, data, [{:next_event, :internal, :execute_behavior}]}
     else
       Logger.warning("No budget, cannot process message")
@@ -479,6 +485,8 @@ defmodule Maraithon.Runtime.Agent do
       # TODO: Load recent events
       recent_events: [],
       last_message: Map.get(data.config, "_last_message"),
+      last_message_metadata: Map.get(data.config, "_last_message_metadata"),
+      last_message_id: Map.get(data.config, "_last_message_id"),
       event: data.current_event
     }
   end

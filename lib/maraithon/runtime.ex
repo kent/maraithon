@@ -180,6 +180,28 @@ defmodule Maraithon.Runtime do
   end
 
   @doc """
+  Send a message to a running agent and wait briefly for a correlated response.
+  """
+  def request_response(id, message, metadata \\ %{}, opts \\ []) do
+    timeout_ms = Keyword.get(opts, :timeout_ms, 12_000)
+    poll_interval_ms = Keyword.get(opts, :poll_interval_ms, 250)
+    correlation_id = correlation_id(metadata)
+    after_seq = Events.latest_sequence_num(id)
+    enriched_metadata = put_correlation_id(metadata, correlation_id)
+
+    with {:ok, %{message_id: message_id}} <- send_message(id, message, enriched_metadata) do
+      wait_for_agent_response(
+        id,
+        correlation_id,
+        message_id,
+        after_seq,
+        timeout_ms,
+        poll_interval_ms
+      )
+    end
+  end
+
+  @doc """
   Get events for an agent.
   """
   def get_events(id, opts \\ []) do
@@ -338,4 +360,99 @@ defmodule Maraithon.Runtime do
         {:error, reason}
     end
   end
+
+  defp wait_for_agent_response(
+         id,
+         correlation_id,
+         message_id,
+         _after_seq,
+         timeout_ms,
+         _poll_interval_ms
+       )
+       when timeout_ms <= 0 do
+    {:ok,
+     %{
+       status: "queued",
+       agent_id: id,
+       correlation_id: correlation_id,
+       message_id: message_id
+     }}
+  end
+
+  defp wait_for_agent_response(
+         id,
+         correlation_id,
+         message_id,
+         after_seq,
+         timeout_ms,
+         poll_interval_ms
+       ) do
+    case matching_agent_response(id, correlation_id, message_id, after_seq) do
+      {:ok, event} ->
+        {:ok,
+         %{
+           status: response_status(event.event_type),
+           agent_id: id,
+           correlation_id: correlation_id,
+           message_id: message_id,
+           response: event.payload["response"] || event.payload[:response],
+           error: event.payload["error"] || event.payload[:error],
+           event_type: event.event_type
+         }}
+
+      :not_found ->
+        wait_time = min(timeout_ms, poll_interval_ms)
+
+        receive do
+        after
+          wait_time ->
+            wait_for_agent_response(
+              id,
+              correlation_id,
+              message_id,
+              after_seq,
+              timeout_ms - wait_time,
+              poll_interval_ms
+            )
+        end
+    end
+  end
+
+  defp matching_agent_response(id, correlation_id, message_id, after_seq) do
+    id
+    |> Events.list_events(
+      after_seq: after_seq,
+      limit: 50,
+      types: ["agent_response", "agent_error"]
+    )
+    |> Enum.find(fn event ->
+      payload = event.payload || %{}
+
+      event_message_id = payload["message_id"] || payload[:message_id]
+      event_correlation_id = payload["correlation_id"] || payload[:correlation_id]
+
+      event_message_id == message_id or event_correlation_id == correlation_id
+    end)
+    |> case do
+      nil -> :not_found
+      event -> {:ok, event}
+    end
+  end
+
+  defp response_status("agent_error"), do: "error"
+  defp response_status(_event_type), do: "completed"
+
+  defp correlation_id(metadata) when is_map(metadata) do
+    metadata["correlation_id"] || metadata[:correlation_id] || Ecto.UUID.generate()
+  end
+
+  defp correlation_id(_metadata), do: Ecto.UUID.generate()
+
+  defp put_correlation_id(metadata, correlation_id) when is_map(metadata) do
+    metadata
+    |> Map.delete(:correlation_id)
+    |> Map.put("correlation_id", correlation_id)
+  end
+
+  defp put_correlation_id(_metadata, correlation_id), do: %{"correlation_id" => correlation_id}
 end

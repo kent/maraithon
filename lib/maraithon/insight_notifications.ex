@@ -14,6 +14,7 @@ defmodule Maraithon.InsightNotifications do
   alias Maraithon.Insights.Insight
   alias Maraithon.PreferenceMemory
   alias Maraithon.Repo
+  alias Maraithon.TelegramAssistant
   alias Maraithon.TelegramRouter
 
   require Logger
@@ -162,35 +163,48 @@ defmodule Maraithon.InsightNotifications do
   end
 
   defp send_delivery(%Delivery{} = delivery) do
-    payload = Actions.telegram_payload(delivery)
-
-    case telegram_module().send_message(
-           delivery.destination,
-           payload.text,
-           parse_mode: "HTML",
-           reply_markup: payload.reply_markup
-         ) do
-      {:ok, result} ->
-        message_id = read_message_id(result)
-
-        delivery
-        |> Ecto.Changeset.change(%{
-          status: "sent",
-          sent_at: DateTime.utc_now(),
-          provider_message_id: message_id,
-          metadata: Map.merge(delivery.metadata || %{}, %{"telegram_message_id" => message_id})
-        })
-        |> Repo.update()
-
+    case TelegramAssistant.deliver_insight(delivery) do
+      :ok ->
         :ok
 
+      {:fallback, :disabled} ->
+        payload = Actions.telegram_payload(delivery)
+
+        case telegram_module().send_message(
+               delivery.destination,
+               payload.text,
+               parse_mode: "HTML",
+               reply_markup: payload.reply_markup
+             ) do
+          {:ok, result} ->
+            message_id = read_message_id(result)
+
+            delivery
+            |> Ecto.Changeset.change(%{
+              status: "sent",
+              sent_at: DateTime.utc_now(),
+              provider_message_id: message_id,
+              metadata:
+                Map.merge(delivery.metadata || %{}, %{"telegram_message_id" => message_id})
+            })
+            |> Repo.update()
+
+            :ok
+
+          {:error, reason} ->
+            Logger.warning("Failed to send Telegram insight notification",
+              reason: inspect(reason)
+            )
+
+            delivery
+            |> Ecto.Changeset.change(%{status: "failed", error_message: inspect(reason)})
+            |> Repo.update()
+
+            {:error, reason}
+        end
+
       {:error, reason} ->
-        Logger.warning("Failed to send Telegram insight notification", reason: inspect(reason))
-
-        delivery
-        |> Ecto.Changeset.change(%{status: "failed", error_message: inspect(reason)})
-        |> Repo.update()
-
+        Logger.warning("Failed to broker Telegram insight notification", reason: inspect(reason))
         {:error, reason}
     end
   end

@@ -11,6 +11,7 @@ defmodule Maraithon.TelegramRouter do
   alias Maraithon.Insights.Detail
   alias Maraithon.PreferenceMemory
   alias Maraithon.Repo
+  alias Maraithon.TelegramAssistant
   alias Maraithon.TelegramConversations
   alias Maraithon.TelegramInterpreter
   alias Maraithon.TelegramResponder
@@ -60,22 +61,62 @@ defmodule Maraithon.TelegramRouter do
 
         cond do
           awaiting_confirmation?(conversation) and affirmative?(text) ->
-            confirm_pending_rules(conversation, user_turn, chat_id, source_message_id)
+            case TelegramAssistant.handle_text_confirmation(
+                   conversation,
+                   user_turn,
+                   chat_id,
+                   source_message_id,
+                   :confirm
+                 ) do
+              :ok ->
+                :ok
+
+              {:fallback, _reason} ->
+                confirm_pending_rules(conversation, user_turn, chat_id, source_message_id)
+            end
 
           awaiting_confirmation?(conversation) and negative?(text) ->
-            reject_pending_rules(conversation, user_turn, chat_id, source_message_id)
+            case TelegramAssistant.handle_text_confirmation(
+                   conversation,
+                   user_turn,
+                   chat_id,
+                   source_message_id,
+                   :reject
+                 ) do
+              :ok ->
+                :ok
+
+              {:fallback, _reason} ->
+                reject_pending_rules(conversation, user_turn, chat_id, source_message_id)
+            end
 
           true ->
-            interpret_and_respond(
-              user_id,
-              chat_id,
-              text,
-              source_message_id,
-              conversation,
-              user_turn,
-              linked_delivery,
-              linked_insight
-            )
+            case TelegramAssistant.handle_inbound(%{
+                   user_id: user_id,
+                   chat_id: chat_id,
+                   text: text,
+                   source_message_id: source_message_id,
+                   reply_to_message_id: reply_to_message_id,
+                   conversation: conversation,
+                   user_turn: user_turn,
+                   linked_delivery: linked_delivery,
+                   linked_insight: linked_insight
+                 }) do
+              :ok ->
+                :ok
+
+              {:fallback, _reason} ->
+                interpret_and_respond(
+                  user_id,
+                  chat_id,
+                  text,
+                  source_message_id,
+                  conversation,
+                  user_turn,
+                  linked_delivery,
+                  linked_insight
+                )
+            end
         end
       end
     else
@@ -99,20 +140,38 @@ defmodule Maraithon.TelegramRouter do
   end
 
   def handle_callback_query(data) when is_map(data) do
-    callback_data = read_string(data, "data", "")
-    callback_id = read_string(data, "callback_id")
-    chat_id = read_id_string(data, "chat_id")
-    message_id = read_id_string(data, "message_id")
+    case TelegramAssistant.handle_callback_query(data) do
+      :ok ->
+        :ok
 
-    case TelegramResponder.parse_confirmation_callback(callback_data) do
-      {:ok, conversation_id, "confirm"} ->
-        handle_confirmation_callback(conversation_id, :confirm, chat_id, message_id, callback_id)
+      _ ->
+        callback_data = read_string(data, "data", "")
+        callback_id = read_string(data, "callback_id")
+        chat_id = read_id_string(data, "chat_id")
+        message_id = read_id_string(data, "message_id")
 
-      {:ok, conversation_id, "reject"} ->
-        handle_confirmation_callback(conversation_id, :reject, chat_id, message_id, callback_id)
+        case TelegramResponder.parse_confirmation_callback(callback_data) do
+          {:ok, conversation_id, "confirm"} ->
+            handle_confirmation_callback(
+              conversation_id,
+              :confirm,
+              chat_id,
+              message_id,
+              callback_id
+            )
 
-      {:error, :invalid_callback} ->
-        :ignored
+          {:ok, conversation_id, "reject"} ->
+            handle_confirmation_callback(
+              conversation_id,
+              :reject,
+              chat_id,
+              message_id,
+              callback_id
+            )
+
+          {:error, :invalid_callback} ->
+            :ignored
+        end
     end
   end
 

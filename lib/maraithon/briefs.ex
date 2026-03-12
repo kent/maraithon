@@ -9,6 +9,7 @@ defmodule Maraithon.Briefs do
   alias Maraithon.ConnectedAccounts
   alias Maraithon.Connectors.Telegram
   alias Maraithon.Repo
+  alias Maraithon.TelegramAssistant
   alias MaraithonWeb.Endpoint
 
   require Logger
@@ -90,47 +91,70 @@ defmodule Maraithon.Briefs do
   end
 
   def send_brief(%Brief{} = brief) do
-    case telegram_destination(brief.user_id) do
-      nil ->
-        :skip
+    case TelegramAssistant.deliver_brief(brief) do
+      :ok ->
+        :ok
 
-      destination ->
-        case telegram_module().send_message(
-               destination,
-               render_telegram_text(brief),
-               parse_mode: "HTML",
-               reply_markup: brief_reply_markup(brief)
-             ) do
-          {:ok, result} ->
-            message_id = read_message_id(result)
+      {:fallback, :disabled} ->
+        case telegram_destination(brief.user_id) do
+          nil ->
+            :skip
 
-            brief
-            |> Ecto.Changeset.change(%{
-              status: "sent",
-              sent_at: DateTime.utc_now(),
-              provider_message_id: message_id,
-              error_message: nil
-            })
-            |> Repo.update()
+          destination ->
+            payload = telegram_payload(brief)
 
-            :ok
+            case telegram_module().send_message(
+                   destination,
+                   payload.text,
+                   parse_mode: "HTML",
+                   reply_markup: payload.reply_markup
+                 ) do
+              {:ok, result} ->
+                message_id = read_message_id(result)
 
-          {:error, reason} ->
-            Logger.warning("Failed to send Telegram brief",
-              reason: inspect(reason),
-              brief_id: brief.id
-            )
+                brief
+                |> Ecto.Changeset.change(%{
+                  status: "sent",
+                  sent_at: DateTime.utc_now(),
+                  provider_message_id: message_id,
+                  error_message: nil
+                })
+                |> Repo.update()
 
-            brief
-            |> Ecto.Changeset.change(%{
-              status: "failed",
-              error_message: inspect(reason)
-            })
-            |> Repo.update()
+                :ok
 
-            {:error, reason}
+              {:error, reason} ->
+                Logger.warning("Failed to send Telegram brief",
+                  reason: inspect(reason),
+                  brief_id: brief.id
+                )
+
+                brief
+                |> Ecto.Changeset.change(%{
+                  status: "failed",
+                  error_message: inspect(reason)
+                })
+                |> Repo.update()
+
+                {:error, reason}
+            end
         end
+
+      {:error, reason} ->
+        Logger.warning("Failed to broker Telegram brief",
+          reason: inspect(reason),
+          brief_id: brief.id
+        )
+
+        {:error, reason}
     end
+  end
+
+  def telegram_payload(%Brief{} = brief) do
+    %{
+      text: render_telegram_text(brief),
+      reply_markup: brief_reply_markup(brief)
+    }
   end
 
   defp normalize_attrs(attrs, user_id, agent_id) do

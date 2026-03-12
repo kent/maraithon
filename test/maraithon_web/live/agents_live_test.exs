@@ -5,7 +5,7 @@ defmodule MaraithonWeb.AgentsLiveTest do
 
   alias Maraithon.Agents
   alias Maraithon.Effects.Effect
-  alias Maraithon.Runtime
+  alias Maraithon.Runtime.AgentSupervisor
   alias Maraithon.Runtime.ScheduledJob
 
   @user_email "agents@example.com"
@@ -101,7 +101,7 @@ defmodule MaraithonWeb.AgentsLiveTest do
 
     assert render(view) =~ "Agent started"
 
-    assert {:ok, _result} = Runtime.stop_agent(agent.id, "test_cleanup")
+    stop_agent_process(agent.id)
   end
 
   test "stop action updates the visible status", %{conn: conn} do
@@ -244,5 +244,12 @@ defmodule MaraithonWeb.AgentsLiveTest do
   defp create_agent(attrs) do
     attrs = Map.put_new(attrs, :user_id, @user_email)
     Agents.create_agent(attrs)
+  end
+
+  defp stop_agent_process(agent_id) do
+    case Registry.lookup(Maraithon.Runtime.AgentRegistry, agent_id) do
+      [{pid, _value}] -> assert :ok = AgentSupervisor.stop_agent(pid)
+      [] -> :ok
+    end
   end
 end

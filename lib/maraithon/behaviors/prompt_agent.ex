@@ -67,28 +67,36 @@ defmodule Maraithon.Behaviors.PromptAgent do
 
   @impl true
   def handle_wakeup(state, context) do
+    last_message = Map.get(context, :last_message)
+    timestamp = Map.get(context, :timestamp)
+    last_message_metadata = Map.get(context, :last_message_metadata, %{})
+    last_message_id = Map.get(context, :last_message_id)
+    pubsub_event = Map.get(context, :event)
+
     # Check for new events: message, pubsub event, or just a wakeup
     cond do
       # Direct message to agent
-      context.last_message && context.last_message != state.last_processed_message ->
+      last_message && last_message != state.last_processed_message ->
         event = %{
           type: :message,
-          content: context.last_message,
-          timestamp: context.timestamp,
-          source: "direct"
+          content: last_message,
+          timestamp: timestamp,
+          source: "direct",
+          metadata: last_message_metadata,
+          message_id: last_message_id
         }
 
-        state = %{state | last_processed_message: context.last_message}
+        state = %{state | last_processed_message: last_message}
         process_event(state, event, context)
 
       # PubSub event
-      context[:event] != nil ->
+      pubsub_event != nil ->
         event = %{
           type: :pubsub,
-          topic: context.event.topic,
-          content: context.event.payload,
-          timestamp: context.timestamp,
-          source: context.event.topic
+          topic: event_field(pubsub_event, :topic),
+          content: event_field(pubsub_event, :payload),
+          timestamp: timestamp,
+          source: event_field(pubsub_event, :topic)
         }
 
         process_event(state, event, context)
@@ -195,7 +203,9 @@ defmodule Maraithon.Behaviors.PromptAgent do
           %{
             agent: state.name,
             response: message,
-            event_type: get_in(state, [:processing_event, :type])
+            event_type: get_in(state, [:processing_event, :type]),
+            correlation_id: get_in(state, [:processing_event, :metadata, "correlation_id"]),
+            message_id: get_in(state, [:processing_event, :message_id])
           }}, state}
 
       :observe ->
@@ -238,7 +248,9 @@ defmodule Maraithon.Behaviors.PromptAgent do
          {:agent_error,
           %{
             agent: state.name,
-            error: "Tool #{tool_call.tool} failed: #{inspect(reason)}"
+            error: "Tool #{tool_call.tool} failed: #{inspect(reason)}",
+            correlation_id: get_in(state, [:processing_event, :metadata, "correlation_id"]),
+            message_id: get_in(state, [:processing_event, :message_id])
           }}, state}
     end
   end
@@ -287,6 +299,7 @@ defmodule Maraithon.Behaviors.PromptAgent do
 
   defp build_proactive_prompt(state, context) do
     memory_context = format_memory(state.memory)
+    timestamp = Map.get(context, :timestamp) || DateTime.utc_now()
 
     """
     #{state.prompt}
@@ -295,7 +308,7 @@ defmodule Maraithon.Behaviors.PromptAgent do
     #{memory_context}
 
     ## Current Time
-    #{DateTime.to_iso8601(context.timestamp)}
+    #{DateTime.to_iso8601(timestamp)}
 
     ## Instructions
     You're doing a periodic check-in. Based on what you've observed recently,
@@ -357,6 +370,10 @@ defmodule Maraithon.Behaviors.PromptAgent do
   defp format_content(content) when is_binary(content), do: content
   defp format_content(content) when is_map(content), do: Jason.encode!(content, pretty: true)
   defp format_content(content), do: inspect(content)
+
+  defp event_field(event, key) when is_map(event) do
+    Map.get(event, key) || Map.get(event, to_string(key))
+  end
 
   defp truncate(str, max) when byte_size(str) <= max, do: str
   defp truncate(str, max), do: String.slice(str, 0, max) <> "..."
