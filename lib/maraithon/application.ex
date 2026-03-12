@@ -16,6 +16,7 @@ defmodule Maraithon.Application do
       {DNSCluster, query: Application.get_env(:maraithon, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: Maraithon.PubSub},
       Maraithon.LogBuffer,
+      Maraithon.TelegramAssistant.LivenessSupervisor,
       # Maraithon runtime supervisor (agents, scheduler, effect runner)
       Maraithon.Runtime.Supervisor,
       # Start to serve requests, typically the last entry

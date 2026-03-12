@@ -4,62 +4,86 @@ defmodule Maraithon.TestSupport.CapturingTelegram do
   def configured?, do: true
 
   def send_message(chat_id, text, opts \\ []) do
-    message_id =
-      if pid = Process.whereis(:capturing_telegram_recorder) do
-        Agent.get_and_update(pid, fn messages ->
-          next_message_id =
-            messages
-            |> Enum.count(&(&1.type == :send))
-            |> Kernel.+(1)
-            |> Integer.to_string()
+    message_id = next_message_id()
 
-          updated_messages = [
-            %{
-              type: :send,
-              chat_id: normalize_chat_id(chat_id),
-              message_id: next_message_id,
-              text: text,
-              opts: opts
-            }
-            | messages
-          ]
-
-          {next_message_id, updated_messages}
-        end)
-      else
-        "1"
-      end
+    record_event(%{
+      type: :send,
+      chat_id: normalize_chat_id(chat_id),
+      message_id: message_id,
+      text: text,
+      opts: opts
+    })
 
     {:ok, %{"message_id" => message_id}}
   end
 
+  def send_chat_action(chat_id, action) do
+    record_event(%{
+      type: :chat_action,
+      chat_id: normalize_chat_id(chat_id),
+      action: to_string(action)
+    })
+
+    {:ok, true}
+  end
+
   def answer_callback_query(_callback_query_id, opts \\ []) do
-    if pid = Process.whereis(:capturing_telegram_recorder) do
-      Agent.update(pid, fn messages ->
-        [%{type: :callback, opts: opts} | messages]
-      end)
-    end
+    record_event(%{type: :callback, opts: opts})
 
     {:ok, true}
   end
 
   def edit_message_text(chat_id, message_id, text, opts \\ []) do
+    event = %{
+      type: :edit,
+      chat_id: normalize_chat_id(chat_id),
+      message_id: normalize_chat_id(message_id),
+      text: text,
+      opts: opts
+    }
+
+    case edit_result() do
+      {:error, reason} ->
+        notify_watcher({:capturing_telegram_edit_failed, event, reason})
+        {:error, reason}
+
+      _ ->
+        record_event(event)
+        {:ok, true}
+    end
+  end
+
+  defp next_message_id do
     if pid = Process.whereis(:capturing_telegram_recorder) do
-      Agent.update(pid, fn messages ->
-        [
-          %{
-            type: :edit,
-            chat_id: normalize_chat_id(chat_id),
-            message_id: normalize_chat_id(message_id),
-            text: text,
-            opts: opts
-          }
-          | messages
-        ]
+      Agent.get(pid, fn messages ->
+        messages
+        |> Enum.count(&(&1.type == :send))
+        |> Kernel.+(1)
+        |> Integer.to_string()
       end)
+    else
+      "1"
+    end
+  end
+
+  defp edit_result do
+    Application.get_env(:maraithon, :capturing_telegram, [])
+    |> Keyword.get(:edit_result, :ok)
+  end
+
+  defp record_event(event) do
+    if pid = Process.whereis(:capturing_telegram_recorder) do
+      Agent.update(pid, fn messages -> [event | messages] end)
     end
 
-    {:ok, true}
+    notify_watcher({:capturing_telegram_event, event})
+    :ok
+  end
+
+  defp notify_watcher(message) do
+    if pid = Process.whereis(:capturing_telegram_watcher) do
+      send(pid, message)
+    end
   end
 
   defp normalize_chat_id(chat_id) when is_integer(chat_id), do: Integer.to_string(chat_id)

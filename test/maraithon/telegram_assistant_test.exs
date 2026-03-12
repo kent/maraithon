@@ -21,9 +21,14 @@ defmodule Maraithon.TelegramAssistantTest do
       start: {Agent, :start_link, [fn -> [] end, [name: :capturing_telegram_recorder]]}
     })
 
+    if Process.whereis(:capturing_telegram_watcher) == nil do
+      Process.register(self(), :capturing_telegram_watcher)
+    end
+
     original_insights = Application.get_env(:maraithon, :insights, [])
     original_briefs = Application.get_env(:maraithon, :briefs, [])
     original_assistant = Application.get_env(:maraithon, :telegram_assistant, [])
+    original_capturing = Application.get_env(:maraithon, :capturing_telegram, [])
 
     Application.put_env(
       :maraithon,
@@ -46,9 +51,17 @@ defmodule Maraithon.TelegramAssistantTest do
       Keyword.merge(original_assistant,
         telegram_full_chat_enabled: true,
         telegram_unified_push_enabled: true,
+        telegram_liveness_enabled: true,
+        typing_initial_delay_ms: 10_000,
+        typing_refresh_ms: 4_000,
+        contextual_progress_delay_ms: 20_000,
+        timeout_notice_ms: 35_000,
+        hard_timeout_ms: 40_000,
         client_module: TelegramAssistantClientStub
       )
     )
+
+    Application.put_env(:maraithon, :capturing_telegram, original_capturing)
 
     assert Maraithon.TelegramAssistant.enabled?()
     assert Maraithon.TelegramAssistant.unified_push_enabled?()
@@ -57,6 +70,7 @@ defmodule Maraithon.TelegramAssistantTest do
       Application.put_env(:maraithon, :insights, original_insights)
       Application.put_env(:maraithon, :briefs, original_briefs)
       Application.put_env(:maraithon, :telegram_assistant, original_assistant)
+      Application.put_env(:maraithon, :capturing_telegram, original_capturing)
     end)
 
     user_id = "telegram-assistant@example.com"
@@ -178,6 +192,7 @@ defmodule Maraithon.TelegramAssistantTest do
       )
 
     assert turn.text =~ "Sarah"
+    refute Enum.any?(telegram_events(), &(&1.type == :chat_action))
   end
 
   test "assistant prepares a destructive agent action and executes it after text confirmation", %{
@@ -326,9 +341,335 @@ defmodule Maraithon.TelegramAssistantTest do
     assert turn.origin_id == delivery.id
   end
 
+  test "medium runs emit native typing without a progress note" do
+    parent = self()
+
+    configure_liveness(
+      typing_initial_delay_ms: 25,
+      typing_refresh_ms: 50,
+      contextual_progress_delay_ms: 400,
+      timeout_notice_ms: 1_500,
+      hard_timeout_ms: 2_000
+    )
+
+    set_assistant(fn _payload ->
+      run_pid = self()
+      send(parent, {:assistant_waiting, run_pid})
+
+      receive do
+        {:release_assistant, ^run_pid} ->
+          {:ok,
+           %{
+             "status" => "final",
+             "assistant_message" => "Here is the answer.",
+             "message_class" => "assistant_reply",
+             "tool_calls" => [],
+             "summary" => "Returned the answer."
+           }}
+      end
+    end)
+
+    task =
+      Task.async(fn ->
+        InsightNotifications.handle_telegram_event(%{
+          type: "message",
+          data: %{chat_id: 12345, message_id: 9201, text: "What is going on?"}
+        })
+      end)
+
+    assert_receive {:assistant_waiting, run_pid}
+    assert_receive {:capturing_telegram_event, %{type: :chat_action, action: "typing"}}, 500
+    send(run_pid, {:release_assistant, run_pid})
+    assert :ok = Task.await(task, 2_000)
+
+    events = telegram_events()
+    assert Enum.any?(events, &(&1.type == :chat_action))
+    assert Enum.count(Enum.filter(events, &(&1.type == :send))) == 1
+    refute Enum.any?(events, &(&1.type == :edit))
+
+    [run] =
+      Repo.all(
+        from run in Run,
+          order_by: [desc: run.inserted_at],
+          limit: 1
+      )
+
+    assert get_in(run.result_summary, ["liveness", "typing_started"])
+    refute get_in(run.result_summary, ["liveness", "progress_note_sent"])
+  end
+
+  test "slow runs send one contextual progress note and edit it into the final answer" do
+    parent = self()
+
+    configure_liveness(
+      typing_initial_delay_ms: 25,
+      typing_refresh_ms: 50,
+      contextual_progress_delay_ms: 100,
+      timeout_notice_ms: 1_500,
+      hard_timeout_ms: 2_000
+    )
+
+    start_supervised!(%{
+      id: :telegram_assistant_slow_sequence,
+      start: {Agent, :start_link, [fn -> 0 end, [name: :telegram_assistant_slow_sequence]]}
+    })
+
+    set_assistant(fn _payload ->
+      sequence =
+        Agent.get_and_update(:telegram_assistant_slow_sequence, fn current ->
+          {current, current + 1}
+        end)
+
+      if sequence == 0 do
+        {:ok,
+         %{
+           "status" => "tool_calls",
+           "assistant_message" => "",
+           "message_class" => "assistant_reply",
+           "tool_calls" => [
+             %{"tool" => "get_open_work_summary", "arguments" => %{"limit" => 3}}
+           ],
+           "summary" => "Need open work."
+         }}
+      else
+        run_pid = self()
+        send(parent, {:assistant_waiting, run_pid})
+
+        receive do
+          {:release_assistant, ^run_pid} ->
+            {:ok,
+             %{
+               "status" => "final",
+               "assistant_message" => "Open work reviewed.",
+               "message_class" => "assistant_reply",
+               "tool_calls" => [],
+               "summary" => "Done."
+             }}
+        end
+      end
+    end)
+
+    task =
+      Task.async(fn ->
+        InsightNotifications.handle_telegram_event(%{
+          type: "message",
+          data: %{chat_id: 12345, message_id: 9202, text: "Review my work."}
+        })
+      end)
+
+    assert_receive {:assistant_waiting, run_pid}
+    assert_receive {:capturing_telegram_event, %{type: :chat_action, action: "typing"}}, 500
+    assert_receive {:capturing_telegram_event, %{type: :send, text: progress_text}}, 500
+    assert progress_text =~ "open work"
+    send(run_pid, {:release_assistant, run_pid})
+    assert :ok = Task.await(task, 2_000)
+
+    events = telegram_events()
+    assert Enum.count(Enum.filter(events, &(&1.type == :send))) == 1
+    assert Enum.count(Enum.filter(events, &(&1.type == :edit))) == 1
+    assert Enum.any?(events, &(&1.type == :edit and &1.text == "Open work reviewed."))
+
+    [run] =
+      Repo.all(
+        from run in Run,
+          order_by: [desc: run.inserted_at],
+          limit: 1
+      )
+
+    assert get_in(run.result_summary, ["liveness", "typing_started"])
+    assert get_in(run.result_summary, ["liveness", "progress_note_sent"])
+    assert get_in(run.result_summary, ["liveness", "final_delivery_mode"]) == "edit_progress"
+  end
+
+  test "timed out runs tell the user and suppress the late final reply" do
+    parent = self()
+
+    configure_liveness(
+      typing_initial_delay_ms: 25,
+      typing_refresh_ms: 50,
+      contextual_progress_delay_ms: 75,
+      timeout_notice_ms: 140,
+      hard_timeout_ms: 200
+    )
+
+    start_supervised!(%{
+      id: :telegram_assistant_timeout_sequence,
+      start: {Agent, :start_link, [fn -> 0 end, [name: :telegram_assistant_timeout_sequence]]}
+    })
+
+    set_assistant(fn _payload ->
+      sequence =
+        Agent.get_and_update(:telegram_assistant_timeout_sequence, fn current ->
+          {current, current + 1}
+        end)
+
+      if sequence == 0 do
+        {:ok,
+         %{
+           "status" => "tool_calls",
+           "assistant_message" => "",
+           "message_class" => "assistant_reply",
+           "tool_calls" => [
+             %{"tool" => "get_open_work_summary", "arguments" => %{"limit" => 3}}
+           ],
+           "summary" => "Need open work."
+         }}
+      else
+        run_pid = self()
+        send(parent, {:assistant_waiting, run_pid})
+
+        receive do
+          {:release_assistant, ^run_pid} ->
+            {:ok,
+             %{
+               "status" => "final",
+               "assistant_message" => "This answer should be suppressed.",
+               "message_class" => "assistant_reply",
+               "tool_calls" => [],
+               "summary" => "Late final."
+             }}
+        end
+      end
+    end)
+
+    task =
+      Task.async(fn ->
+        InsightNotifications.handle_telegram_event(%{
+          type: "message",
+          data: %{chat_id: 12345, message_id: 9203, text: "Take your time."}
+        })
+      end)
+
+    assert_receive {:assistant_waiting, run_pid}
+    assert_receive {:capturing_telegram_event, %{type: :send}}, 500
+    assert_receive {:capturing_telegram_event, %{type: :edit, text: timeout_text}}, 500
+    assert timeout_text =~ "didn't finish that in time"
+    send(run_pid, {:release_assistant, run_pid})
+    assert :ok = Task.await(task, 2_000)
+
+    events = telegram_events()
+    assert Enum.count(Enum.filter(events, &(&1.type == :edit))) == 1
+
+    refute Enum.any?(
+             events,
+             &(&1.type == :edit and &1.text == "This answer should be suppressed.")
+           )
+
+    refute Enum.any?(
+             events,
+             &(&1.type == :send and &1.text == "This answer should be suppressed.")
+           )
+
+    [run] =
+      Repo.all(
+        from run in Run,
+          order_by: [desc: run.inserted_at],
+          limit: 1
+      )
+
+    assert run.status == "degraded"
+    assert get_in(run.result_summary, ["liveness", "timeout_notice_sent"])
+
+    assert get_in(run.result_summary, ["liveness", "final_delivery_mode"]) ==
+             "suppressed_after_timeout"
+  end
+
+  test "final delivery falls back to a fresh send when editing the progress note fails" do
+    parent = self()
+
+    configure_liveness(
+      typing_initial_delay_ms: 25,
+      typing_refresh_ms: 50,
+      contextual_progress_delay_ms: 75,
+      timeout_notice_ms: 1_500,
+      hard_timeout_ms: 2_000
+    )
+
+    Application.put_env(:maraithon, :capturing_telegram,
+      edit_result: {:error, :forced_edit_failure}
+    )
+
+    start_supervised!(%{
+      id: :telegram_assistant_edit_fallback_sequence,
+      start:
+        {Agent, :start_link, [fn -> 0 end, [name: :telegram_assistant_edit_fallback_sequence]]}
+    })
+
+    set_assistant(fn _payload ->
+      sequence =
+        Agent.get_and_update(:telegram_assistant_edit_fallback_sequence, fn current ->
+          {current, current + 1}
+        end)
+
+      if sequence == 0 do
+        {:ok,
+         %{
+           "status" => "tool_calls",
+           "assistant_message" => "",
+           "message_class" => "assistant_reply",
+           "tool_calls" => [
+             %{"tool" => "get_open_work_summary", "arguments" => %{"limit" => 3}}
+           ],
+           "summary" => "Need open work."
+         }}
+      else
+        run_pid = self()
+        send(parent, {:assistant_waiting, run_pid})
+
+        receive do
+          {:release_assistant, ^run_pid} ->
+            {:ok,
+             %{
+               "status" => "final",
+               "assistant_message" => "Final answer after edit failure.",
+               "message_class" => "assistant_reply",
+               "tool_calls" => [],
+               "summary" => "Done."
+             }}
+        end
+      end
+    end)
+
+    task =
+      Task.async(fn ->
+        InsightNotifications.handle_telegram_event(%{
+          type: "message",
+          data: %{chat_id: 12345, message_id: 9204, text: "Need a slow answer."}
+        })
+      end)
+
+    assert_receive {:assistant_waiting, run_pid}
+    assert_receive {:capturing_telegram_event, %{type: :send}}, 500
+    send(run_pid, {:release_assistant, run_pid})
+    assert :ok = Task.await(task, 2_000)
+    assert_receive {:capturing_telegram_edit_failed, _event, :forced_edit_failure}, 500
+
+    events = telegram_events()
+    assert Enum.count(Enum.filter(events, &(&1.type == :send))) == 2
+
+    refute Enum.any?(
+             events,
+             &(&1.type == :edit and &1.text == "Final answer after edit failure.")
+           )
+
+    assert Enum.any?(
+             events,
+             &(&1.type == :send and &1.text == "Final answer after edit failure.")
+           )
+  end
+
   defp set_assistant(fun) when is_function(fun, 1) do
     config = Application.get_env(:maraithon, :telegram_assistant, [])
     Application.put_env(:maraithon, :telegram_assistant, Keyword.put(config, :next_step, fun))
+  end
+
+  defp configure_liveness(opts) do
+    config = Application.get_env(:maraithon, :telegram_assistant, [])
+    Application.put_env(:maraithon, :telegram_assistant, Keyword.merge(config, opts))
+  end
+
+  defp telegram_events do
+    Agent.get(:capturing_telegram_recorder, &Enum.reverse/1)
   end
 
   defp last_telegram_message(type) do

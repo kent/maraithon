@@ -7,6 +7,10 @@ defmodule Maraithon.TestSupport.FakeTelegram do
     {:ok, %{"message_id" => 123}}
   end
 
+  def send_chat_action(_chat_id, _action) do
+    {:ok, true}
+  end
+
   def answer_callback_query(_callback_query_id, _opts \\ []) do
     {:ok, true}
   end

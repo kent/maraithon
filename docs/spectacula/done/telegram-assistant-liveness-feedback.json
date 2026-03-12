@@ -1,0 +1,74 @@
+{
+  "spec_id": "telegram-assistant-liveness-feedback",
+  "slug": "telegram-assistant-liveness-feedback",
+  "title": "Telegram Assistant Liveness Feedback",
+  "stage": "done",
+  "spec_path": "../specs/telegram-assistant-liveness-feedback.md",
+  "created_at": "2026-03-12T17:03:59Z",
+  "updated_at": "2026-03-12T17:21:56Z",
+  "summary": "Implemented Telegram assistant liveness feedback with delayed native typing indicators, contextual long-run progress notes, timeout messaging, edit-in-place final delivery, and coverage for timeout and edit-fallback paths.",
+  "next_action": "Deploy and verify the Telegram liveness behavior in production when requested.",
+  "blockers": [],
+  "reference_examples": [
+    "docs/spectacula/specs/unified-telegram-operator-chat.md",
+    "docs/spectacula/specs/evidence-first-insight-detail.md"
+  ],
+  "verification": {
+    "format": "passed",
+    "lint": "passed",
+    "typecheck": "passed",
+    "build": "passed",
+    "tests": "passed",
+    "spec_review": "passed",
+    "notes": "`mix precommit` passed on 2026-03-12 after wiring Telegram `sendChatAction`, the liveness session supervisor, runner delivery integration, and end-to-end assistant timing coverage."
+  },
+  "resume_context": {
+    "last_completed_step": "Implemented the Telegram liveness session, connector/responder support, runner delivery integration, edit fallback behavior, timeout suppression, and passing verification coverage.",
+    "pending_steps": [],
+    "open_questions": [],
+    "last_reviewed_sections": [
+      "2. Current State and Problem",
+      "4. UX and Interaction Model",
+      "5. Functional Requirements",
+      "7. Backend and Service Design",
+      "12. Test Plan and Validation Matrix"
+    ],
+    "artifacts": [
+      "docs/spectacula/specs/telegram-assistant-liveness-feedback.md",
+      "lib/maraithon/connectors/telegram.ex",
+      "lib/maraithon/telegram_responder.ex",
+      "lib/maraithon/telegram_assistant.ex",
+      "lib/maraithon/telegram_assistant/runner.ex",
+      "lib/maraithon/telegram_assistant/liveness_session.ex",
+      "lib/maraithon/telegram_assistant/liveness_supervisor.ex",
+      "lib/maraithon/application.ex",
+      "test/support/capturing_telegram.ex",
+      "test/support/fake_telegram.ex",
+      "test/maraithon/telegram_assistant_test.exs"
+    ],
+    "notes": "The delivered behavior keeps scope to assistant-owned inbound Telegram runs. The assistant now starts typing after a short grace period, sends one contextual progress note on long runs, edits that note into the final answer when possible, and suppresses late answers after the timeout notice."
+  },
+  "history": [
+    {
+      "at": "2026-03-12T17:03:59Z",
+      "event": "spec_created",
+      "from_stage": null,
+      "to_stage": "specs",
+      "note": "Initial draft created from the existing Telegram webhook-router-runner path, the unified Telegram assistant spec, and the product decisions favoring delayed typing, one 7-second contextual progress note, and explicit timeout messaging."
+    },
+    {
+      "at": "2026-03-12T17:04:00Z",
+      "event": "implementation_started",
+      "from_stage": "specs",
+      "to_stage": "inprogress",
+      "note": "Implementation began by adding Telegram chat-action support, a per-run liveness session supervisor, runner-aware delivery modes, and timing-focused Telegram assistant tests."
+    },
+    {
+      "at": "2026-03-12T17:21:56Z",
+      "event": "implementation_completed",
+      "from_stage": "inprogress",
+      "to_stage": "done",
+      "note": "Completed the Telegram liveness implementation with delayed native typing, contextual progress notes, timeout notifications, edit fallback behavior, and passing `mix precommit` verification."
+    }
+  ]
+}

@@ -350,6 +350,13 @@ defmodule Maraithon.Connectors.Telegram do
   end
 
   @doc """
+  Sends a chat action such as `typing`.
+  """
+  def send_chat_action(chat_id, action) do
+    api_request("sendChatAction", %{chat_id: chat_id, action: action})
+  end
+
+  @doc """
   Sends a photo.
   """
   def send_photo(chat_id, photo, opts \\ []) do

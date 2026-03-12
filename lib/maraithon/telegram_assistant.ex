@@ -7,7 +7,18 @@ defmodule Maraithon.TelegramAssistant do
 
   alias Maraithon.LLM
   alias Maraithon.Repo
-  alias Maraithon.TelegramAssistant.{PreparedAction, PushBroker, PushReceipt, Run, Runner, Step}
+
+  alias Maraithon.TelegramAssistant.{
+    LivenessSession,
+    LivenessSupervisor,
+    PreparedAction,
+    PushBroker,
+    PushReceipt,
+    Run,
+    Runner,
+    Step
+  }
+
   alias Maraithon.TelegramConversations
   alias Maraithon.TelegramConversations.Conversation
   alias Maraithon.TelegramResponder
@@ -15,6 +26,11 @@ defmodule Maraithon.TelegramAssistant do
   require Logger
 
   @default_confirmation_window_seconds 15 * 60
+  @default_typing_initial_delay_ms 1_200
+  @default_typing_refresh_ms 4_000
+  @default_contextual_progress_delay_ms 7_000
+  @default_timeout_notice_ms 35_000
+  @default_hard_timeout_ms 40_000
 
   def enabled? do
     config = config()
@@ -231,17 +247,11 @@ defmodule Maraithon.TelegramAssistant do
     send_mode = resolve_send_mode(reply_to_message_id, Keyword.get(opts, :send_mode, :reply))
     telegram_opts = Keyword.get(opts, :telegram_opts, [])
 
-    send_result =
-      case send_mode do
-        :send -> TelegramResponder.send(chat_id, text, telegram_opts)
-        :reply -> TelegramResponder.reply(chat_id, reply_to_message_id, text, telegram_opts)
-      end
-
-    case send_result do
-      {:ok, result} ->
+    case dispatch_turn(chat_id, text, reply_to_message_id, send_mode, telegram_opts, opts) do
+      {:ok, result, telegram_message_id} ->
         turn_attrs = %{
           "role" => Keyword.get(opts, :role, "assistant"),
-          "telegram_message_id" => normalize_id(Map.get(result, "message_id")),
+          "telegram_message_id" => telegram_message_id,
           "reply_to_message_id" => reply_to_message_id,
           "text" => text,
           "intent" => Keyword.get(opts, :intent),
@@ -286,6 +296,82 @@ defmodule Maraithon.TelegramAssistant do
 
   def confirmation_window_seconds do
     Keyword.get(config(), :confirmation_window_seconds, @default_confirmation_window_seconds)
+  end
+
+  def liveness_enabled? do
+    case Keyword.get(config(), :telegram_liveness_enabled) do
+      true -> true
+      false -> false
+      nil -> enabled?()
+    end
+  end
+
+  def typing_initial_delay_ms do
+    Keyword.get(config(), :typing_initial_delay_ms, @default_typing_initial_delay_ms)
+  end
+
+  def typing_refresh_ms do
+    Keyword.get(config(), :typing_refresh_ms, @default_typing_refresh_ms)
+  end
+
+  def contextual_progress_delay_ms do
+    Keyword.get(
+      config(),
+      :contextual_progress_delay_ms,
+      @default_contextual_progress_delay_ms
+    )
+  end
+
+  def timeout_notice_ms do
+    Keyword.get(config(), :timeout_notice_ms, @default_timeout_notice_ms)
+  end
+
+  def hard_timeout_ms do
+    Keyword.get(config(), :hard_timeout_ms) ||
+      Keyword.get(config(), :max_wall_clock_ms, @default_hard_timeout_ms)
+  end
+
+  def start_liveness_session(%Run{} = run, attrs) when is_map(attrs) do
+    if liveness_enabled?() do
+      LivenessSupervisor.start_session(%{
+        run_id: run.id,
+        user_id: run.user_id,
+        conversation_id: run.conversation_id,
+        chat_id: run.chat_id,
+        reply_to_message_id: Map.get(attrs, :source_message_id)
+      })
+    else
+      {:error, :disabled}
+    end
+  end
+
+  def note_liveness_context_loaded(run_id) when is_binary(run_id) do
+    maybe_liveness_call(fn -> LivenessSession.note_context_loaded(run_id) end)
+  end
+
+  def note_liveness_tool(run_id, tool_name, args \\ %{})
+      when is_binary(run_id) and is_binary(tool_name) and is_map(args) do
+    maybe_liveness_call(fn -> LivenessSession.note_tool(run_id, tool_name, args) end)
+  end
+
+  def cancel_liveness_session(run_id) when is_binary(run_id) do
+    maybe_liveness_call(fn -> LivenessSession.cancel(run_id) end)
+  end
+
+  def prepare_final_delivery(run_id) when is_binary(run_id) do
+    if liveness_enabled?() do
+      normalize_liveness_delivery(LivenessSession.prepare_final_delivery(run_id))
+    else
+      {:ok, default_liveness_delivery()}
+    end
+  end
+
+  def liveness_timed_out?(run_id) when is_binary(run_id) do
+    if liveness_enabled?() do
+      LivenessSession.timed_out?(run_id)
+    else
+      false
+    end
   end
 
   def model_provider_name do
@@ -517,9 +603,47 @@ defmodule Maraithon.TelegramAssistant do
     Keyword.has_key?(config, :client_module) or LLM.provider() == Maraithon.LLM.OpenAIProvider
   end
 
+  defp resolve_send_mode(_reply_to_message_id, :edit), do: :edit
   defp resolve_send_mode(nil, _mode), do: :send
   defp resolve_send_mode(_reply_to_message_id, mode) when mode in [:send, :reply], do: mode
   defp resolve_send_mode(_reply_to_message_id, _mode), do: :reply
+
+  defp dispatch_turn(chat_id, text, _reply_to_message_id, :send, telegram_opts, _opts) do
+    case TelegramResponder.send(chat_id, text, telegram_opts) do
+      {:ok, result} -> {:ok, result, normalize_id(Map.get(result, "message_id"))}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp dispatch_turn(chat_id, text, reply_to_message_id, :reply, telegram_opts, _opts) do
+    case TelegramResponder.reply(chat_id, reply_to_message_id, text, telegram_opts) do
+      {:ok, result} -> {:ok, result, normalize_id(Map.get(result, "message_id"))}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp dispatch_turn(chat_id, text, reply_to_message_id, :edit, telegram_opts, opts) do
+    message_id = Keyword.get(opts, :message_id)
+
+    if is_binary(message_id) do
+      case TelegramResponder.edit(chat_id, message_id, text, telegram_opts) do
+        {:ok, result} ->
+          {:ok, result, message_id}
+
+        {:error, reason} ->
+          Logger.warning("Failed Telegram assistant edit, falling back to send",
+            chat_id: chat_id,
+            message_id: message_id,
+            reason: inspect(reason)
+          )
+
+          fallback_mode = resolve_send_mode(reply_to_message_id, :reply)
+          dispatch_turn(chat_id, text, reply_to_message_id, fallback_mode, telegram_opts, [])
+      end
+    else
+      dispatch_turn(chat_id, text, reply_to_message_id, :reply, telegram_opts, [])
+    end
+  end
 
   defp normalize_decision("confirm"), do: :confirm
   defp normalize_decision("reject"), do: :reject
@@ -566,5 +690,44 @@ defmodule Maraithon.TelegramAssistant do
 
   defp config do
     Application.get_env(:maraithon, :telegram_assistant, [])
+  end
+
+  defp maybe_liveness_call(fun) when is_function(fun, 0) do
+    if liveness_enabled?() do
+      fun.()
+    else
+      :ok
+    end
+  rescue
+    error ->
+      Logger.warning("Telegram assistant liveness operation failed",
+        reason: Exception.message(error)
+      )
+
+      :ok
+  end
+
+  defp normalize_liveness_delivery({:ok, %{delivery: _delivery, summary: _summary} = result}) do
+    {:ok, result}
+  end
+
+  defp normalize_liveness_delivery(%{delivery: _delivery, summary: _summary} = result) do
+    {:ok, result}
+  end
+
+  defp normalize_liveness_delivery(_result) do
+    {:ok, default_liveness_delivery()}
+  end
+
+  defp default_liveness_delivery do
+    %{
+      delivery: %{mode: :send},
+      summary: %{
+        "typing_started" => false,
+        "progress_note_sent" => false,
+        "timeout_notice_sent" => false,
+        "final_delivery_mode" => "send"
+      }
+    }
   end
 end

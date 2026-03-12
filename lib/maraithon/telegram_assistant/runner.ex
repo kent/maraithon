@@ -13,37 +13,50 @@ defmodule Maraithon.TelegramAssistant.Runner do
 
   @max_llm_turns 6
   @max_tool_steps 10
-  @max_wall_clock_ms 60_000
 
   def run_inbound(attrs) when is_map(attrs) do
     context = Context.build(attrs)
     conversation = Map.get(attrs, :conversation)
 
-    with {:ok, run} <- start_run(attrs, context),
-         {:ok, _step_state} <- record_context_fetch(run, context),
-         {:ok, response, state} <-
-           run_loop(
-             run,
-             build_runtime_context(run, attrs, context),
-             %{iteration: 1, llm_turns: 0, tool_steps: 0, tool_history: [], sequence: 1},
-             System.monotonic_time(:millisecond)
-           ),
-         {:ok, status, summary} <-
-           deliver_final_response(conversation, run, response, state, attrs) do
-      {:ok, _run} =
-        TelegramAssistant.complete_run(run, %{status: status, result_summary: summary})
+    case start_run(attrs, context) do
+      {:ok, run} ->
+        runtime_context = build_runtime_context(run, attrs, context)
+        _ = maybe_start_liveness_session(run, attrs)
 
-      :ok
-    else
-      {:fallback, reason} ->
-        Logger.warning("Telegram assistant falling back to legacy interpreter",
-          reason: inspect(reason)
-        )
+        with {:ok, _step_state} <- record_context_fetch(run, context),
+             :ok <- note_context_loaded(run),
+             {:ok, response, state} <-
+               run_loop(
+                 run,
+                 runtime_context,
+                 %{iteration: 1, llm_turns: 0, tool_steps: 0, tool_history: [], sequence: 1},
+                 System.monotonic_time(:millisecond)
+               ),
+             {:ok, status, summary} <-
+               deliver_final_response(conversation, run, response, state, attrs) do
+          {:ok, _run} =
+            TelegramAssistant.complete_run(run, %{status: status, result_summary: summary})
 
-        {:fallback, reason}
+          :ok
+        else
+          {:fallback, reason} ->
+            _ = TelegramAssistant.cancel_liveness_session(run.id)
+            {:ok, _run} = TelegramAssistant.fail_run(run, reason, "degraded")
 
-      {:error, %Run{} = run, reason, state} ->
-        handle_run_failure(run, reason, state, attrs)
+            Logger.warning("Telegram assistant falling back to legacy interpreter",
+              reason: inspect(reason)
+            )
+
+            {:fallback, reason}
+
+          {:error, %Run{} = run, reason, state} ->
+            handle_run_failure(run, reason, state, attrs)
+
+          {:error, reason} ->
+            _ = TelegramAssistant.cancel_liveness_session(run.id)
+            {:ok, _run} = TelegramAssistant.fail_run(run, reason, "degraded")
+            {:fallback, reason}
+        end
 
       {:error, reason} ->
         {:fallback, reason}
@@ -180,6 +193,8 @@ defmodule Maraithon.TelegramAssistant.Runner do
                  %{"tool" => tool_name, "arguments" => arguments},
                  now
                ) do
+          _ = TelegramAssistant.note_liveness_tool(run.id, tool_name, arguments)
+
           case Toolbox.execute(tool_name, arguments, runtime_context) do
             {:ok, result} ->
               {:ok, _completed_tool_step} =
@@ -262,6 +277,9 @@ defmodule Maraithon.TelegramAssistant.Runner do
     prepared_action_id = latest_prepared_action_id(state.tool_history)
     text = final_text(response, prepared_action_id)
 
+    {:ok, %{delivery: delivery, summary: liveness_summary}} =
+      TelegramAssistant.prepare_final_delivery(run.id)
+
     turn_opts =
       [
         reply_to_message_id: Map.get(attrs, :source_message_id),
@@ -275,36 +293,45 @@ defmodule Maraithon.TelegramAssistant.Runner do
           "message_class" => message_class
         }
       ]
+      |> apply_delivery_mode(delivery)
       |> maybe_put_approval_markup(prepared_action_id, message_class)
 
-    case TelegramAssistant.send_turn(conversation, Map.fetch!(attrs, :chat_id), text, turn_opts) do
-      {:ok, updated_conversation, _turn, _telegram_result} ->
-        status =
-          if message_class == "approval_prompt" and is_binary(prepared_action_id) do
-            prepared_action = TelegramAssistant.get_prepared_action(prepared_action_id)
+    case delivery.mode do
+      :suppress_after_timeout ->
+        {:ok, "degraded",
+         build_result_summary(message_class, prepared_action_id, state, liveness_summary)}
 
-            {:ok, _conversation} =
-              TelegramAssistant.mark_conversation_awaiting_action(
-                updated_conversation,
-                prepared_action
-              )
+      _ ->
+        case TelegramAssistant.send_turn(
+               conversation,
+               Map.fetch!(attrs, :chat_id),
+               text,
+               turn_opts
+             ) do
+          {:ok, updated_conversation, _turn, _telegram_result} ->
+            status =
+              if message_class == "approval_prompt" and is_binary(prepared_action_id) do
+                prepared_action = TelegramAssistant.get_prepared_action(prepared_action_id)
 
-            "waiting_confirmation"
-          else
-            "completed"
-          end
+                {:ok, _conversation} =
+                  TelegramAssistant.mark_conversation_awaiting_action(
+                    updated_conversation,
+                    prepared_action
+                  )
 
-        summary = %{
-          message_class: message_class,
-          prepared_action_id: prepared_action_id,
-          tool_steps: state.tool_steps,
-          llm_turns: state.llm_turns
-        }
+                "waiting_confirmation"
+              else
+                "completed"
+              end
 
-        {:ok, status, summary}
+            summary =
+              build_result_summary(message_class, prepared_action_id, state, liveness_summary)
 
-      {:error, reason} ->
-        {:error, run, reason, state}
+            {:ok, status, summary}
+
+          {:error, reason} ->
+            {:error, run, reason, state}
+        end
     end
   end
 
@@ -313,19 +340,40 @@ defmodule Maraithon.TelegramAssistant.Runner do
   end
 
   defp handle_run_failure(run, reason, state, attrs) do
-    {:ok, _run} = TelegramAssistant.fail_run(run, reason, "degraded")
+    {:ok, %{delivery: delivery, summary: liveness_summary}} =
+      TelegramAssistant.prepare_final_delivery(run.id)
 
-    case {state.tool_history, Map.get(attrs, :conversation)} do
-      {[], _conversation} ->
+    summary =
+      build_result_summary(
+        "system_notice",
+        latest_prepared_action_id(state.tool_history),
+        state,
+        liveness_summary
+      )
+
+    {:ok, _run} =
+      TelegramAssistant.complete_run(run, %{
+        status: "degraded",
+        error: normalize_error(reason),
+        result_summary: summary
+      })
+
+    case {state.tool_history, Map.get(attrs, :conversation), delivery.mode} do
+      {[], _conversation, _mode} ->
         {:fallback, reason}
 
-      {_history, %Conversation{} = conversation} ->
+      {_history, %Conversation{} = _conversation, :suppress_after_timeout} ->
+        :ok
+
+      {_history, %Conversation{} = conversation, _mode} ->
         _ =
           TelegramAssistant.send_turn(
             conversation,
             Map.fetch!(attrs, :chat_id),
             "I hit an internal issue while working on that. Try again or ask me for a narrower step.",
             reply_to_message_id: Map.get(attrs, :source_message_id),
+            send_mode: send_mode_for_delivery(delivery),
+            message_id: delivery[:message_id],
             turn_kind: "system_notice",
             origin_type: "system",
             structured_data: %{"run_id" => run.id, "error" => normalize_error(reason)}
@@ -369,6 +417,51 @@ defmodule Maraithon.TelegramAssistant.Runner do
       context: context,
       default_slack_team_id:
         Map.get(defaults, :default_slack_team_id) || defaults["default_slack_team_id"]
+    }
+  end
+
+  defp maybe_start_liveness_session(run, attrs) do
+    case TelegramAssistant.start_liveness_session(run, attrs) do
+      {:ok, _pid} ->
+        :ok
+
+      {:error, :disabled} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("Telegram assistant liveness session failed to start",
+          run_id: run.id,
+          reason: inspect(reason)
+        )
+
+        :ok
+    end
+  end
+
+  defp note_context_loaded(run) do
+    _ = TelegramAssistant.note_liveness_context_loaded(run.id)
+    :ok
+  end
+
+  defp apply_delivery_mode(turn_opts, %{mode: :edit, message_id: message_id})
+       when is_binary(message_id) do
+    turn_opts
+    |> Keyword.put(:send_mode, :edit)
+    |> Keyword.put(:message_id, message_id)
+  end
+
+  defp apply_delivery_mode(turn_opts, _delivery), do: turn_opts
+
+  defp send_mode_for_delivery(%{mode: :edit}), do: :edit
+  defp send_mode_for_delivery(_delivery), do: :reply
+
+  defp build_result_summary(message_class, prepared_action_id, state, liveness_summary) do
+    %{
+      message_class: message_class,
+      prepared_action_id: prepared_action_id,
+      tool_steps: state.tool_steps,
+      llm_turns: state.llm_turns,
+      liveness: liveness_summary
     }
   end
 
@@ -442,8 +535,7 @@ defmodule Maraithon.TelegramAssistant.Runner do
   end
 
   defp max_wall_clock_ms do
-    Application.get_env(:maraithon, :telegram_assistant, [])
-    |> Keyword.get(:max_wall_clock_ms, @max_wall_clock_ms)
+    TelegramAssistant.hard_timeout_ms()
   end
 
   defp conversation_id(%Conversation{id: id}), do: id

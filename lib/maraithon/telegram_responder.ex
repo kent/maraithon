@@ -25,6 +25,15 @@ defmodule Maraithon.TelegramResponder do
     telegram_module().answer_callback_query(callback_id, text: text)
   end
 
+  def edit(chat_id, message_id, text, opts \\ [])
+      when is_binary(chat_id) and is_binary(message_id) and is_binary(text) do
+    telegram_module().edit_message_text(chat_id, message_id, text, opts)
+  end
+
+  def send_chat_action(chat_id, :typing) when is_binary(chat_id) do
+    telegram_module().send_chat_action(chat_id, "typing")
+  end
+
   def confirmation_markup(conversation_id) when is_binary(conversation_id) do
     %{
       "inline_keyboard" => [
