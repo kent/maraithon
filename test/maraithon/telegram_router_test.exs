@@ -305,6 +305,62 @@ defmodule Maraithon.TelegramRouterTest do
     assert conversation.status == "open"
   end
 
+  test "general Telegram DM works when the Telegram connector only stores metadata chat_id", %{
+    user_id: user_id,
+    agent: agent
+  } do
+    telegram_account = ConnectedAccounts.get(user_id, "telegram")
+
+    assert {:ok, _account} =
+             telegram_account
+             |> Ecto.Changeset.change(%{
+               external_account_id: nil,
+               metadata: %{"chat_id" => "12345", "username" => "kent"}
+             })
+             |> Repo.update()
+
+    {:ok, _insights} =
+      Insights.record_many(user_id, agent.id, [
+        %{
+          "source" => "gmail",
+          "category" => "commitment_unresolved",
+          "title" => "Send the deck to Sarah",
+          "summary" => "You promised Sarah the deck and no reply has gone out yet.",
+          "recommended_action" => "Reply in the same thread with the deck.",
+          "priority" => 96,
+          "confidence" => 0.93,
+          "dedupe_key" => "telegram-router:metadata-only",
+          "metadata" => %{"account" => "kent@example.com"}
+        }
+      ])
+
+    set_interpreter(fn _prompt ->
+      {:ok,
+       Jason.encode!(%{
+         "intent" => "general_chat",
+         "confidence" => 0.91,
+         "scope" => "general",
+         "needs_clarification" => false,
+         "assistant_reply" => "I still see Sarah as the top open loop.",
+         "candidate_rules" => [],
+         "candidate_action" => nil,
+         "feedback_target" => %{},
+         "memory_summary_updates" => [],
+         "explanation" => "The operator asked for a general status summary."
+       })}
+    end)
+
+    :ok =
+      InsightNotifications.handle_telegram_event(%{
+        type: "message",
+        data: %{chat_id: 12345, message_id: 90045, text: "What do I owe today?"}
+      })
+
+    reply = last_telegram_message(:send)
+    assert reply.text =~ "Sarah"
+    assert reply.opts[:reply_to] == "90045"
+  end
+
   test "question-about-insight replies include why-now and evidence", %{
     user_id: user_id,
     agent: agent

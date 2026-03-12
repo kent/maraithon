@@ -72,4 +72,21 @@ defmodule Maraithon.ConnectedAccountsTest do
     assert get_in(account.metadata, ["reauth_notification", "reason"]) == "oauth_reauth_required"
     assert is_binary(get_in(account.metadata, ["reauth_notification", "sent_at"]))
   end
+
+  test "get_connected_by_external_account/2 falls back to Telegram metadata chat_id" do
+    user_id = "telegram-metadata-#{System.unique_integer()}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    assert {:ok, account} =
+             ConnectedAccounts.upsert_manual(user_id, "telegram", %{
+               metadata: %{"chat_id" => "6114124042", "username" => "kentfenwick"}
+             })
+
+    assert is_nil(account.external_account_id)
+
+    assert %Maraithon.Accounts.ConnectedAccount{id: connected_id} =
+             ConnectedAccounts.get_connected_by_external_account("telegram", "6114124042")
+
+    assert connected_id == account.id
+  end
 end

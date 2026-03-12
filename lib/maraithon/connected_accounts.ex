@@ -41,11 +41,19 @@ defmodule Maraithon.ConnectedAccounts do
 
   def get_connected_by_external_account(provider, external_account_id)
       when is_binary(provider) and is_binary(external_account_id) do
-    Repo.get_by(ConnectedAccount,
-      provider: provider,
-      external_account_id: external_account_id,
-      status: "connected"
-    )
+    normalized_external_account_id = normalize_destination(external_account_id)
+
+    case normalized_external_account_id do
+      nil ->
+        nil
+
+      value ->
+        Repo.get_by(ConnectedAccount,
+          provider: provider,
+          external_account_id: value,
+          status: "connected"
+        ) || find_connected_by_metadata_identifier(provider, value)
+    end
   end
 
   def upsert_from_oauth(user_id, provider, token_data)
@@ -204,6 +212,40 @@ defmodule Maraithon.ConnectedAccounts do
   end
 
   defp metadata_external_account_id(_), do: nil
+
+  defp find_connected_by_metadata_identifier(provider, external_account_id)
+       when is_binary(provider) and is_binary(external_account_id) do
+    ConnectedAccount
+    |> where([account], account.provider == ^provider and account.status == "connected")
+    |> Repo.all()
+    |> Enum.find(fn account ->
+      metadata_identifiers(account.metadata)
+      |> Enum.member?(external_account_id)
+    end)
+  end
+
+  defp find_connected_by_metadata_identifier(_provider, _external_account_id), do: nil
+
+  defp metadata_identifiers(metadata) when is_map(metadata) do
+    metadata
+    |> normalize_metadata()
+    |> then(fn value ->
+      [
+        fetch_map_value(value, "chat_id"),
+        fetch_map_value(value, "telegram_user_id"),
+        fetch_map_value(value, "id"),
+        fetch_map_value(value, "github_id"),
+        fetch_map_value(value, "workspace_id"),
+        fetch_map_value(value, "account_email"),
+        fetch_map_value(value, "email")
+      ]
+    end)
+    |> Enum.map(&normalize_destination/1)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
+  end
+
+  defp metadata_identifiers(_metadata), do: []
 
   defp normalize_attrs(attrs) do
     %{
