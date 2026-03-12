@@ -13,6 +13,7 @@ defmodule MaraithonWeb.NavigationControllerTest do
       assert html =~ "Connectors"
       assert html =~ "Apps"
       assert html =~ "Google Workspace"
+      assert html =~ "Notaui"
       assert html =~ "Slack"
       assert html =~ "View"
     end
@@ -185,6 +186,40 @@ defmodule MaraithonWeb.NavigationControllerTest do
 
       assert html =~ "Connected Accounts"
       assert html =~ "Agora Docs"
+      assert html =~ "Reconnect"
+      assert html =~ "Disconnect"
+    end
+
+    test "GET /connectors/notaui shows account-level reconnect/disconnect controls", %{conn: conn} do
+      user_id = "notaui-detail@example.com"
+      {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+      {:ok, _token} =
+        OAuth.store_tokens(user_id, "notaui", %{
+          access_token: "notaui-token",
+          refresh_token: "notaui-refresh",
+          scopes: ["tasks:read", "tasks:write"],
+          external_account_id: "acct-default",
+          metadata: %{
+            "issuer" => "https://api.notaui.com",
+            "mcp_url" => "https://api.notaui.com/mcp",
+            "default_account_id" => "acct-default",
+            "default_account_label" => "Personal",
+            "account_count" => 2,
+            "accounts" => [
+              %{"id" => "acct-default", "label" => "Personal", "is_default" => true},
+              %{"id" => "acct-team", "label" => "Team Workspace", "is_default" => false}
+            ]
+          }
+        })
+
+      conn = conn |> log_in_test_user(user_id) |> get("/connectors/notaui")
+      html = html_response(conn, 200)
+
+      assert html =~ "Connected Accounts"
+      assert html =~ "Default account: Personal"
+      assert html =~ "Discovered 2 accessible accounts"
+      assert html =~ "https://api.notaui.com/mcp"
       assert html =~ "Reconnect"
       assert html =~ "Disconnect"
     end

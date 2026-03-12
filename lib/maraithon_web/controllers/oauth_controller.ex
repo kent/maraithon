@@ -9,8 +9,9 @@ defmodule MaraithonWeb.OAuthController do
 
   alias Maraithon.Connectors.{Gmail, GoogleCalendar}
   alias Maraithon.Connectors.Linear, as: LinearConnector
+  alias Maraithon.Connectors.Notaui, as: NotauiConnector
   alias Maraithon.OAuth
-  alias Maraithon.OAuth.{GitHub, Google, Linear, Notion, Slack}
+  alias Maraithon.OAuth.{GitHub, Google, Linear, Notaui, Notion, Slack}
 
   require Logger
 
@@ -239,6 +240,57 @@ defmodule MaraithonWeb.OAuthController do
   end
 
   def notion_callback(conn, _params), do: bad_request(conn, "Missing code or state parameter")
+
+  @doc """
+  Initiates Notaui OAuth flow.
+
+  GET /auth/notaui?user_id=xxx
+  """
+  def notaui(conn, params) do
+    with {:ok, user_id} <- resolve_user_id(conn, params),
+         {:ok, return_to} <- optional_return_to(params) do
+      {code_verifier, code_challenge} = pkce_pair()
+
+      state =
+        encode_provider_state("notaui", user_id, %{
+          "return_to" => return_to,
+          "code_verifier" => code_verifier
+        })
+
+      auth_url =
+        Notaui.authorize_url(
+          Notaui.default_scopes(),
+          state,
+          code_challenge: code_challenge
+        )
+
+      redirect(conn, external: auth_url)
+    else
+      {:error, reason} -> bad_request(conn, reason)
+    end
+  end
+
+  @doc """
+  Handles Notaui OAuth callback.
+  """
+  def notaui_callback(conn, %{"code" => code, "state" => state}) do
+    case decode_provider_state(state, "notaui") do
+      {:ok, user_id, state_payload} ->
+        case ensure_user_matches(conn, user_id) do
+          :ok -> handle_notaui_tokens(conn, code, user_id, state_payload)
+          {:error, reason} -> bad_request(conn, reason)
+        end
+
+      {:error, _reason} ->
+        bad_request(conn, "Invalid state parameter")
+    end
+  end
+
+  def notaui_callback(conn, %{"error" => error} = params) do
+    handle_provider_error(conn, "notaui", params, error)
+  end
+
+  def notaui_callback(conn, _params), do: bad_request(conn, "Missing code or state parameter")
 
   defp handle_github_tokens(conn, code, user_id, state_payload) do
     with {:ok, tokens} <-
@@ -479,6 +531,172 @@ defmodule MaraithonWeb.OAuthController do
           state_payload["return_to"]
         )
     end
+  end
+
+  defp handle_notaui_tokens(conn, code, user_id, state_payload) do
+    case Notaui.exchange_code(code, code_verifier: state_payload["code_verifier"]) do
+      {:ok, tokens} ->
+        scopes = split_scope_string(tokens.scope)
+
+        token_data = %{
+          access_token: tokens.access_token,
+          refresh_token: tokens.refresh_token,
+          expires_in: tokens.expires_in,
+          scopes: scopes,
+          metadata: notaui_base_metadata(tokens.token_type)
+        }
+
+        case OAuth.store_tokens(user_id, "notaui", token_data) do
+          {:ok, _token} ->
+            {payload, message} = notaui_post_connect_result(user_id, token_data, scopes)
+            respond_success(conn, state_payload["return_to"], "notaui", message, payload)
+
+          {:error, changeset} ->
+            Logger.warning("Failed to store OAuth tokens",
+              user_id: user_id,
+              provider: "notaui",
+              error: inspect(changeset)
+            )
+
+            respond_error(
+              conn,
+              state_payload["return_to"],
+              "notaui",
+              "Failed to store tokens",
+              :internal_server_error
+            )
+        end
+
+      {:error, reason} ->
+        token_exchange_failed(
+          conn,
+          "Notaui token exchange failed",
+          reason,
+          "notaui",
+          state_payload["return_to"]
+        )
+    end
+  end
+
+  defp notaui_post_connect_result(user_id, token_data, scopes)
+       when is_binary(user_id) and is_map(token_data) and is_list(scopes) do
+    case NotauiConnector.discover_accounts(token_data.access_token) do
+      {:ok, snapshot} ->
+        enriched_token_data = %{
+          access_token: token_data.access_token,
+          refresh_token: token_data.refresh_token,
+          expires_in: token_data.expires_in,
+          scopes: scopes,
+          external_account_id: snapshot["default_account_id"],
+          metadata: Map.merge(token_data.metadata, snapshot)
+        }
+
+        case OAuth.store_tokens(user_id, "notaui", enriched_token_data) do
+          {:ok, _token} ->
+            {
+              notaui_payload(user_id, scopes, snapshot, discovery_status(snapshot)),
+              notaui_success_message(snapshot, scopes)
+            }
+
+          {:error, changeset} ->
+            Logger.warning("Failed to store Notaui account discovery metadata",
+              user_id: user_id,
+              error: inspect(changeset)
+            )
+
+            degraded_metadata = notaui_discovery_error_metadata(:metadata_store_failed)
+            _ = persist_notaui_metadata(user_id, token_data, scopes, degraded_metadata)
+
+            {
+              notaui_payload(user_id, scopes, degraded_metadata, "error"),
+              "Notaui connected, but account discovery metadata could not be saved."
+            }
+        end
+
+      {:error, reason} ->
+        Logger.warning("Notaui account discovery failed",
+          user_id: user_id,
+          reason: inspect(reason)
+        )
+
+        degraded_metadata = notaui_discovery_error_metadata(reason)
+        _ = persist_notaui_metadata(user_id, token_data, scopes, degraded_metadata)
+
+        {
+          notaui_payload(user_id, scopes, degraded_metadata, "error"),
+          "Notaui connected, but account discovery needs attention."
+        }
+    end
+  end
+
+  defp persist_notaui_metadata(user_id, token_data, scopes, metadata)
+       when is_binary(user_id) and is_map(token_data) and is_list(scopes) and is_map(metadata) do
+    OAuth.store_tokens(user_id, "notaui", %{
+      access_token: token_data.access_token,
+      refresh_token: token_data.refresh_token,
+      expires_in: token_data.expires_in,
+      scopes: scopes,
+      external_account_id: metadata["default_account_id"],
+      metadata: Map.merge(token_data.metadata, metadata)
+    })
+  end
+
+  defp notaui_base_metadata(token_type) do
+    config = Notaui.config()
+
+    %{}
+    |> maybe_put_map_value("token_type", token_type)
+    |> maybe_put_map_value("issuer", config.issuer)
+    |> maybe_put_map_value("mcp_url", config.mcp_url)
+  end
+
+  defp notaui_discovery_error_metadata(reason) do
+    %{
+      "accounts" => [],
+      "account_count" => 0,
+      "default_account_id" => nil,
+      "default_account_label" => nil,
+      "discovery_at" => DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601(),
+      "discovery_error" => %{"reason" => notaui_discovery_error_reason(reason)}
+    }
+  end
+
+  defp notaui_discovery_error_reason({:mcp_request_failed, status})
+       when is_integer(status),
+       do: "mcp_request_failed_#{status}"
+
+  defp notaui_discovery_error_reason({:mcp_error, _message}), do: "mcp_error"
+  defp notaui_discovery_error_reason({:mcp_transport_error, _reason}), do: "mcp_transport_error"
+  defp notaui_discovery_error_reason({:invalid_tool_payload, _reason}), do: "invalid_tool_payload"
+  defp notaui_discovery_error_reason(reason) when is_atom(reason), do: Atom.to_string(reason)
+  defp notaui_discovery_error_reason(_reason), do: "account_discovery_failed"
+
+  defp notaui_payload(user_id, scopes, metadata, account_discovery)
+       when is_binary(user_id) and is_list(scopes) and is_map(metadata) do
+    %{
+      status: "connected",
+      user_id: user_id,
+      scopes: scopes,
+      account_count: metadata["account_count"] || 0,
+      default_account_id: metadata["default_account_id"],
+      default_account_label: metadata["default_account_label"],
+      account_discovery: account_discovery
+    }
+  end
+
+  defp discovery_status(%{"account_count" => 0}), do: "empty"
+  defp discovery_status(_metadata), do: "ok"
+
+  defp notaui_success_message(%{"account_count" => 0}, _scopes) do
+    "Notaui connected, but no accessible accounts were discovered."
+  end
+
+  defp notaui_success_message(snapshot, scopes) when is_map(snapshot) and is_list(scopes) do
+    detail =
+      snapshot["default_account_label"] || snapshot["default_account_id"] ||
+        Enum.join(scopes, ", ")
+
+    success_message("notaui", detail)
   end
 
   defp handle_google_tokens(conn, code, user_id, services, state_payload) do
@@ -922,6 +1140,7 @@ defmodule MaraithonWeb.OAuthController do
   defp provider_display_name("google"), do: "Google Workspace"
   defp provider_display_name("github"), do: "GitHub"
   defp provider_display_name("linear"), do: "Linear"
+  defp provider_display_name("notaui"), do: "Notaui"
   defp provider_display_name("notion"), do: "Notion"
   defp provider_display_name("slack"), do: "Slack"
   defp provider_display_name(provider), do: provider

@@ -650,4 +650,62 @@ defmodule Maraithon.OAuthTest do
       Application.delete_env(:maraithon, :google)
     end
   end
+
+  describe "get_valid_access_token/2 - notaui refresh" do
+    test "refreshes expired notaui token successfully" do
+      bypass = Bypass.open()
+
+      Application.put_env(:maraithon, :notaui,
+        token_url: "http://localhost:#{bypass.port}/oauth/token",
+        client_id: "test_client",
+        client_secret: "test_secret",
+        redirect_uri: "http://localhost:4000/auth/notaui/callback"
+      )
+
+      user_id = "user_#{System.unique_integer()}"
+      expired_at = DateTime.add(DateTime.utc_now(), -3600, :second)
+
+      {:ok, _} =
+        OAuth.store_tokens(user_id, "notaui", %{
+          access_token: "old_notaui_token",
+          refresh_token: "valid_refresh_token",
+          expires_at: expired_at,
+          scopes: ["tasks:read"],
+          metadata: %{"mcp_url" => "https://api.notaui.com/mcp"}
+        })
+
+      Bypass.expect_once(bypass, "POST", "/oauth/token", fn conn ->
+        auth = Plug.Conn.get_req_header(conn, "authorization")
+        assert auth == ["Basic dGVzdF9jbGllbnQ6dGVzdF9zZWNyZXQ="]
+
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        params = URI.decode_query(body)
+        assert params["grant_type"] == "refresh_token"
+        assert params["refresh_token"] == "valid_refresh_token"
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{
+            "access_token" => "new_notaui_token",
+            "refresh_token" => "new_notaui_refresh",
+            "expires_in" => 3600,
+            "scope" => "tasks:read tasks:write",
+            "token_type" => "Bearer"
+          })
+        )
+      end)
+
+      assert {:ok, token} = OAuth.get_valid_access_token(user_id, "notaui")
+      assert token == "new_notaui_token"
+
+      stored_token = OAuth.get_token(user_id, "notaui")
+      assert stored_token.access_token == "new_notaui_token"
+      assert stored_token.refresh_token == "new_notaui_refresh"
+      assert "tasks:write" in (stored_token.scopes || [])
+
+      Application.delete_env(:maraithon, :notaui)
+    end
+  end
 end

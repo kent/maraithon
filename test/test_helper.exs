@@ -2,6 +2,18 @@ ExUnit.start()
 
 require Logger
 
+test_consolidated = Path.expand("_build/test/lib/maraithon/consolidated", File.cwd!())
+
+if File.dir?(test_consolidated) do
+  Code.prepend_path(test_consolidated)
+
+  # `mix test --no-start` can otherwise pick the dev consolidated protocol table,
+  # which excludes test-only protocol implementations such as LazyHTML.
+  :code.purge(Enumerable)
+  :code.delete(Enumerable)
+  Code.ensure_loaded?(Enumerable)
+end
+
 Path.expand("_build/test/lib/*/ebin", File.cwd!())
 |> Path.wildcard()
 |> Enum.each(&Code.prepend_path/1)

@@ -61,6 +61,7 @@ defmodule Maraithon.OAuth.Token do
   #   - "google:{account_id}"
   #   - "github"
   #   - "notion"
+  #   - "notaui"
   #   - "slack:{team_id}"
   #   - "slack:{team_id}:user:{user_id}"
   #   - "whatsapp"
@@ -72,6 +73,7 @@ defmodule Maraithon.OAuth.Token do
         String.starts_with?(provider, "google:") -> []
         provider == "github" -> []
         provider == "notion" -> []
+        provider == "notaui" -> []
         provider == "whatsapp" -> []
         provider == "linear" -> []
         String.starts_with?(provider, "slack:") -> []

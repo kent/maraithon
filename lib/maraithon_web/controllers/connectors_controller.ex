@@ -125,6 +125,7 @@ defmodule MaraithonWeb.ConnectorsController do
   defp provider_label("slack:" <> _), do: "Slack"
   defp provider_label("telegram"), do: "Telegram"
   defp provider_label("linear"), do: "Linear"
+  defp provider_label("notaui"), do: "Notaui"
   defp provider_label("notion"), do: "Notion"
   defp provider_label(provider), do: provider
 

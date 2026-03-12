@@ -1,0 +1,76 @@
+{
+  "spec_id": "notaui-oauth-client",
+  "slug": "notaui-oauth-client",
+  "title": "Notaui OAuth Client Specification",
+  "stage": "done",
+  "spec_path": "../specs/notaui-oauth-client.md",
+  "created_at": "2026-03-12T19:53:44Z",
+  "updated_at": "2026-03-12T20:26:43Z",
+  "summary": "Implemented the Notaui OAuth client against the verified api.notaui.com production contract, including PKCE auth-code connect, backend client_secret_basic exchange, immediate account discovery, default-account persistence, Connectors UI enrichment, and account-aware MCP routing with X-Notaui-Account-ID for non-default accounts.",
+  "next_action": "Deploy and verify the Notaui OAuth connect flow in production when requested.",
+  "blockers": [],
+  "reference_examples": [],
+  "verification": {
+    "format": "passed",
+    "lint": "passed",
+    "typecheck": "passed",
+    "build": "passed",
+    "tests": "passed",
+    "spec_review": "passed",
+    "notes": "`mix precommit` passed on 2026-03-12 after implementing the Notaui OAuth helper, callback-time account discovery, account-aware connector routing, Connectors UI updates, Notaui tool account selection, and a test bootstrap fix that forces the test environment to load the test consolidated Enumerable protocol table so LazyHTML-backed LiveView tests run correctly."
+  },
+  "resume_context": {
+    "last_completed_step": "Implemented the Notaui OAuth/account discovery flow, verified account-aware MCP routing, and passed the full repo verification gate.",
+    "pending_steps": [],
+    "open_questions": [],
+    "last_reviewed_sections": [
+      "Current State and Problem",
+      "Functional Requirements",
+      "Data and Domain Model",
+      "Rollout / Migration Plan"
+    ],
+    "artifacts": [
+      "docs/spectacula/specs/notaui-oauth-client.md",
+      "config/runtime.exs",
+      "lib/maraithon/oauth/notaui.ex",
+      "lib/maraithon/oauth/oauth.ex",
+      "lib/maraithon/connected_accounts.ex",
+      "lib/maraithon/connectors/notaui.ex",
+      "lib/maraithon/connections.ex",
+      "lib/maraithon/tools/notaui_list_tasks.ex",
+      "lib/maraithon/tools/notaui_complete_task.ex",
+      "lib/maraithon/tools/notaui_update_task.ex",
+      "lib/maraithon/telegram_assistant/toolbox.ex",
+      "lib/maraithon_web/controllers/oauth_controller.ex",
+      "test/maraithon/oauth/notaui_test.exs",
+      "test/maraithon/connectors/notaui_test.exs",
+      "test/maraithon_web/controllers/oauth_controller_test.exs",
+      "test/maraithon_web/controllers/navigation_controller_test.exs",
+      "test/test_helper.exs"
+    ],
+    "notes": "Scope stayed limited to the OAuth client and account context. The implementation preserves the app-level client_credentials path for nil user_id flows, while user-scoped requests now use refreshable Notaui OAuth grants plus discovered-account metadata."
+  },
+  "history": [
+    {
+      "at": "2026-03-12T19:53:44Z",
+      "event": "spec_created",
+      "from_stage": null,
+      "to_stage": "specs",
+      "note": "Initial draft created for the production Notaui OAuth client and account-routing contract."
+    },
+    {
+      "at": "2026-03-12T20:02:00Z",
+      "event": "implementation_started",
+      "from_stage": "specs",
+      "to_stage": "inprogress",
+      "note": "Implementation began against the approved OAuth-first Notaui spec."
+    },
+    {
+      "at": "2026-03-12T20:26:43Z",
+      "event": "implementation_completed",
+      "from_stage": "inprogress",
+      "to_stage": "done",
+      "note": "Completed the Notaui OAuth client with api.notaui.com defaults, PKCE auth-code exchange, post-auth account discovery, default-account persistence, account-aware MCP routing, Connectors UI updates, and passing `mix precommit` verification."
+    }
+  ]
+}

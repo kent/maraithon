@@ -7,7 +7,7 @@ defmodule Maraithon.Connections do
   alias Maraithon.ConnectedAccounts
   alias Maraithon.Connectors.Telegram
   alias Maraithon.OAuth
-  alias Maraithon.OAuth.{GitHub, Google, Linear, Notion, Slack, Token}
+  alias Maraithon.OAuth.{GitHub, Google, Linear, Notaui, Notion, Slack, Token}
 
   @google_services [
     %{
@@ -77,9 +77,10 @@ defmodule Maraithon.Connections do
       google_card(user_id, google_tokens, account_by_provider, return_to),
       github_card(user_id, token_by_provider["github"], account_by_provider["github"], return_to),
       slack_card(user_id, slack_tokens, account_by_provider, return_to),
-      telegram_card(user_id, telegram_account, return_to),
       linear_card(user_id, token_by_provider["linear"], account_by_provider["linear"], return_to),
-      notion_card(user_id, token_by_provider["notion"], account_by_provider["notion"], return_to)
+      notion_card(user_id, token_by_provider["notion"], account_by_provider["notion"], return_to),
+      notaui_card(user_id, token_by_provider["notaui"], account_by_provider["notaui"], return_to),
+      telegram_card(user_id, telegram_account, return_to)
     ]
 
     %{
@@ -137,7 +138,7 @@ defmodule Maraithon.Connections do
 
   def disconnect(user_id, provider)
       when is_binary(user_id) and is_binary(provider) and
-             provider in ["github", "linear", "notion"] do
+             provider in ["github", "linear", "notaui", "notion"] do
     OAuth.revoke(user_id, provider)
   end
 
@@ -165,9 +166,10 @@ defmodule Maraithon.Connections do
         google_card(user_id, [], %{}, return_to),
         github_card(user_id, nil, nil, return_to),
         slack_card(user_id, [], %{}, return_to),
-        telegram_card(user_id, nil, return_to),
         linear_card(user_id, nil, nil, return_to),
-        notion_card(user_id, nil, nil, return_to)
+        notion_card(user_id, nil, nil, return_to),
+        notaui_card(user_id, nil, nil, return_to),
+        telegram_card(user_id, nil, return_to)
       ]
       |> Enum.map(&mark_unavailable/1)
 
@@ -485,6 +487,38 @@ defmodule Maraithon.Connections do
           metadata_value(token, ["workspace_id"]) &&
             "Workspace ID: #{metadata_value(token, ["workspace_id"])}"
         ]),
+      services: [],
+      accounts: maybe_single_account_entry(account_entry)
+    }
+    |> enrich_provider_setup()
+  end
+
+  defp notaui_card(user_id, token, account, return_to) do
+    configured? = Notaui.configured?()
+
+    account_entry =
+      single_oauth_account_entry(
+        user_id,
+        token,
+        account,
+        return_to,
+        "/auth/notaui",
+        &notaui_account_label/1
+      )
+
+    %{
+      id: "notaui",
+      provider: "notaui",
+      label: "Notaui",
+      description:
+        "Connect your Notaui workspace so Maraithon can read and update tasks over MCP.",
+      status: provider_status(configured?, token, account),
+      configured?: configured?,
+      updated_at: token && token.updated_at,
+      disconnectable?: not is_nil(token),
+      connect_url: auth_url("/auth/notaui", user_id, return_to),
+      disconnect_label: "Disconnect Notaui",
+      details: provider_details(token, notaui_details(token, account)),
       services: [],
       accounts: maybe_single_account_entry(account_entry)
     }
@@ -901,6 +935,67 @@ defmodule Maraithon.Connections do
 
   defp notion_account_label(_token), do: "Notion workspace"
 
+  defp notaui_account_label(%Token{} = token) do
+    normalize_text(metadata_value(token, ["default_account_label"])) ||
+      normalize_text(metadata_value(token, ["default_account_id"])) ||
+      normalize_text(metadata_value(token, ["subject"])) ||
+      "Notaui workspace"
+  end
+
+  defp notaui_account_label(_token), do: "Notaui workspace"
+
+  defp notaui_details(token, account) do
+    [
+      notaui_default_account_detail(token, account),
+      notaui_account_count_detail(token, account),
+      notaui_discovery_detail(token, account),
+      provider_snapshot_value(account, token, "issuer") &&
+        "Issuer: #{provider_snapshot_value(account, token, "issuer")}",
+      provider_snapshot_value(account, token, "mcp_url") &&
+        "MCP: #{provider_snapshot_value(account, token, "mcp_url")}",
+      "Scopes: #{Enum.join(token_scopes(token), ", ")}"
+    ]
+  end
+
+  defp notaui_default_account_detail(token, account) do
+    default_label =
+      provider_snapshot_value(account, token, "default_account_label") ||
+        provider_snapshot_value(account, token, "default_account_id")
+
+    if present?(default_label), do: "Default account: #{default_label}"
+  end
+
+  defp notaui_account_count_detail(token, account) do
+    case provider_snapshot_value(account, token, "account_count") |> normalize_integer() do
+      count when is_integer(count) and count > 0 ->
+        "Discovered #{count} accessible account#{plural_suffix(count)}"
+
+      0 ->
+        "No accessible Notaui accounts were discovered yet."
+
+      _ ->
+        nil
+    end
+  end
+
+  defp notaui_discovery_detail(token, account) do
+    if provider_snapshot_value(account, token, "discovery_error") do
+      "Account discovery needs attention. Reconnect Notaui if account access looks incomplete."
+    end
+  end
+
+  defp provider_snapshot_value(account, token, key) when is_binary(key) do
+    account_metadata_value(account, key) || metadata_value(token, [key])
+  end
+
+  defp account_metadata_value(%ConnectedAccount{metadata: metadata}, key) when is_binary(key) do
+    metadata
+    |> normalize_metadata_map()
+    |> fetch_map_value(key)
+  end
+
+  defp account_metadata_value(_account, _key), do: nil
+
   defp latest_updated_at([]), do: nil
 
   defp latest_updated_at(tokens) when is_list(tokens) do
@@ -928,6 +1023,20 @@ defmodule Maraithon.Connections do
 
   defp timestamp_sort_value(_value), do: 0
 
+  defp normalize_integer(value) when is_integer(value), do: value
+
+  defp normalize_integer(value) when is_binary(value) do
+    case Integer.parse(value) do
+      {parsed, ""} -> parsed
+      _ -> nil
+    end
+  end
+
+  defp normalize_integer(_value), do: nil
+
+  defp plural_suffix(1), do: ""
+  defp plural_suffix(_count), do: "s"
+
   defp provider_sort_key(%Token{provider: provider}) do
     cond do
       google_provider?(provider) -> 0
@@ -935,6 +1044,7 @@ defmodule Maraithon.Connections do
       slack_provider?(provider) -> 2
       provider == "linear" -> 3
       provider == "notion" -> 4
+      provider == "notaui" -> 5
       true -> 99
     end
   end
@@ -1220,6 +1330,107 @@ defmodule Maraithon.Connections do
       setup_notes: [
         "Create a public Notion integration and register the callback URL.",
         "Workspace-level permissions are chosen in Notion, not in the query string."
+      ]
+    }
+  end
+
+  defp provider_setup("notaui") do
+    oauth_callback = callback_url("/auth/notaui/callback")
+
+    %{
+      logo: :notaui,
+      permissions: [
+        "Read and update Notaui tasks",
+        "Read and update Notaui projects",
+        "Write Notaui tags",
+        "Call Notaui MCP tools with a user bearer token"
+      ],
+      callback_urls: [
+        %{label: "OAuth callback", url: oauth_callback, required?: true}
+      ],
+      env_requirements: [
+        env_requirement(
+          "NOTAUI_CLIENT_ID",
+          config_value(:notaui, :client_id),
+          "Notaui OAuth client ID",
+          true
+        ),
+        env_requirement(
+          "NOTAUI_CLIENT_SECRET",
+          config_value(:notaui, :client_secret),
+          "Notaui OAuth client secret",
+          true
+        ),
+        env_requirement(
+          "NOTAUI_REDIRECT_URI",
+          config_value(:notaui, :redirect_uri),
+          "Must match the Notaui OAuth callback URL",
+          true,
+          oauth_callback
+        ),
+        env_requirement(
+          "NOTAUI_SCOPE",
+          config_value(:notaui, :scope),
+          "Requested OAuth scopes for the Notaui connector",
+          false,
+          "tasks:read tasks:write projects:read projects:write tags:write"
+        ),
+        env_requirement(
+          "NOTAUI_AUTH_URL",
+          config_value(:notaui, :auth_url),
+          "Override for the Notaui authorization endpoint",
+          false,
+          "https://api.notaui.com/oauth/authorize"
+        ),
+        env_requirement(
+          "NOTAUI_TOKEN_URL",
+          config_value(:notaui, :token_url),
+          "Override for the Notaui token endpoint",
+          false,
+          "https://api.notaui.com/oauth/token"
+        ),
+        env_requirement(
+          "NOTAUI_MCP_URL",
+          config_value(:notaui, :mcp_url),
+          "Bearer-token MCP endpoint used after connect",
+          false,
+          "https://api.notaui.com/mcp"
+        ),
+        env_requirement(
+          "NOTAUI_ISSUER",
+          config_value(:notaui, :issuer),
+          "Issuer used for Notaui OAuth metadata and diagnostics",
+          false,
+          "https://api.notaui.com"
+        ),
+        env_requirement(
+          "NOTAUI_REGISTER_URL",
+          config_value(:notaui, :register_url),
+          "Optional Notaui OAuth dynamic registration endpoint",
+          false,
+          "https://api.notaui.com/oauth/register"
+        ),
+        env_requirement(
+          "NOTAUI_AUTH_SERVER_METADATA_URL",
+          config_value(:notaui, :auth_server_metadata_url),
+          "Optional Notaui OAuth authorization-server metadata endpoint",
+          false,
+          "https://api.notaui.com/.well-known/oauth-authorization-server"
+        ),
+        env_requirement(
+          "NOTAUI_PROTECTED_RESOURCE_METADATA_URL",
+          config_value(:notaui, :protected_resource_metadata_url),
+          "Optional Notaui protected-resource metadata endpoint",
+          false,
+          "https://api.notaui.com/.well-known/oauth-protected-resource"
+        )
+      ],
+      setup_notes: [
+        "Register the OAuth callback URL exactly as shown above in Notaui.",
+        "Use authorization code + PKCE (S256) for the browser connect flow.",
+        "Configure token endpoint auth as client_secret_basic.",
+        "After connect, Maraithon discovers accessible Notaui accounts with account.list and stores a default account.",
+        "When Maraithon targets a non-default Notaui account it sends X-Notaui-Account-ID with the MCP request."
       ]
     }
   end

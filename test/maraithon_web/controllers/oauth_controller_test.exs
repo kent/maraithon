@@ -154,12 +154,21 @@ defmodule MaraithonWeb.OAuthControllerTest do
       api_version: "2025-09-03"
     )
 
+    Application.put_env(:maraithon, :notaui,
+      client_id: "test_notaui_client_id",
+      client_secret: "test_notaui_client_secret",
+      redirect_uri: "http://localhost:4000/auth/notaui/callback",
+      issuer: "https://api.notaui.com",
+      mcp_url: "https://api.notaui.com/mcp"
+    )
+
     on_exit(fn ->
       Application.put_env(:maraithon, :google, [])
       Application.put_env(:maraithon, :slack, [])
       Application.put_env(:maraithon, :linear, [])
       Application.put_env(:maraithon, :github, [])
       Application.put_env(:maraithon, :notion, [])
+      Application.put_env(:maraithon, :notaui, [])
     end)
 
     {:ok, conn: log_in_test_user(conn, "oauth@example.com")}
@@ -592,6 +601,20 @@ defmodule MaraithonWeb.OAuthControllerTest do
     end
   end
 
+  describe "GET /auth/notaui" do
+    test "redirects to Notaui with PKCE challenge", %{conn: conn} do
+      conn = get(conn, "/auth/notaui", %{user_id: "user_123"})
+
+      redirect_url = redirected_to(conn)
+
+      assert redirect_url =~ "https://api.notaui.com/oauth/authorize"
+      assert redirect_url =~ "client_id=test_notaui_client_id"
+      assert redirect_url =~ "code_challenge="
+      assert redirect_url =~ "code_challenge_method=S256"
+      assert redirect_url =~ "state="
+    end
+  end
+
   # ============================================================================
   # GOOGLE SCOPE HANDLING TESTS
   # ============================================================================
@@ -936,6 +959,170 @@ defmodule MaraithonWeb.OAuthControllerTest do
       # Token storage will fail because access_token is nil
       response = json_response(conn, 500)
       assert response["error"] == "Failed to store tokens"
+    end
+  end
+
+  describe "GET /auth/notaui/callback with successful token exchange" do
+    test "stores tokens, discovers accounts, and returns success", %{conn: conn} do
+      bypass = Bypass.open()
+
+      Application.put_env(:maraithon, :notaui,
+        client_id: "test_notaui_client_id",
+        client_secret: "test_notaui_client_secret",
+        redirect_uri: "http://localhost:4000/auth/notaui/callback",
+        issuer: "https://api.notaui.com",
+        token_url: "http://localhost:#{bypass.port}/oauth/token",
+        mcp_url: "http://localhost:#{bypass.port}/mcp"
+      )
+
+      Bypass.expect_once(bypass, "POST", "/oauth/token", fn conn ->
+        auth = Plug.Conn.get_req_header(conn, "authorization")
+
+        assert auth == [
+                 "Basic dGVzdF9ub3RhdWlfY2xpZW50X2lkOnRlc3Rfbm90YXVpX2NsaWVudF9zZWNyZXQ="
+               ]
+
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        params = URI.decode_query(body)
+
+        assert params["grant_type"] == "authorization_code"
+        assert params["code"] == "valid_notaui_code"
+        assert params["code_verifier"] == "test-code-verifier"
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{
+            "access_token" => "notaui_access_token",
+            "refresh_token" => "notaui_refresh_token",
+            "expires_in" => 3600,
+            "scope" => "tasks:read tasks:write projects:read",
+            "token_type" => "Bearer"
+          })
+        )
+      end)
+
+      Bypass.expect_once(bypass, "POST", "/mcp", fn conn ->
+        assert Plug.Conn.get_req_header(conn, "authorization") == ["Bearer notaui_access_token"]
+        assert Plug.Conn.get_req_header(conn, "x-notaui-account-id") == []
+
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        req = Jason.decode!(body)
+
+        assert req["params"]["name"] == "account.list"
+
+        payload = [
+          %{"id" => "acct-default", "label" => "Personal", "is_default" => true},
+          %{"id" => "acct-team", "label" => "Team Workspace"}
+        ]
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{
+            "jsonrpc" => "2.0",
+            "id" => req["id"],
+            "result" => %{
+              "content" => [%{"type" => "text", "text" => Jason.encode!(payload)}]
+            }
+          })
+        )
+      end)
+
+      state =
+        signed_provider_state("notaui", "oauth@example.com", %{
+          "code_verifier" => "test-code-verifier"
+        })
+
+      conn = get(conn, "/auth/notaui/callback", %{code: "valid_notaui_code", state: state})
+
+      response = json_response(conn, 200)
+      assert response["status"] == "connected"
+      assert response["user_id"] == "oauth@example.com"
+      assert "tasks:read" in response["scopes"]
+      assert response["account_count"] == 2
+      assert response["default_account_id"] == "acct-default"
+      assert response["default_account_label"] == "Personal"
+      assert response["account_discovery"] == "ok"
+
+      token = Maraithon.OAuth.get_token("oauth@example.com", "notaui")
+      assert token.access_token == "notaui_access_token"
+      assert token.refresh_token == "notaui_refresh_token"
+      assert "tasks:read" in (token.scopes || [])
+      assert get_in(token.metadata, ["mcp_url"]) == "http://localhost:#{bypass.port}/mcp"
+      assert get_in(token.metadata, ["issuer"]) == "https://api.notaui.com"
+      assert get_in(token.metadata, ["default_account_id"]) == "acct-default"
+      assert get_in(token.metadata, ["default_account_label"]) == "Personal"
+      assert get_in(token.metadata, ["account_count"]) == 2
+
+      connected_account = Maraithon.ConnectedAccounts.get("oauth@example.com", "notaui")
+      assert connected_account.external_account_id == "acct-default"
+      assert get_in(connected_account.metadata, ["accounts"]) |> length() == 2
+    end
+
+    test "returns degraded success when account discovery fails", %{conn: conn} do
+      bypass = Bypass.open()
+
+      Application.put_env(:maraithon, :notaui,
+        client_id: "test_notaui_client_id",
+        client_secret: "test_notaui_client_secret",
+        redirect_uri: "http://localhost:4000/auth/notaui/callback",
+        issuer: "https://api.notaui.com",
+        token_url: "http://localhost:#{bypass.port}/oauth/token",
+        mcp_url: "http://localhost:#{bypass.port}/mcp"
+      )
+
+      Bypass.expect_once(bypass, "POST", "/oauth/token", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{
+            "access_token" => "notaui_access_token",
+            "refresh_token" => "notaui_refresh_token",
+            "expires_in" => 3600,
+            "scope" => "tasks:read tasks:write",
+            "token_type" => "Bearer"
+          })
+        )
+      end)
+
+      Bypass.expect_once(bypass, "POST", "/mcp", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        req = Jason.decode!(body)
+        assert req["params"]["name"] == "account.list"
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(
+          500,
+          Jason.encode!(%{
+            "jsonrpc" => "2.0",
+            "id" => req["id"],
+            "error" => %{"message" => "boom"}
+          })
+        )
+      end)
+
+      state =
+        signed_provider_state("notaui", "oauth@example.com", %{
+          "code_verifier" => "test-code-verifier"
+        })
+
+      conn =
+        get(conn, "/auth/notaui/callback", %{code: "valid_notaui_code", state: state})
+
+      response = json_response(conn, 200)
+      assert response["status"] == "connected"
+      assert response["account_count"] == 0
+      assert response["default_account_id"] == nil
+      assert response["account_discovery"] == "error"
+
+      token = Maraithon.OAuth.get_token("oauth@example.com", "notaui")
+      assert token.access_token == "notaui_access_token"
+      assert get_in(token.metadata, ["discovery_error", "reason"]) == "mcp_request_failed_500"
     end
   end
 

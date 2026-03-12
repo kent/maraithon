@@ -110,6 +110,12 @@ defmodule MaraithonWeb.SettingsController do
         Application.get_env(:maraithon, :notion, []),
         :client_id,
         :client_secret
+      ),
+      oauth_item(
+        "Notaui",
+        Application.get_env(:maraithon, :notaui, []),
+        :client_id,
+        :client_secret
       )
     ]
   end

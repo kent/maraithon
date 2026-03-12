@@ -5,12 +5,23 @@ defmodule Maraithon.Tools.NotauiListTasks do
 
   alias Maraithon.Connectors.Notaui
 
-  @allowed_filters ~w(project_id due_before limit offset verbose include_notes include_notes_preview)a
+  @allowed_filters ~w(
+    account_id
+    project_id
+    due_before
+    limit
+    offset
+    verbose
+    include_notes
+    include_notes_preview
+  )a
 
   def execute(args) when is_map(args) do
+    user_id = optional_user_id(args)
+
     args
     |> normalize_filter()
-    |> then(&Notaui.list_tasks/1)
+    |> then(fn filter -> list_tasks(user_id, filter) end)
     |> case do
       {:ok, tasks} ->
         {:ok,
@@ -22,6 +33,18 @@ defmodule Maraithon.Tools.NotauiListTasks do
 
       {:error, :not_configured} ->
         {:error, "notaui_not_configured"}
+
+      {:error, :no_token} ->
+        {:error, "notaui_not_connected"}
+
+      {:error, :no_refresh_token} ->
+        {:error, "notaui_reauth_required"}
+
+      {:error, :reauth_required} ->
+        {:error, "notaui_reauth_required"}
+
+      {:error, :unknown_account_id} ->
+        {:error, "notaui_unknown_account_id"}
 
       {:error, reason} ->
         {:error, "notaui_list_failed: #{inspect(reason)}"}
@@ -59,4 +82,16 @@ defmodule Maraithon.Tools.NotauiListTasks do
         base_filter
     end
   end
+
+  defp list_tasks(nil, filter), do: Notaui.list_tasks(filter)
+  defp list_tasks(user_id, filter), do: Notaui.list_tasks(user_id, filter)
+
+  defp optional_user_id(%{"user_id" => user_id}) when is_binary(user_id) do
+    case String.trim(user_id) do
+      "" -> nil
+      trimmed -> trimmed
+    end
+  end
+
+  defp optional_user_id(_args), do: nil
 end

@@ -218,10 +218,30 @@ config :maraithon, :notion,
   api_version: System.get_env("NOTION_API_VERSION", "2025-09-03")
 
 # Notaui MCP Connector
+notaui_issuer =
+  System.get_env("NOTAUI_ISSUER", System.get_env("NOTAUI_BASE_URL", "https://api.notaui.com"))
+
 config :maraithon, :notaui,
-  base_url: System.get_env("NOTAUI_BASE_URL", "https://api.notaui.com"),
+  issuer: notaui_issuer,
+  base_url: notaui_issuer,
+  auth_url: System.get_env("NOTAUI_AUTH_URL", "#{notaui_issuer}/oauth/authorize"),
+  token_url: System.get_env("NOTAUI_TOKEN_URL", "#{notaui_issuer}/oauth/token"),
+  revoke_url: System.get_env("NOTAUI_REVOKE_URL", ""),
+  mcp_url: System.get_env("NOTAUI_MCP_URL", "#{notaui_issuer}/mcp"),
+  register_url: System.get_env("NOTAUI_REGISTER_URL", "#{notaui_issuer}/oauth/register"),
+  auth_server_metadata_url:
+    System.get_env(
+      "NOTAUI_AUTH_SERVER_METADATA_URL",
+      "#{notaui_issuer}/.well-known/oauth-authorization-server"
+    ),
+  protected_resource_metadata_url:
+    System.get_env(
+      "NOTAUI_PROTECTED_RESOURCE_METADATA_URL",
+      "#{notaui_issuer}/.well-known/oauth-protected-resource"
+    ),
   client_id: System.get_env("NOTAUI_CLIENT_ID", ""),
   client_secret: System.get_env("NOTAUI_CLIENT_SECRET", ""),
+  redirect_uri: System.get_env("NOTAUI_REDIRECT_URI", ""),
   scope:
     System.get_env(
       "NOTAUI_SCOPE",

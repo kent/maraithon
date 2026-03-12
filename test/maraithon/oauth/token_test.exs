@@ -145,6 +145,17 @@ defmodule Maraithon.OAuth.TokenTest do
       assert changeset.valid?
     end
 
+    test "validates provider - notaui" do
+      changeset =
+        Token.changeset(%Token{}, %{
+          user_id: "user_123",
+          provider: "notaui",
+          access_token: "token"
+        })
+
+      assert changeset.valid?
+    end
+
     test "rejects invalid provider" do
       changeset =
         Token.changeset(%Token{}, %{

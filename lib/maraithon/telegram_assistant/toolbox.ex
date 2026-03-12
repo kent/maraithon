@@ -148,6 +148,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
         %{
           "type" => "object",
           "properties" => %{
+            "account_id" => %{"type" => "string"},
             "project_id" => %{"type" => "string"},
             "statuses" => %{"type" => "array", "items" => %{"type" => "string"}},
             "limit" => %{"type" => "integer", "minimum" => 1, "maximum" => 100}
@@ -243,7 +244,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
         linear_list_or_lookup(runtime_context, args)
 
       "notaui_list_tasks" ->
-        Tools.execute("notaui_list_tasks", args)
+        inject_user_and_execute("notaui_list_tasks", runtime_context, args)
 
       "list_agents" ->
         list_agents(runtime_context, args)

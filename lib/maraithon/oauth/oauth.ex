@@ -51,7 +51,8 @@ defmodule Maraithon.OAuth do
             refresh_token: token.refresh_token,
             expires_at: token.expires_at,
             scopes: token.scopes,
-            metadata: token.metadata
+            metadata: token.metadata,
+            external_account_id: token_field(token_data, :external_account_id)
           })
 
         ok
@@ -295,6 +296,41 @@ defmodule Maraithon.OAuth do
     end
   end
 
+  defp do_refresh(%Token{provider: "notaui"} = token) do
+    case Maraithon.OAuth.Notaui.refresh_token(token.refresh_token) do
+      {:ok, new_tokens} ->
+        scopes =
+          case split_scope_string(new_tokens.scope) do
+            [] -> token.scopes
+            values -> values
+          end
+
+        metadata =
+          token.metadata
+          |> put_metadata_if_present("token_type", new_tokens.token_type)
+
+        store_tokens(token.user_id, "notaui", %{
+          access_token: new_tokens.access_token,
+          refresh_token: new_tokens.refresh_token || token.refresh_token,
+          expires_in: new_tokens.expires_in,
+          scopes: scopes,
+          metadata: metadata
+        })
+
+      {:error, reason} ->
+        if reauth_required_refresh_error?(reason) do
+          _ = ConnectedAccounts.mark_error(token.user_id, "notaui", "oauth_reauth_required")
+        end
+
+        Logger.warning("Failed to refresh Notaui token",
+          user_id: token.user_id,
+          reason: inspect(reason)
+        )
+
+        {:error, reason}
+    end
+  end
+
   defp do_refresh(%Token{provider: provider} = token) when is_binary(provider) do
     if String.starts_with?(provider, "slack:") do
       case Maraithon.OAuth.Slack.refresh_token(token.refresh_token) do
@@ -444,6 +480,10 @@ defmodule Maraithon.OAuth do
 
   defp revoke_provider_token(%Token{provider: "notion", access_token: access_token}) do
     Maraithon.OAuth.Notion.revoke_token(access_token)
+  end
+
+  defp revoke_provider_token(%Token{provider: "notaui", access_token: access_token}) do
+    Maraithon.OAuth.Notaui.revoke_token(access_token)
   end
 
   defp revoke_provider_token(%Token{provider: provider, access_token: access_token}) do

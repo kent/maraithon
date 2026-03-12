@@ -56,6 +56,8 @@ defmodule MaraithonWeb.Router do
     get "/linear/callback", OAuthController, :linear_callback
     get "/notion", OAuthController, :notion
     get "/notion/callback", OAuthController, :notion_callback
+    get "/notaui", OAuthController, :notaui
+    get "/notaui/callback", OAuthController, :notaui_callback
   end
 
   # Web UI - authenticated user pages

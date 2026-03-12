@@ -181,6 +181,14 @@ defmodule MaraithonWeb.ConnectorsHTML do
     """
   end
 
+  def oauth_logo(%{provider: :notaui} = assigns) do
+    ~H"""
+    <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-600 text-xs font-semibold text-white shadow-sm">
+      NA
+    </div>
+    """
+  end
+
   def oauth_logo(%{provider: :telegram} = assigns) do
     ~H"""
     <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-sky-500 text-xs font-semibold text-white shadow-sm">

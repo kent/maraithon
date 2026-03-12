@@ -208,7 +208,8 @@ defmodule Maraithon.ConnectedAccounts do
 
   defp metadata_external_account_id(metadata) when is_map(metadata) do
     metadata["id"] || metadata[:id] || metadata["github_id"] || metadata[:github_id] ||
-      metadata["workspace_id"] || metadata[:workspace_id]
+      metadata["workspace_id"] || metadata[:workspace_id] ||
+      metadata["default_account_id"] || metadata[:default_account_id]
   end
 
   defp metadata_external_account_id(_), do: nil
@@ -236,9 +237,11 @@ defmodule Maraithon.ConnectedAccounts do
         fetch_map_value(value, "id"),
         fetch_map_value(value, "github_id"),
         fetch_map_value(value, "workspace_id"),
+        fetch_map_value(value, "default_account_id"),
         fetch_map_value(value, "account_email"),
         fetch_map_value(value, "email")
-      ]
+      ] ++
+        metadata_account_ids(value)
     end)
     |> Enum.map(&normalize_destination/1)
     |> Enum.reject(&is_nil/1)
@@ -246,6 +249,18 @@ defmodule Maraithon.ConnectedAccounts do
   end
 
   defp metadata_identifiers(_metadata), do: []
+
+  defp metadata_account_ids(metadata) when is_map(metadata) do
+    metadata
+    |> fetch_map_value("accounts")
+    |> List.wrap()
+    |> Enum.map(fn
+      account when is_map(account) -> fetch_map_value(account, "id")
+      _ -> nil
+    end)
+  end
+
+  defp metadata_account_ids(_metadata), do: []
 
   defp normalize_attrs(attrs) do
     %{

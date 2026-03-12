@@ -218,6 +218,7 @@ defmodule MaraithonWeb.AdminControllerTest do
       previous_google = Application.get_env(:maraithon, :google, [])
       previous_github = Application.get_env(:maraithon, :github, [])
       previous_linear = Application.get_env(:maraithon, :linear, [])
+      previous_notaui = Application.get_env(:maraithon, :notaui, [])
       previous_notion = Application.get_env(:maraithon, :notion, [])
       previous_slack = Application.get_env(:maraithon, :slack, [])
 
@@ -225,6 +226,7 @@ defmodule MaraithonWeb.AdminControllerTest do
         Application.put_env(:maraithon, :google, previous_google)
         Application.put_env(:maraithon, :github, previous_github)
         Application.put_env(:maraithon, :linear, previous_linear)
+        Application.put_env(:maraithon, :notaui, previous_notaui)
         Application.put_env(:maraithon, :notion, previous_notion)
         Application.put_env(:maraithon, :slack, previous_slack)
       end)
@@ -258,6 +260,16 @@ defmodule MaraithonWeb.AdminControllerTest do
         redirect_uri: "https://maraithon.fly.dev/auth/notion/callback"
       )
 
+      Application.put_env(:maraithon, :notaui,
+        client_id: "notaui-client",
+        client_secret: "notaui-secret",
+        redirect_uri: "https://maraithon.fly.dev/auth/notaui/callback",
+        issuer: "https://api.notaui.com",
+        auth_url: "https://api.notaui.com/oauth/authorize",
+        token_url: "https://api.notaui.com/oauth/token",
+        mcp_url: "https://api.notaui.com/mcp"
+      )
+
       Application.put_env(:maraithon, :slack,
         client_id: "slack-client",
         client_secret: "slack-secret",
@@ -277,7 +289,7 @@ defmodule MaraithonWeb.AdminControllerTest do
       response = json_response(conn, 200)
       assert response["user_id"] == "kent"
       assert response["connected_count"] >= 1
-      assert length(response["providers"]) == 6
+      assert length(response["providers"]) == 7
       assert Enum.any?(response["raw_tokens"], &(&1["provider"] == "github"))
 
       github =
@@ -314,6 +326,15 @@ defmodule MaraithonWeb.AdminControllerTest do
       assert slack["logo"] == "slack"
       assert Enum.any?(slack["callback_urls"], &(&1["url"] =~ "/webhooks/slack"))
       assert Enum.any?(slack["env_requirements"], &(&1["name"] == "SLACK_SIGNING_SECRET"))
+
+      notaui =
+        Enum.find(response["providers"], fn provider ->
+          provider["provider"] == "notaui"
+        end)
+
+      assert notaui["logo"] == "notaui"
+      assert Enum.any?(notaui["callback_urls"], &(&1["url"] =~ "/auth/notaui/callback"))
+      assert Enum.any?(notaui["env_requirements"], &(&1["name"] == "NOTAUI_CLIENT_ID"))
     end
   end
 
