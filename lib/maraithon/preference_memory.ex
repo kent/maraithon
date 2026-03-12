@@ -12,14 +12,17 @@ defmodule Maraithon.PreferenceMemory do
   alias Maraithon.Agents.Agent
   alias Maraithon.Insights.Insight
   alias Maraithon.LLM
-  alias Maraithon.PreferenceMemory.Profile
+  alias Maraithon.OperatorMemory
+  alias Maraithon.PreferenceMemory.{Profile, Rule, RuleEvent}
   alias Maraithon.Repo
 
   require Logger
 
   @default_timezone_offset_hours -5
-  @allowed_kinds ~w(content_filter urgency_boost quiet_hours)
+  @allowed_kinds ~w(content_filter urgency_boost quiet_hours routing_preference action_preference style_preference)
   @default_applies_to ~w(gmail calendar slack telegram)
+  @autosave_threshold 0.90
+  @confirm_threshold 0.70
 
   @spec prompt_context(String.t() | nil) :: map()
   def prompt_context(user_id) when is_binary(user_id) do
@@ -28,7 +31,8 @@ defmodule Maraithon.PreferenceMemory do
     %{
       timezone_offset_hours: timezone_offset_hours(user_id),
       rules: rules,
-      summary: Enum.map(rules, &rule_summary/1)
+      summary: Enum.map(rules, &rule_summary/1),
+      operator_memory_summaries: OperatorMemory.summaries_for_prompt(user_id)
     }
   end
 
@@ -36,20 +40,37 @@ defmodule Maraithon.PreferenceMemory do
     %{
       timezone_offset_hours: @default_timezone_offset_hours,
       rules: [],
-      summary: []
+      summary: [],
+      operator_memory_summaries: []
     }
   end
 
   @spec active_rules(String.t()) :: [map()]
   def active_rules(user_id) when is_binary(user_id) do
-    user_id
-    |> profile()
-    |> profile_rules()
-    |> Enum.filter(&active_rule?/1)
-    |> Enum.sort_by(&rule_sort_key/1)
+    case active_rule_rows(user_id) do
+      [] ->
+        user_id
+        |> profile()
+        |> profile_rules()
+        |> Enum.filter(&active_rule?/1)
+        |> Enum.sort_by(&rule_sort_key/1)
+
+      rows ->
+        Enum.sort_by(rows, &rule_sort_key/1)
+    end
   end
 
   def active_rules(_user_id), do: []
+
+  def pending_rules(user_id) when is_binary(user_id) do
+    Rule
+    |> where([rule], rule.user_id == ^user_id and rule.status == "pending_confirmation")
+    |> order_by([rule], desc: rule.updated_at, desc: rule.inserted_at)
+    |> Repo.all()
+    |> Enum.map(&serialize_rule/1)
+  end
+
+  def pending_rules(_user_id), do: []
 
   @spec render_summary(String.t()) :: String.t()
   def render_summary(user_id) when is_binary(user_id) do
@@ -123,18 +144,24 @@ defmodule Maraithon.PreferenceMemory do
       if length(retained) == length(current) do
         {:error, :rule_not_found}
       else
-        now = DateTime.utc_now()
+        Repo.transaction(fn ->
+          Rule
+          |> where([rule], rule.user_id == ^user_id and rule.status == "active")
+          |> Repo.all()
+          |> Enum.filter(&(rule_identifier(serialize_rule(&1)) == normalized_id))
+          |> Enum.each(fn rule ->
+            rule
+            |> Rule.changeset(%{status: "superseded"})
+            |> Repo.update!()
 
-        attrs = %{
-          user_id: user_id,
-          rules: %{"rules" => retained},
-          last_explicit_at: now
-        }
+            log_rule_event(user_id, rule.id, "reverted", %{"source" => "forget_rule"})
+          end)
 
-        case upsert_profile(attrs) do
-          {:ok, _profile} -> {:ok, "Removed preference `#{normalized_id}`."}
-          {:error, reason} -> {:error, reason}
-        end
+          sync_profile_from_rows!(user_id)
+          _ = OperatorMemory.refresh_user_summaries(user_id)
+        end)
+
+        {:ok, "Removed preference `#{normalized_id}`."}
       end
     end
   end
@@ -165,6 +192,90 @@ defmodule Maraithon.PreferenceMemory do
 
   def learn_from_feedback(_user_id, _insight, _feedback, _opts),
     do: {:ok, %{reply: nil, learned: []}}
+
+  def save_interpreted_rules(user_id, rules, source, opts \\ [])
+      when is_binary(user_id) and is_list(rules) and is_binary(source) do
+    {:ok, persist_rules(user_id, rules, source, opts)}
+  end
+
+  def confirm_rules(user_id, rule_ids, opts \\ [])
+      when is_binary(user_id) and is_list(rule_ids) do
+    now = DateTime.utc_now()
+    conversation_id = Keyword.get(opts, :conversation_id)
+    source_turn_id = Keyword.get(opts, :source_turn_id)
+    source_delivery_id = Keyword.get(opts, :source_delivery_id)
+
+    rules =
+      Rule
+      |> where(
+        [rule],
+        rule.user_id == ^user_id and rule.id in ^rule_ids and
+          rule.status == "pending_confirmation"
+      )
+      |> Repo.all()
+
+    Repo.transaction(fn ->
+      Enum.each(rules, fn rule ->
+        rule
+        |> Rule.changeset(%{status: "active", confirmed_at: now})
+        |> Repo.update!()
+
+        log_rule_event(
+          user_id,
+          rule.id,
+          "confirmed",
+          %{"source" => "telegram_confirmation"},
+          conversation_id: conversation_id,
+          source_turn_id: source_turn_id,
+          source_delivery_id: source_delivery_id
+        )
+      end)
+
+      sync_profile_from_rows!(user_id)
+      _ = OperatorMemory.refresh_user_summaries(user_id)
+    end)
+
+    {:ok, Enum.map(rules, &serialize_rule/1)}
+  end
+
+  def reject_rules(user_id, rule_ids, opts \\ [])
+      when is_binary(user_id) and is_list(rule_ids) do
+    conversation_id = Keyword.get(opts, :conversation_id)
+    source_turn_id = Keyword.get(opts, :source_turn_id)
+    source_delivery_id = Keyword.get(opts, :source_delivery_id)
+
+    rules =
+      Rule
+      |> where(
+        [rule],
+        rule.user_id == ^user_id and rule.id in ^rule_ids and
+          rule.status == "pending_confirmation"
+      )
+      |> Repo.all()
+
+    Repo.transaction(fn ->
+      Enum.each(rules, fn rule ->
+        rule
+        |> Rule.changeset(%{status: "rejected"})
+        |> Repo.update!()
+
+        log_rule_event(
+          user_id,
+          rule.id,
+          "rejected",
+          %{"source" => "telegram_confirmation"},
+          conversation_id: conversation_id,
+          source_turn_id: source_turn_id,
+          source_delivery_id: source_delivery_id
+        )
+      end)
+
+      sync_profile_from_rows!(user_id)
+      _ = OperatorMemory.refresh_user_summaries(user_id)
+    end)
+
+    {:ok, Enum.map(rules, &serialize_rule/1)}
+  end
 
   @spec allow_telegram_interrupt?(String.t(), Insight.t(), DateTime.t()) :: boolean()
   def allow_telegram_interrupt?(user_id, %Insight{} = insight, %DateTime{} = now)
@@ -335,7 +446,6 @@ defmodule Maraithon.PreferenceMemory do
   defp persist_rules(user_id, rules, source, opts) when is_list(rules) do
     explicit? = Keyword.get(opts, :explicit?, false)
     now = DateTime.utc_now()
-    existing = active_rules(user_id)
 
     normalized =
       rules
@@ -345,18 +455,63 @@ defmodule Maraithon.PreferenceMemory do
     if normalized == [] do
       []
     else
-      merged = merge_rules(existing, normalized)
+      save_policy = Keyword.get(opts, :save_policy, :smart)
+      conversation_id = Keyword.get(opts, :conversation_id)
+      source_turn_id = Keyword.get(opts, :source_turn_id)
+      source_delivery_id = Keyword.get(opts, :source_delivery_id)
 
-      attrs =
-        %{
-          user_id: user_id,
-          rules: %{"rules" => merged}
-        }
-        |> maybe_put_timestamp(explicit?, now)
+      Repo.transaction(fn ->
+        persisted =
+          Enum.map(normalized, fn rule ->
+            confidence = rule_confidence(rule)
 
-      case upsert_profile(attrs) do
-        {:ok, _profile} ->
-          normalized
+            status =
+              cond do
+                explicit? -> "active"
+                save_policy == :active -> "active"
+                save_policy == :confirm -> "pending_confirmation"
+                confidence >= @autosave_threshold -> "active"
+                confidence >= @confirm_threshold -> "pending_confirmation"
+                true -> "rejected"
+              end
+
+            attrs =
+              rule
+              |> Map.put("user_id", user_id)
+              |> Map.put("status", status)
+              |> maybe_put_confirmed_at(status, now)
+
+            persisted_rule = upsert_rule!(attrs)
+
+            event_type =
+              case status do
+                "active" when explicit? -> "confirmed"
+                "active" -> "auto_saved"
+                "pending_confirmation" -> "proposed"
+                _ -> "rejected"
+              end
+
+            log_rule_event(
+              user_id,
+              persisted_rule.id,
+              event_type,
+              %{"source" => source, "rule" => serialize_rule(persisted_rule)},
+              conversation_id: conversation_id,
+              source_turn_id: source_turn_id,
+              source_delivery_id: source_delivery_id
+            )
+
+            persisted_rule
+          end)
+
+        sync_profile_from_rows!(user_id)
+        _ = OperatorMemory.refresh_user_summaries(user_id)
+
+        Enum.map(persisted, &serialize_rule/1)
+      end)
+      |> case do
+        {:ok, saved} ->
+          saved
 
         {:error, reason} ->
           Logger.warning("Failed to persist preference rules", reason: inspect(reason))
@@ -365,46 +520,8 @@ defmodule Maraithon.PreferenceMemory do
     end
   end
 
-  defp maybe_put_timestamp(attrs, true, now), do: Map.put(attrs, :last_explicit_at, now)
-  defp maybe_put_timestamp(attrs, false, now), do: Map.put(attrs, :last_inferred_at, now)
-
-  defp merge_rules(existing, new_rules) do
-    existing_by_id =
-      Map.new(existing, fn rule ->
-        {rule_identifier(rule), rule}
-      end)
-
-    new_rules
-    |> Enum.reduce(existing_by_id, fn rule, acc ->
-      Map.put(acc, rule_identifier(rule), merge_rule(Map.get(acc, rule_identifier(rule)), rule))
-    end)
-    |> Map.values()
-    |> Enum.sort_by(&rule_sort_key/1)
-  end
-
-  defp merge_rule(nil, new_rule), do: new_rule
-
-  defp merge_rule(existing, new_rule) do
-    existing_source = rule_source(existing)
-    new_source = rule_source(new_rule)
-
-    preferred =
-      cond do
-        existing_source == "explicit_telegram" and new_source != "explicit_telegram" -> existing
-        existing_source != "explicit_telegram" and new_source == "explicit_telegram" -> new_rule
-        rule_confidence(new_rule) >= rule_confidence(existing) -> new_rule
-        true -> existing
-      end
-
-    merged_filters =
-      existing
-      |> Map.get("filters", %{})
-      |> Map.merge(Map.get(new_rule, "filters", %{}))
-
-    preferred
-    |> Map.merge(new_rule)
-    |> Map.put("filters", merged_filters)
-  end
+  defp maybe_put_confirmed_at(attrs, "active", now), do: Map.put(attrs, "confirmed_at", now)
+  defp maybe_put_confirmed_at(attrs, _status, _now), do: attrs
 
   defp normalize_rule(rule, source, now) when is_map(rule) do
     kind = rule_kind(rule)
@@ -533,152 +650,19 @@ defmodule Maraithon.PreferenceMemory do
   end
 
   defp fallback_parse_instruction(user_id, instruction) do
-    normalized = String.downcase(instruction)
-    timezone = timezone_offset_hours(user_id)
-
-    cond do
-      String.contains?(normalized, "receipt") or String.contains?(normalized, "invoice") ->
-        %{
-          "reply" =>
-            "Understood. I'll stop surfacing receipt-style noise unless there's a real ask.",
-          "rules" => [
-            %{
-              "id" => "ignore_receipts",
-              "kind" => "content_filter",
-              "label" => "Ignore receipt-style notifications",
-              "instruction" =>
-                "Suppress receipts, invoices, payment confirmations, and order confirmations unless there is a clear human ask or unresolved commitment.",
-              "applies_to" => @default_applies_to,
-              "confidence" => 0.96,
-              "filters" => %{
-                "topics" => [
-                  "receipts",
-                  "invoices",
-                  "payment_confirmations",
-                  "order_confirmations"
-                ],
-                "require_human_ask_to_override" => true
-              }
-            }
-          ]
-        }
-
-      String.contains?(normalized, "investor") ->
-        %{
-          "reply" => "Understood. I'll bias investor-related loops toward urgency.",
-          "rules" => [
-            %{
-              "id" => "treat_investors_urgent",
-              "kind" => "urgency_boost",
-              "label" => "Treat investors as urgent",
-              "instruction" =>
-                "Bias investor-related Gmail, Calendar, and Slack loops toward higher urgency and faster interruption.",
-              "applies_to" => @default_applies_to,
-              "confidence" => 0.94,
-              "filters" => %{"topics" => ["investor"], "priority_bias" => "high"}
-            }
-          ]
-        }
-
-      String.contains?(normalized, "after 8") and String.contains?(normalized, "external") ->
-        %{
-          "reply" => "Understood. After hours, I'll only interrupt for external loops.",
-          "rules" => [
-            %{
-              "id" => "after_hours_external_only",
-              "kind" => "quiet_hours",
-              "label" => "After-hours Telegram only for external loops",
-              "instruction" =>
-                "After 8pm local time, suppress Telegram interruptions unless the counterparty is external.",
-              "applies_to" => ["telegram"],
-              "confidence" => 0.92,
-              "filters" => %{
-                "start_hour_local" => 20,
-                "end_hour_local" => if(timezone <= -8, do: 8, else: 8),
-                "allow_if_external" => true
-              }
-            }
-          ]
-        }
-
-      true ->
-        nil
-    end
+    _ = user_id
+    _ = instruction
+    nil
   end
 
   defp fallback_infer_from_feedback(_user_id, %Insight{} = insight, "not_helpful") do
-    metadata_text =
-      [
-        insight.title,
-        insight.summary,
-        get_in(insight.metadata || %{}, ["record", "commitment"]),
-        get_in(insight.metadata || %{}, ["context_brief"])
-      ]
-      |> Enum.reject(&blank?/1)
-      |> Enum.join(" ")
-      |> String.downcase()
-
-    if String.contains?(metadata_text, "receipt") or String.contains?(metadata_text, "payment") or
-         String.contains?(metadata_text, "invoice") or String.contains?(metadata_text, "order") do
-      %{
-        "reply" => "Learned that receipt-style notifications are usually noise for you.",
-        "rules" => [
-          %{
-            "id" => "ignore_receipts",
-            "kind" => "content_filter",
-            "label" => "Ignore receipt-style notifications",
-            "instruction" =>
-              "Suppress receipts, invoices, payment confirmations, and order confirmations unless there is a clear human ask or unresolved commitment.",
-            "applies_to" => @default_applies_to,
-            "confidence" => 0.88,
-            "filters" => %{
-              "topics" => [
-                "receipts",
-                "invoices",
-                "payment_confirmations",
-                "order_confirmations"
-              ],
-              "require_human_ask_to_override" => true
-            }
-          }
-        ]
-      }
-    else
-      nil
-    end
+    _ = insight
+    nil
   end
 
   defp fallback_infer_from_feedback(_user_id, %Insight{} = insight, "helpful") do
-    metadata_text =
-      [
-        insight.title,
-        insight.summary,
-        get_in(insight.metadata || %{}, ["record", "commitment"]),
-        get_in(insight.metadata || %{}, ["context_brief"])
-      ]
-      |> Enum.reject(&blank?/1)
-      |> Enum.join(" ")
-      |> String.downcase()
-
-    if String.contains?(metadata_text, "investor") or String.contains?(metadata_text, "board") do
-      %{
-        "reply" => "Learned to treat investor-related loops as urgent.",
-        "rules" => [
-          %{
-            "id" => "treat_investors_urgent",
-            "kind" => "urgency_boost",
-            "label" => "Treat investors as urgent",
-            "instruction" =>
-              "Bias investor-related Gmail, Calendar, and Slack loops toward higher urgency and faster interruption.",
-            "applies_to" => @default_applies_to,
-            "confidence" => 0.84,
-            "filters" => %{"topics" => ["investor", "board"], "priority_bias" => "high"}
-          }
-        ]
-      }
-    else
-      nil
-    end
+    _ = insight
+    nil
   end
 
   defp fallback_infer_from_feedback(_user_id, _insight, _feedback), do: nil
@@ -764,6 +748,83 @@ defmodule Maraithon.PreferenceMemory do
 
   defp email_domain(_), do: nil
 
+  defp upsert_rule!(attrs) do
+    user_id = Map.fetch!(attrs, "user_id")
+    label = Map.fetch!(attrs, "label")
+    kind = Map.fetch!(attrs, "kind")
+
+    existing =
+      Rule
+      |> where([rule], rule.user_id == ^user_id and rule.label == ^label and rule.kind == ^kind)
+      |> order_by([rule], desc: rule.updated_at, desc: rule.inserted_at)
+      |> limit(1)
+      |> Repo.one()
+
+    case existing do
+      nil ->
+        %Rule{}
+        |> Rule.changeset(normalize_rule_attrs(attrs))
+        |> Repo.insert!()
+
+      %Rule{} = rule ->
+        rule
+        |> Rule.changeset(normalize_rule_attrs(attrs))
+        |> Repo.update!()
+    end
+  end
+
+  defp normalize_rule_attrs(attrs) do
+    evidence =
+      attrs
+      |> Map.get("evidence")
+      |> evidence_map()
+      |> Map.put_new("memory_id", Map.get(attrs, "id"))
+
+    %{
+      user_id: Map.get(attrs, "user_id"),
+      status: Map.get(attrs, "status", "active"),
+      source: Map.get(attrs, "source", "telegram_inferred"),
+      kind: Map.get(attrs, "kind"),
+      label: Map.get(attrs, "label"),
+      instruction: Map.get(attrs, "instruction"),
+      applies_to: Map.get(attrs, "applies_to", @default_applies_to),
+      filters: Map.get(attrs, "filters", %{}),
+      confidence: clamp(rule_confidence(attrs), 0.0, 1.0),
+      evidence: evidence,
+      confirmed_at: Map.get(attrs, "confirmed_at")
+    }
+  end
+
+  defp log_rule_event(user_id, rule_id, event_type, payload, opts \\ []) do
+    %RuleEvent{}
+    |> RuleEvent.changeset(%{
+      user_id: user_id,
+      rule_id: rule_id,
+      conversation_id: Keyword.get(opts, :conversation_id),
+      source_turn_id: Keyword.get(opts, :source_turn_id),
+      source_delivery_id: Keyword.get(opts, :source_delivery_id),
+      event_type: event_type,
+      payload: payload
+    })
+    |> Repo.insert!()
+  end
+
+  defp sync_profile_from_rows!(user_id) do
+    now = DateTime.utc_now()
+
+    attrs = %{
+      user_id: user_id,
+      rules: %{"rules" => active_rule_rows(user_id)},
+      last_inferred_at: now,
+      last_explicit_at: now
+    }
+
+    case upsert_profile(attrs) do
+      {:ok, _profile} -> :ok
+      {:error, reason} -> Repo.rollback(reason)
+    end
+  end
+
   defp upsert_profile(attrs) do
     user_id = Map.get(attrs, :user_id) || Map.get(attrs, "user_id")
 
@@ -796,6 +857,16 @@ defmodule Maraithon.PreferenceMemory do
   defp active_rule?(rule) do
     is_map(rule) and rule_kind(rule) in @allowed_kinds and rule_status(rule) == "active"
   end
+
+  defp active_rule_rows(user_id) when is_binary(user_id) do
+    Rule
+    |> where([rule], rule.user_id == ^user_id and rule.status == "active")
+    |> order_by([rule], desc: rule.confirmed_at, desc: rule.updated_at, desc: rule.inserted_at)
+    |> Repo.all()
+    |> Enum.map(&serialize_rule/1)
+  end
+
+  defp active_rule_rows(_user_id), do: []
 
   defp timezone_offset_hours(user_id) when is_binary(user_id) do
     Agent
@@ -847,6 +918,28 @@ defmodule Maraithon.PreferenceMemory do
   defp rule_kind(rule), do: non_empty_string(rule["kind"]) || ""
   defp rule_status(rule), do: non_empty_string(rule["status"]) || "active"
   defp rule_source(rule), do: non_empty_string(rule["source"]) || "feedback_inference"
+
+  defp serialize_rule(%Rule{} = rule) do
+    memory_id = get_in(rule.evidence || %{}, ["memory_id"]) || rule.id
+
+    %{
+      "id" => rule_identifier(%{"id" => memory_id, "label" => rule.label}),
+      "rule_id" => rule.id,
+      "kind" => rule.kind,
+      "label" => rule.label,
+      "instruction" => rule.instruction,
+      "applies_to" => rule.applies_to || [],
+      "filters" => rule.filters || %{},
+      "confidence" => rule.confidence || 0.0,
+      "source" => rule.source,
+      "status" => rule.status,
+      "confirmed_at" => serialize_datetime(rule.confirmed_at),
+      "last_used_at" => serialize_datetime(rule.last_used_at),
+      "evidence" => rule.evidence || %{}
+    }
+  end
+
+  defp serialize_rule(rule) when is_map(rule), do: rule
 
   defp rule_identifier(rule) do
     case non_empty_string(rule["id"]) do
@@ -938,7 +1031,10 @@ defmodule Maraithon.PreferenceMemory do
 
   defp boolean_or_default(_value, default), do: default
 
-  defp blank?(value) when is_binary(value), do: String.trim(value) == ""
-  defp blank?(nil), do: true
-  defp blank?(_value), do: false
+  defp serialize_datetime(%DateTime{} = value), do: DateTime.to_iso8601(value)
+  defp serialize_datetime(_), do: nil
+
+  defp evidence_map(value) when is_map(value), do: value
+  defp evidence_map(value) when is_list(value), do: %{"items" => value}
+  defp evidence_map(_), do: %{}
 end

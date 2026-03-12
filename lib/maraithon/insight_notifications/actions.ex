@@ -27,6 +27,35 @@ defmodule Maraithon.InsightNotifications.Actions do
     }
   end
 
+  def fetch_delivery_for_chat(delivery_id, chat_id) do
+    fetch_delivery(delivery_id, chat_id)
+  end
+
+  def find_delivery_by_provider_message(chat_id, provider_message_id)
+      when is_binary(chat_id) and is_binary(provider_message_id) do
+    delivery =
+      Delivery
+      |> where([d], d.channel == "telegram" and d.destination == ^chat_id)
+      |> where([d], d.provider_message_id == ^provider_message_id)
+      |> preload(:insight)
+      |> Repo.one()
+
+    case delivery do
+      %Delivery{} = delivery -> {:ok, delivery}
+      nil -> {:error, :delivery_not_found}
+    end
+  end
+
+  def find_delivery_by_provider_message(_chat_id, _provider_message_id),
+    do: {:error, :delivery_not_found}
+
+  def perform_action(%Delivery{} = delivery, action) when is_binary(action) do
+    delivery = ensure_insight_preloaded(delivery)
+    dispatch_action(action, delivery)
+  end
+
+  def action_state_for_delivery(%Delivery{} = delivery), do: action_state(delivery)
+
   def handle_callback(data) when is_map(data) do
     callback = read_string(data, "data")
     callback_id = read_string(data, "callback_id")

@@ -14,6 +14,7 @@ defmodule Maraithon.InsightNotifications do
   alias Maraithon.Insights.Insight
   alias Maraithon.PreferenceMemory
   alias Maraithon.Repo
+  alias Maraithon.TelegramRouter
 
   require Logger
 
@@ -58,7 +59,10 @@ defmodule Maraithon.InsightNotifications do
   def handle_telegram_event(%{} = event) do
     case read_string(event, "type") do
       "message" ->
-        maybe_handle_link_command(read_map(event, "data"))
+        handle_message_event(read_map(event, "data"))
+
+      "edited_message" ->
+        TelegramRouter.handle_edited_message(read_map(event, "data"))
 
       "callback_query" ->
         handle_callback_query(read_map(event, "data"))
@@ -69,6 +73,27 @@ defmodule Maraithon.InsightNotifications do
   end
 
   def handle_telegram_event(_event), do: :ok
+
+  defp handle_message_event(data) when is_map(data) do
+    chat_id = read_id_string(data, "chat_id")
+    text = read_string(data, "text")
+
+    cond do
+      is_nil(chat_id) ->
+        :ok
+
+      String.starts_with?(text || "", "/start") or String.starts_with?(text || "", "/link") ->
+        link_telegram_chat(chat_id, text, read_map(data, "from"))
+
+      true ->
+        case maybe_handle_preference_command(chat_id, text) do
+          :handled -> :ok
+          _ -> TelegramRouter.handle_message(data)
+        end
+    end
+  end
+
+  defp handle_message_event(_), do: :ok
 
   def get_or_create_profile(user_id) when is_binary(user_id) do
     case Repo.get_by(ThresholdProfile, user_id: user_id) do
@@ -196,8 +221,14 @@ defmodule Maraithon.InsightNotifications do
 
   defp handle_callback_query(data) when is_map(data) do
     case read_string(data, "data") do
-      "insfb:" <> _ -> handle_feedback_callback(data)
-      _ -> Actions.handle_callback(data)
+      "insfb:" <> _ ->
+        handle_feedback_callback(data)
+
+      _ ->
+        case TelegramRouter.handle_callback_query(data) do
+          :ok -> :ok
+          _ -> Actions.handle_callback(data)
+        end
     end
   end
 
@@ -253,22 +284,6 @@ defmodule Maraithon.InsightNotifications do
     |> Repo.update()
   end
 
-  defp maybe_handle_link_command(data) do
-    chat_id = read_id_string(data, "chat_id")
-    text = read_string(data, "text")
-
-    cond do
-      is_nil(chat_id) ->
-        :ok
-
-      String.starts_with?(text || "", "/start") or String.starts_with?(text || "", "/link") ->
-        link_telegram_chat(chat_id, text, read_map(data, "from"))
-
-      true ->
-        maybe_handle_preference_command(chat_id, text)
-    end
-  end
-
   defp maybe_handle_preference_command(chat_id, text) when is_binary(chat_id) do
     command_text = String.trim(text || "")
 
@@ -287,7 +302,7 @@ defmodule Maraithon.InsightNotifications do
     cond do
       text in ["/preferences", "/prefs", "/memory"] ->
         telegram_module().send_message(chat_id, PreferenceMemory.render_summary(user_id))
-        :ok
+        :handled
 
       String.starts_with?(text, "/prefer") or String.starts_with?(text, "/policy") ->
         instruction = text |> String.split(~r/\s+/, parts: 2) |> Enum.at(1, "")
@@ -297,7 +312,7 @@ defmodule Maraithon.InsightNotifications do
           {:error, _reason} -> telegram_module().send_message(chat_id, preference_help_text())
         end
 
-        :ok
+        :handled
 
       String.starts_with?(text, "/forget") ->
         rule_id = text |> String.split(~r/\s+/, parts: 2) |> Enum.at(1, "")
@@ -313,10 +328,10 @@ defmodule Maraithon.InsightNotifications do
             telegram_module().send_message(chat_id, preference_help_text())
         end
 
-        :ok
+        :handled
 
       true ->
-        :ok
+        :pass
     end
   end
 
@@ -329,8 +344,10 @@ defmodule Maraithon.InsightNotifications do
         chat_id,
         "Link this chat first with /start your@email.com, then use /prefer or /preferences."
       )
+
+      :handled
     else
-      :ok
+      :pass
     end
   end
 

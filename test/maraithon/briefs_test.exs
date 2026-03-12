@@ -56,11 +56,12 @@ defmodule Maraithon.BriefsTest do
 
     assert %{sent: 1, failed: 0, skipped: 0} = Briefs.dispatch_telegram_batch(batch_size: 10)
 
+    [message] = Agent.get(:capturing_telegram_recorder, & &1)
+
     updated = Repo.get!(Brief, brief.id)
     assert updated.status == "sent"
-    assert updated.provider_message_id == "123"
+    assert updated.provider_message_id == message.message_id
 
-    [message] = Agent.get(:capturing_telegram_recorder, & &1)
     assert message.type == :send
     assert message.chat_id == "777123"
     assert message.text =~ "Morning brief"
