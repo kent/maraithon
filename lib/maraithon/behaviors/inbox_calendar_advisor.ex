@@ -12,6 +12,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
 
   alias Maraithon.Connectors.Gmail
   alias Maraithon.Connectors.GoogleCalendar
+  alias Maraithon.Followthrough.ConversationContext
   alias Maraithon.InsightFeedback
   alias Maraithon.Insights
   alias Maraithon.OAuth
@@ -412,6 +413,44 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
     end
   end
 
+  defp build_gmail_conversation_context(state, thread_id, trigger_message) do
+    self_refs = gmail_self_refs(state)
+
+    case Gmail.fetch_thread(state.user_id, thread_id) do
+      {:ok, messages} when is_list(messages) and messages != [] ->
+        ConversationContext.from_gmail(messages, trigger_message,
+          self_refs: self_refs,
+          default_owner: "user_owner"
+        )
+
+      {:error, reason} ->
+        trigger_message
+        |> List.wrap()
+        |> ConversationContext.from_gmail(trigger_message,
+          self_refs: self_refs,
+          default_owner: "user_owner"
+        )
+        |> Map.put("notification_posture", "insufficient_context")
+        |> Map.put("insufficient_context_reason", "gmail_thread_fetch_failed: #{inspect(reason)}")
+
+      _ ->
+        ConversationContext.from_gmail([trigger_message], trigger_message,
+          self_refs: self_refs,
+          default_owner: "user_owner"
+        )
+    end
+  end
+
+  defp gmail_self_refs(state) do
+    [state.user_id, state.google_account]
+    |> Enum.filter(&is_binary/1)
+    |> Enum.uniq()
+  end
+
+  defp resolved_conversation?(context) when is_map(context) do
+    read_string(context, "notification_posture", nil) == "resolved"
+  end
+
   defp incoming_email_candidates(email, state, sent_messages) when is_map(email) do
     subject = read_string(email, "subject", "(no subject)")
     snippet = read_string(email, "snippet", "")
@@ -452,81 +491,88 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
         []
 
       true ->
-        person = primary_contact(from) || from
-        inferred_deadline = infer_deadline_from_text(body, occurred_at)
-        due_at = inferred_deadline || DateTime.add(occurred_at || DateTime.utc_now(), 8, :hour)
+        conversation_context = build_gmail_conversation_context(state, thread_id, email)
 
-        commitment = "Reply to #{person} on \"#{truncate(subject, 70)}\""
-
-        evidence =
+        if resolved_conversation?(conversation_context) do
           []
-          |> maybe_append("Incoming thread from #{from}.", present?(from))
-          |> maybe_append(
-            "Reply request terms: #{Enum.join(reply_matches, ", ")}.",
-            reply_matches != []
-          )
-          |> maybe_append(
-            "Deadline cues: #{Enum.join(deadline_matches, ", ")}.",
-            deadline_matches != []
-          )
-          |> maybe_append("No sent reply found after #{format_dt(occurred_at)}.", true)
-          |> Enum.take(@max_evidence_points)
+        else
+          person = primary_contact(from) || from
+          inferred_deadline = infer_deadline_from_text(body, occurred_at)
+          due_at = inferred_deadline || DateTime.add(occurred_at || DateTime.utc_now(), 8, :hour)
 
-        next_action =
-          "Reply now with owner, ETA, and the exact artifact or update you committed to."
+          commitment = "Reply to #{person} on \"#{truncate(subject, 70)}\""
 
-        confidence =
-          0.66
-          |> maybe_add_float(0.14, reply_matches != [])
-          |> maybe_add_float(0.06, "IMPORTANT" in labels)
-          |> maybe_add_float(0.05, "UNREAD" in labels)
-          |> maybe_add_float(0.05, deadline_matches != [])
-          |> clamp(0.0, 1.0)
+          evidence =
+            []
+            |> maybe_append("Incoming thread from #{from}.", present?(from))
+            |> maybe_append(
+              "Reply request terms: #{Enum.join(reply_matches, ", ")}.",
+              reply_matches != []
+            )
+            |> maybe_append(
+              "Deadline cues: #{Enum.join(deadline_matches, ", ")}.",
+              deadline_matches != []
+            )
+            |> maybe_append("No sent reply found after #{format_dt(occurred_at)}.", true)
+            |> Enum.take(@max_evidence_points)
 
-        priority = urgency_priority(due_at, 82)
+          next_action =
+            "Reply now with owner, ETA, and the exact artifact or update you committed to."
 
-        summary =
-          "You still owe #{person} a response #{deadline_phrase(due_at)}. No sent follow-up was detected."
+          confidence =
+            0.66
+            |> maybe_add_float(0.14, reply_matches != [])
+            |> maybe_add_float(0.06, "IMPORTANT" in labels)
+            |> maybe_add_float(0.05, "UNREAD" in labels)
+            |> maybe_add_float(0.05, deadline_matches != [])
+            |> clamp(0.0, 1.0)
 
-        record =
-          commitment_record(
-            commitment,
-            person,
-            "gmail_thread:#{thread_id}",
-            due_at,
-            "unresolved",
-            evidence,
-            next_action
-          )
+          priority = urgency_priority(due_at, 82)
 
-        [
-          %{
-            source: "gmail",
-            source_id: message_id,
-            source_occurred_at: occurred_at,
-            category: "reply_urgent",
-            title: "Reply owed: #{truncate(subject, 90)}",
-            summary: summary,
-            recommended_action: next_action,
-            priority: priority,
-            confidence: confidence,
-            due_at: due_at,
-            dedupe_key: "gmail:thread:#{thread_id}:reply_owed",
-            metadata:
-              compact_map(%{
-                "account" => state.google_account,
-                "thread_id" => thread_id,
-                "from" => from,
-                "to" => to,
-                "subject" => subject,
-                "labels" => labels,
-                "signals" => reply_matches,
-                "context_brief" => "Incoming request from #{person}.",
-                "record" => record
-              })
-          }
-          |> normalize_candidate(state)
-        ]
+          summary =
+            "You still owe #{person} a response #{deadline_phrase(due_at)}. No sent follow-up was detected."
+
+          record =
+            commitment_record(
+              commitment,
+              person,
+              "gmail_thread:#{thread_id}",
+              due_at,
+              "unresolved",
+              evidence,
+              next_action
+            )
+
+          [
+            %{
+              source: "gmail",
+              source_id: message_id,
+              source_occurred_at: occurred_at,
+              category: "reply_urgent",
+              title: "Reply owed: #{truncate(subject, 90)}",
+              summary: summary,
+              recommended_action: next_action,
+              priority: priority,
+              confidence: confidence,
+              due_at: due_at,
+              dedupe_key: "gmail:thread:#{thread_id}:reply_owed",
+              metadata:
+                compact_map(%{
+                  "account" => state.google_account,
+                  "thread_id" => thread_id,
+                  "from" => from,
+                  "to" => to,
+                  "subject" => subject,
+                  "labels" => labels,
+                  "signals" => reply_matches,
+                  "context_brief" => "Incoming request from #{person}.",
+                  "record" => record
+                })
+            }
+            |> normalize_candidate(state)
+            |> ConversationContext.apply_to_candidate(conversation_context)
+          ]
+        end
     end
   end
 
@@ -566,88 +612,95 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
         []
 
       true ->
-        person = primary_contact(to) || "the recipient"
-        inferred_deadline = infer_deadline_from_text(body, occurred_at)
-        due_at = inferred_deadline || DateTime.add(occurred_at || DateTime.utc_now(), 24, :hour)
+        conversation_context = build_gmail_conversation_context(state, thread_id, sent_email)
 
-        commitment = extract_commitment_line(subject, snippet, person)
-        artifact_hint = extract_artifact_hint(body)
-
-        nudge_line =
-          case artifact_hint do
-            nil ->
-              "You committed to #{person} and no follow-up has gone out yet."
-
-            artifact ->
-              "You said you'd send #{artifact} to #{person} #{deadline_phrase(due_at)}. No reply has gone out yet."
-          end
-
-        evidence =
+        if resolved_conversation?(conversation_context) do
           []
-          |> maybe_append("Sent commitment email to #{truncate(to, 80)}.", present?(to))
-          |> maybe_append(
-            "Promise terms detected: #{Enum.join(promise_matches, ", ")}.",
-            promise_matches != []
-          )
-          |> maybe_append(
-            "Action terms detected: #{Enum.join(action_matches, ", ")}.",
-            action_matches != []
-          )
-          |> maybe_append("No later reply, forward, or artifact delivery found.", true)
-          |> Enum.take(@max_evidence_points)
+        else
+          person = primary_contact(to) || "the recipient"
+          inferred_deadline = infer_deadline_from_text(body, occurred_at)
+          due_at = inferred_deadline || DateTime.add(occurred_at || DateTime.utc_now(), 24, :hour)
 
-        next_action =
-          "Send the promised follow-through now and explicitly confirm delivery in the same thread."
+          commitment = extract_commitment_line(subject, snippet, person)
+          artifact_hint = extract_artifact_hint(body)
 
-        confidence =
-          0.74
-          |> maybe_add_float(0.08, length(promise_matches) >= 2)
-          |> maybe_add_float(0.06, inferred_deadline != nil)
-          |> maybe_add_float(0.06, artifact_hint != nil)
-          |> maybe_add_float(0.04, present?(to))
-          |> clamp(0.0, 1.0)
+          nudge_line =
+            case artifact_hint do
+              nil ->
+                "You committed to #{person} and no follow-up has gone out yet."
 
-        priority = urgency_priority(due_at, 86)
+              artifact ->
+                "You said you'd send #{artifact} to #{person} #{deadline_phrase(due_at)}. No reply has gone out yet."
+            end
 
-        record =
-          commitment_record(
-            commitment,
-            person,
-            "gmail_sent_message:#{message_id}",
-            due_at,
-            "unresolved",
-            evidence,
-            next_action
-          )
+          evidence =
+            []
+            |> maybe_append("Sent commitment email to #{truncate(to, 80)}.", present?(to))
+            |> maybe_append(
+              "Promise terms detected: #{Enum.join(promise_matches, ", ")}.",
+              promise_matches != []
+            )
+            |> maybe_append(
+              "Action terms detected: #{Enum.join(action_matches, ", ")}.",
+              action_matches != []
+            )
+            |> maybe_append("No later reply, forward, or artifact delivery found.", true)
+            |> Enum.take(@max_evidence_points)
 
-        [
-          %{
-            source: "gmail",
-            source_id: message_id,
-            source_occurred_at: occurred_at,
-            category: "commitment_unresolved",
-            title: truncate(nudge_line, 180),
-            summary:
-              "The commitment still appears open for #{person} #{deadline_phrase(due_at)}. No completion evidence was found in sent email.",
-            recommended_action: next_action,
-            priority: priority,
-            confidence: confidence,
-            due_at: due_at,
-            dedupe_key: "gmail:commitment:#{thread_id}",
-            metadata:
-              compact_map(%{
-                "account" => state.google_account,
-                "thread_id" => thread_id,
-                "from" => from,
-                "to" => to,
-                "subject" => subject,
-                "signals" => Enum.uniq(promise_matches ++ action_matches),
-                "context_brief" => "Explicit promise made to #{person}.",
-                "record" => record
-              })
-          }
-          |> normalize_candidate(state)
-        ]
+          next_action =
+            "Send the promised follow-through now and explicitly confirm delivery in the same thread."
+
+          confidence =
+            0.74
+            |> maybe_add_float(0.08, length(promise_matches) >= 2)
+            |> maybe_add_float(0.06, inferred_deadline != nil)
+            |> maybe_add_float(0.06, artifact_hint != nil)
+            |> maybe_add_float(0.04, present?(to))
+            |> clamp(0.0, 1.0)
+
+          priority = urgency_priority(due_at, 86)
+
+          record =
+            commitment_record(
+              commitment,
+              person,
+              "gmail_sent_message:#{message_id}",
+              due_at,
+              "unresolved",
+              evidence,
+              next_action
+            )
+
+          [
+            %{
+              source: "gmail",
+              source_id: message_id,
+              source_occurred_at: occurred_at,
+              category: "commitment_unresolved",
+              title: truncate(nudge_line, 180),
+              summary:
+                "The commitment still appears open for #{person} #{deadline_phrase(due_at)}. No completion evidence was found in sent email.",
+              recommended_action: next_action,
+              priority: priority,
+              confidence: confidence,
+              due_at: due_at,
+              dedupe_key: "gmail:commitment:#{thread_id}",
+              metadata:
+                compact_map(%{
+                  "account" => state.google_account,
+                  "thread_id" => thread_id,
+                  "from" => from,
+                  "to" => to,
+                  "subject" => subject,
+                  "signals" => Enum.uniq(promise_matches ++ action_matches),
+                  "context_brief" => "Explicit promise made to #{person}.",
+                  "record" => record
+                })
+            }
+            |> normalize_candidate(state)
+            |> ConversationContext.apply_to_candidate(conversation_context)
+          ]
+        end
     end
   end
 
@@ -833,7 +886,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
     dedupe_key = read_string(item, "dedupe_key", nil)
     base = if is_binary(dedupe_key), do: Map.get(by_key, dedupe_key), else: nil
 
-    if is_nil(base) or not actionable_llm_item?(item) do
+    if is_nil(base) or not actionable_llm_item?(item, base) do
       nil
     else
       confidence =
@@ -846,13 +899,23 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
         reasoning_summary = read_string(item, "reasoning_summary", nil)
         human_counterparty = read_boolean(item, "human_counterparty", false)
         missing_followthrough = read_boolean(item, "missing_followthrough_evidence", false)
-        interrupt_now = read_boolean(item, "interrupt_now", false)
+        notification_posture = resolve_notification_posture(item, base)
+
+        interrupt_now =
+          read_boolean(item, "interrupt_now", notification_posture == "interrupt_now")
+
         false_positive_risk = clamp(read_float(item, "false_positive_risk", 1.0), 0.0, 1.0)
         telegram_fit_score = clamp(read_float(item, "telegram_fit_score", confidence), 0.0, 1.0)
         telegram_fit_reason = read_string(item, "telegram_fit_reason", nil)
         why_now = read_string(item, "why_now", nil)
         follow_up_ideas = read_string_list(item, "follow_up_ideas", @max_follow_up_ideas)
         merged_record = resolve_record(item, base)
+        base_metadata = read_map(base, "metadata")
+
+        conversation_context =
+          base_metadata
+          |> read_map("conversation_context")
+          |> maybe_put("notification_posture", notification_posture)
 
         if String.downcase(Map.get(merged_record, "status", "unresolved")) != "unresolved" do
           nil
@@ -882,6 +945,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
             |> maybe_put("interrupt_now", interrupt_now)
             |> maybe_put("false_positive_risk", false_positive_risk)
             |> maybe_put_list("follow_up_ideas", follow_up_ideas)
+            |> maybe_put_map("conversation_context", conversation_context)
             |> Map.put("record", merged_record)
             |> Map.put("commitment", merged_record["commitment"])
             |> Map.put("person", merged_record["person"])
@@ -900,18 +964,37 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
 
   defp merge_llm_item(_item, _by_key, _min_confidence), do: nil
 
-  defp actionable_llm_item?(item) when is_map(item) do
+  defp actionable_llm_item?(item, base) when is_map(item) do
     actionability = read_string(item, "actionability", "") |> String.downcase()
     human_counterparty = read_boolean(item, "human_counterparty", false)
     missing_followthrough = read_boolean(item, "missing_followthrough_evidence", false)
     interrupt_now = read_boolean(item, "interrupt_now", false)
+    notification_posture = resolve_notification_posture(item, base)
     false_positive_risk = read_float(item, "false_positive_risk", 1.0)
 
     actionability == "actionable" and
       human_counterparty and
       missing_followthrough and
-      interrupt_now and
+      (interrupt_now or notification_posture == "heads_up") and
       false_positive_risk <= 0.35
+  end
+
+  defp resolve_notification_posture(item, base) do
+    item_posture = read_string(item, "notification_posture", nil)
+
+    cond do
+      item_posture in ["interrupt_now", "heads_up"] ->
+        item_posture
+
+      read_boolean(item, "interrupt_now", false) ->
+        "interrupt_now"
+
+      true ->
+        base
+        |> read_map("metadata")
+        |> read_map("conversation_context")
+        |> read_string("notification_posture", nil)
+    end
   end
 
   defp resolve_record(item, base) do
@@ -1036,6 +1119,9 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
       2. "Your Tuesday afternoon order with Uber Eats"
       3. "Receipt / invoice / order confirmation" with no direct ask
     - Every returned item must be truly actionable now.
+    - Each candidate may include conversation_context.notification_posture.
+    - If notification_posture is "heads_up", keep the softer "conversation is moving" framing.
+    - Only use unattended-thread language when notification_posture is "interrupt_now".
     - Keep `category` and `dedupe_key` unchanged.
     - Keep confidence between 0 and 1.
     - Estimate telegram_fit_score between 0 and 1, where 1 means "send to Telegram now".
@@ -1049,9 +1135,11 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
     telegram_fit_score, telegram_fit_reason, why_now, follow_up_ideas,
     commitment, person, source, deadline, status, evidence, next_action,
     actionability, obligation_type, human_counterparty, missing_followthrough_evidence,
-    interrupt_now, false_positive_risk, reasoning_summary
+    interrupt_now, notification_posture, false_positive_risk, reasoning_summary
     - Set actionability to exactly "actionable" for every returned item.
-    - Set human_counterparty, missing_followthrough_evidence, and interrupt_now to true for every returned item.
+    - Set human_counterparty and missing_followthrough_evidence to true for every returned item.
+    - Set interrupt_now to true only when the conversation still clearly needs immediate founder interruption.
+    - Keep notification_posture as "interrupt_now" or "heads_up".
     - Keep false_positive_risk <= 0.35 for every returned item.
     """
   end
@@ -1327,6 +1415,9 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
 
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
+  defp maybe_put_map(map, _key, value) when value == %{}, do: map
+  defp maybe_put_map(map, _key, nil), do: map
+  defp maybe_put_map(map, key, value) when is_map(value), do: Map.put(map, key, value)
   defp maybe_put_list(map, _key, []), do: map
   defp maybe_put_list(map, key, value), do: Map.put(map, key, value)
 

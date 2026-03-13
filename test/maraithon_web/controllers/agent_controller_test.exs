@@ -96,6 +96,8 @@ defmodule MaraithonWeb.AgentControllerTest do
   use MaraithonWeb.ConnCase, async: false
 
   alias Maraithon.Agents
+  alias Maraithon.Agents.Agent
+  alias Maraithon.Repo
 
   # ----------------------------------------------------------------------------
   # Test Setup
@@ -108,6 +110,8 @@ defmodule MaraithonWeb.AgentControllerTest do
   # The on_exit callback ensures the Scheduler is stopped after each test.
   # ----------------------------------------------------------------------------
   setup do
+    Repo.delete_all(Agent)
+
     # Stop any existing scheduler
     case Process.whereis(Maraithon.Runtime.Scheduler) do
       nil -> :ok

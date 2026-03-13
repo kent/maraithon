@@ -247,6 +247,36 @@ defmodule Maraithon.Connectors.Gmail do
   end
 
   @doc """
+  Fetches all available messages in one Gmail thread using metadata format.
+  """
+  def fetch_thread(user_id_or_token, thread_id) when is_binary(thread_id) do
+    token =
+      case user_id_or_token do
+        "ya29." <> _ = t -> {:ok, t}
+        user_id -> OAuth.get_valid_access_token(user_id, "google")
+      end
+
+    case token do
+      {:ok, access_token} ->
+        url = "#{api_base_url()}/users/me/threads/#{thread_id}?format=metadata"
+
+        case Google.api_request(:get, url, access_token) do
+          {:ok, %{"messages" => messages}} when is_list(messages) ->
+            {:ok, Enum.map(messages, &parse_message/1)}
+
+          {:ok, _response} ->
+            {:ok, []}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+
+      error ->
+        error
+    end
+  end
+
+  @doc """
   Sends a Gmail message, optionally within an existing thread.
   """
   def send_message(user_id_or_token, attrs) when is_map(attrs) do

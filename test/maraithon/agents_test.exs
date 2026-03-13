@@ -2,8 +2,15 @@ defmodule Maraithon.AgentsTest do
   use Maraithon.DataCase, async: true
 
   alias Maraithon.Agents
+  alias Maraithon.Agents.Agent
+  alias Maraithon.Repo
 
   @valid_attrs %{behavior: "prompt_agent", config: %{prompt: "test"}}
+
+  setup do
+    Repo.delete_all(Agent)
+    :ok
+  end
 
   describe "list_agents/0" do
     test "returns empty list when no agents" do

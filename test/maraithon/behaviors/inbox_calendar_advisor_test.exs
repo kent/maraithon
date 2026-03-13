@@ -6,6 +6,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisorTest do
   alias Maraithon.Behaviors.InboxCalendarAdvisor
   alias Maraithon.InsightNotifications.Delivery
   alias Maraithon.Insights
+  alias Maraithon.OAuth
   alias Maraithon.PreferenceMemory
   alias Maraithon.Repo
 
@@ -206,6 +207,100 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisorTest do
 
       assert {:idle, _state} = InboxCalendarAdvisor.handle_wakeup(state, context)
     end
+
+    test "downgrades Gmail reply debt when another participant already replied in the thread", %{
+      user_id: user_id,
+      context: context
+    } do
+      bypass = Bypass.open()
+
+      Application.put_env(:maraithon, :gmail,
+        api_base_url: "http://localhost:#{bypass.port}/gmail/v1"
+      )
+
+      {:ok, _token} =
+        OAuth.store_tokens(user_id, "google", %{
+          access_token: "google-access",
+          refresh_token: "google-refresh",
+          expires_in: 3600
+        })
+
+      Bypass.expect_once(bypass, "GET", "/gmail/v1/users/me/messages", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(200, Jason.encode!(%{"messages" => []}))
+      end)
+
+      thread_started_at = DateTime.utc_now() |> DateTime.add(-2, :hour)
+      teammate_reply_at = DateTime.add(thread_started_at, 30, :minute)
+
+      Bypass.expect_once(bypass, "GET", "/gmail/v1/users/me/threads/thread-1", fn conn ->
+        assert conn.query_string == "format=metadata"
+
+        body = %{
+          "messages" => [
+            gmail_thread_message(
+              "msg-1",
+              "thread-1",
+              "David <david@example.com>",
+              user_id,
+              "Cowrie Agora Update",
+              "Can you send the update today?",
+              thread_started_at
+            ),
+            gmail_thread_message(
+              "msg-2",
+              "thread-1",
+              "Charlie <charlie@example.com>",
+              "David <david@example.com>, #{user_id}",
+              "Re: Cowrie Agora Update",
+              "I'll handle this and send the update by today.",
+              teammate_reply_at
+            )
+          ]
+        }
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(200, Jason.encode!(body))
+      end)
+
+      state = InboxCalendarAdvisor.init(%{"user_id" => user_id})
+
+      payload = %{
+        "source" => "gmail",
+        "data" => %{
+          "messages" => [
+            %{
+              "message_id" => "msg-1",
+              "thread_id" => "thread-1",
+              "subject" => "Cowrie Agora Update",
+              "snippet" => "Can you send the update today?",
+              "from" => "David <david@example.com>",
+              "to" => user_id,
+              "labels" => ["INBOX", "IMPORTANT", "UNREAD"],
+              "internal_date" => thread_started_at
+            }
+          ]
+        }
+      }
+
+      {:effect, {:llm_call, _params}, new_state} =
+        InboxCalendarAdvisor.handle_wakeup(state, %{context | event: %{payload: payload}})
+
+      [candidate] = new_state.pending_candidates
+
+      assert get_in(candidate, ["metadata", "conversation_context", "notification_posture"]) ==
+               "heads_up"
+
+      assert candidate["summary"] =~ "Charlie has already responded"
+      assert candidate["summary"] =~ "conversation is moving"
+      assert candidate["recommended_action"] =~ "Monitor the thread"
+      assert candidate["metadata"]["why_now"] =~ "final follow-through may still be yours"
+
+      assert get_in(candidate, ["metadata", "detail", "conversation_summary"]) =~
+               "Charlie has already responded"
+    end
   end
 
   describe "handle_effect_result/3" do
@@ -380,5 +475,107 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisorTest do
       assert final_state.pending_candidates == []
       assert Insights.list_open_for_user(user_id) == []
     end
+
+    test "persists heads_up Gmail insights when the LLM keeps interrupt_now false", %{
+      user_id: user_id,
+      context: context
+    } do
+      state =
+        InboxCalendarAdvisor.init(%{"user_id" => user_id})
+        |> Map.put(:pending_candidates, [
+          %{
+            "source" => "gmail",
+            "category" => "reply_urgent",
+            "title" => "Gmail thread moving with Charlie",
+            "summary" =>
+              "Charlie has already responded and the conversation is moving. You may still need to close the final loop.",
+            "recommended_action" =>
+              "Monitor the thread and close the final loop if the owner, artifact, or ETA is still yours.",
+            "priority" => 82,
+            "confidence" => 0.86,
+            "dedupe_key" => "heads-up-gmail-1",
+            "metadata" => %{
+              "conversation_context" => %{
+                "notification_posture" => "heads_up",
+                "latest_actor" => "Charlie"
+              },
+              "record" => %{
+                "commitment" => "Reply to David on Cowrie Agora Update",
+                "person" => "David",
+                "source" => "gmail_thread:thread-1",
+                "status" => "unresolved",
+                "evidence" => ["Charlie replied later in the conversation."],
+                "next_action" =>
+                  "Monitor the thread and close the final loop if the owner, artifact, or ETA is still yours."
+              }
+            }
+          }
+        ])
+
+      llm_response = %{
+        content:
+          Jason.encode!([
+            %{
+              "dedupe_key" => "heads-up-gmail-1",
+              "title" => "Gmail thread moving with Charlie",
+              "summary" =>
+                "Charlie has already responded and the conversation is moving. You may still need to close the final loop.",
+              "recommended_action" =>
+                "Monitor the thread and close the final loop if the owner, artifact, or ETA is still yours.",
+              "priority" => 82,
+              "confidence" => 0.87,
+              "telegram_fit_score" => 0.83,
+              "telegram_fit_reason" =>
+                "Still worth surfacing, but no longer an unattended thread.",
+              "why_now" =>
+                "Charlie has already responded and the conversation is moving. The final follow-through may still be yours.",
+              "commitment" => "Reply to David on Cowrie Agora Update",
+              "person" => "David",
+              "source" => "gmail_thread:thread-1",
+              "deadline" => Date.utc_today() |> Date.to_iso8601(),
+              "status" => "unresolved",
+              "evidence" => ["Charlie replied later in the conversation."],
+              "next_action" =>
+                "Monitor the thread and close the final loop if the owner, artifact, or ETA is still yours.",
+              "actionability" => "actionable",
+              "obligation_type" => "direct_human_request",
+              "human_counterparty" => true,
+              "missing_followthrough_evidence" => true,
+              "interrupt_now" => false,
+              "notification_posture" => "heads_up",
+              "false_positive_risk" => 0.14,
+              "reasoning_summary" =>
+                "Another participant replied, so the thread is active even though the final close may still depend on you."
+            }
+          ])
+      }
+
+      {:emit, {:insights_recorded, result}, final_state} =
+        InboxCalendarAdvisor.handle_effect_result({:llm_call, llm_response}, state, context)
+
+      assert result.count == 1
+      assert final_state.pending_candidates == []
+
+      [stored | _] = Insights.list_open_for_user(user_id)
+      assert stored.metadata["conversation_context"]["notification_posture"] == "heads_up"
+      assert stored.metadata["interrupt_now"] == false
+      assert stored.summary =~ "conversation is moving"
+    end
+  end
+
+  defp gmail_thread_message(id, thread_id, from, to, subject, snippet, occurred_at) do
+    %{
+      "id" => id,
+      "threadId" => thread_id,
+      "snippet" => snippet,
+      "internalDate" => occurred_at |> DateTime.to_unix(:millisecond) |> Integer.to_string(),
+      "payload" => %{
+        "headers" => [
+          %{"name" => "From", "value" => from},
+          %{"name" => "To", "value" => to},
+          %{"name" => "Subject", "value" => subject}
+        ]
+      }
+    }
   end
 end

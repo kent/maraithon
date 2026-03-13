@@ -342,6 +342,50 @@ defmodule Maraithon.InsightNotificationActionsTest do
     assert completed.text =~ "Marked complete from Telegram"
   end
 
+  test "renders conversation-progress language for heads_up insights in Telegram", %{
+    agent: agent,
+    user_id: user_id
+  } do
+    {:ok, [_insight]} =
+      Insights.record_many(user_id, agent.id, [
+        %{
+          "source" => "gmail",
+          "category" => "reply_urgent",
+          "title" => "Gmail thread moving with Charlie",
+          "summary" =>
+            "Charlie has already responded and the conversation is moving. You may still need to close the final loop.",
+          "recommended_action" =>
+            "Monitor the thread and close the final loop if the owner, artifact, or ETA is still yours.",
+          "priority" => 88,
+          "confidence" => 0.9,
+          "dedupe_key" => "telegram-actions:gmail:heads-up",
+          "metadata" => %{
+            "why_now" =>
+              "Charlie has already responded and the conversation is moving. The final follow-through may still be yours.",
+            "conversation_context" => %{
+              "notification_posture" => "heads_up",
+              "latest_actor" => "Charlie"
+            },
+            "record" => %{
+              "person" => "David",
+              "commitment" => "Reply to David on Cowrie Agora Update",
+              "evidence" => ["Charlie replied later in the conversation."],
+              "next_action" =>
+                "Monitor the thread and close the final loop if the owner, artifact, or ETA is still yours."
+            }
+          }
+        }
+      ])
+
+    result = InsightNotifications.dispatch_telegram_batch(batch_size: 10)
+    assert result.sent == 1
+
+    sent = last_telegram_message(:send)
+    assert sent.text =~ "Charlie has already responded"
+    assert sent.text =~ "conversation is moving"
+    assert sent.text =~ "Monitor the thread"
+  end
+
   defp last_telegram_message(type) do
     :capturing_telegram_recorder
     |> Agent.get(&Enum.reverse/1)

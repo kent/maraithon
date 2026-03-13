@@ -9,6 +9,7 @@ defmodule Maraithon.Behaviors.SlackFollowthroughAgent do
   @behaviour Maraithon.Behaviors.Behavior
 
   alias Maraithon.Connectors.Slack
+  alias Maraithon.Followthrough.ConversationContext
   alias Maraithon.Insights
   alias Maraithon.OAuth
 
@@ -358,7 +359,7 @@ defmodule Maraithon.Behaviors.SlackFollowthroughAgent do
 
   defp scan_message_batch(_messages, _state, _timestamp, _explicit_self_ids), do: []
 
-  defp commitment_candidates(message, all_messages, self_user_ids, _state) do
+  defp commitment_candidates(message, all_messages, self_user_ids, state) do
     text = message.text || ""
     normalized = String.downcase(text)
     promise_matches = matched_terms(normalized, @promise_terms)
@@ -371,102 +372,112 @@ defmodule Maraithon.Behaviors.SlackFollowthroughAgent do
       if followthrough_message(all_messages, message, self_user_ids) do
         []
       else
-        person = commitment_person(text, message)
-        due_at = infer_deadline_from_text(normalized, message.occurred_at)
-        due_at = due_at || DateTime.add(message.occurred_at || DateTime.utc_now(), 24, :hour)
-        artifact = artifact_hint(normalized)
+        conversation_context =
+          build_slack_conversation_context(message, all_messages, self_user_ids, state)
 
-        category =
-          if(planning_matches != [], do: "meeting_follow_up", else: "commitment_unresolved")
-
-        title =
-          case artifact do
-            nil -> "Slack follow-through owed to #{person}"
-            value -> "You said you'd send #{value} to #{person}. No follow-up yet."
-          end
-
-        summary =
-          if category == "meeting_follow_up" do
-            "After the planning thread, owners and next steps still appear unresolved."
-          else
-            "The Slack commitment to #{person} still appears open #{deadline_phrase(due_at)}."
-          end
-
-        next_action =
-          "Reply in the same Slack thread with the promised artifact, owner, and exact ETA."
-
-        evidence =
+        if resolved_conversation?(conversation_context) do
           []
-          |> maybe_append("Promise terms detected: #{Enum.join(promise_matches, ", ")}.", true)
-          |> maybe_append(
-            "Commitment terms detected: #{Enum.join(action_matches, ", ")}.",
-            action_matches != []
-          )
-          |> maybe_append(
-            "Deadline cues: #{Enum.join(deadline_matches, ", ")}.",
-            deadline_matches != []
-          )
-          |> maybe_append("No follow-through message was found after this commitment.", true)
-          |> Enum.take(@max_evidence_points)
+        else
+          person = commitment_person(text, message)
+          due_at = infer_deadline_from_text(normalized, message.occurred_at)
+          due_at = due_at || DateTime.add(message.occurred_at || DateTime.utc_now(), 24, :hour)
+          artifact = artifact_hint(normalized)
 
-        confidence =
-          0.72
-          |> maybe_add_float(0.08, length(promise_matches) >= 2)
-          |> maybe_add_float(0.06, length(action_matches) >= 2)
-          |> maybe_add_float(0.06, planning_matches != [])
-          |> maybe_add_float(0.06, deadline_matches != [])
-          |> maybe_add_float(0.05, artifact != nil)
-          |> maybe_add_float(0.05, self_user_ids != [])
-          |> maybe_add_float(-0.1, self_user_ids == [])
-          |> clamp(0.0, 1.0)
+          category =
+            if(planning_matches != [], do: "meeting_follow_up", else: "commitment_unresolved")
 
-        priority = urgency_priority(due_at, if(category == "meeting_follow_up", do: 83, else: 86))
-        source_id = "slack:#{message.team_id}:#{message.channel_id}:#{message.ts}"
+          title =
+            case artifact do
+              nil -> "Slack follow-through owed to #{person}"
+              value -> "You said you'd send #{value} to #{person}. No follow-up yet."
+            end
 
-        dedupe_key =
-          "slack:commitment:#{message.team_id}:#{message.channel_id}:#{message.thread_ts || message.ts}"
+          summary =
+            if category == "meeting_follow_up" do
+              "After the planning thread, owners and next steps still appear unresolved."
+            else
+              "The Slack commitment to #{person} still appears open #{deadline_phrase(due_at)}."
+            end
 
-        record =
-          commitment_record(
-            "Follow through on Slack commitment: #{truncate(text, 120)}",
-            person,
-            source_id,
-            due_at,
-            "unresolved",
-            evidence,
-            next_action
-          )
+          next_action =
+            "Reply in the same Slack thread with the promised artifact, owner, and exact ETA."
 
-        [
-          %{
-            source: "slack",
-            source_id: source_id,
-            source_occurred_at: message.occurred_at,
-            category: category,
-            title: truncate(title, 180),
-            summary: summary,
-            recommended_action: next_action,
-            priority: priority,
-            confidence: confidence,
-            due_at: due_at,
-            dedupe_key: dedupe_key,
-            metadata: %{
-              "team_id" => message.team_id,
-              "channel_id" => message.channel_id,
-              "channel_name" => message.channel_name,
-              "thread_ts" => message.thread_ts,
-              "signals" => Enum.uniq(promise_matches ++ action_matches ++ planning_matches),
-              "record" => record
+          evidence =
+            []
+            |> maybe_append("Promise terms detected: #{Enum.join(promise_matches, ", ")}.", true)
+            |> maybe_append(
+              "Commitment terms detected: #{Enum.join(action_matches, ", ")}.",
+              action_matches != []
+            )
+            |> maybe_append(
+              "Deadline cues: #{Enum.join(deadline_matches, ", ")}.",
+              deadline_matches != []
+            )
+            |> maybe_append("No follow-through message was found after this commitment.", true)
+            |> Enum.take(@max_evidence_points)
+
+          confidence =
+            0.72
+            |> maybe_add_float(0.08, length(promise_matches) >= 2)
+            |> maybe_add_float(0.06, length(action_matches) >= 2)
+            |> maybe_add_float(0.06, planning_matches != [])
+            |> maybe_add_float(0.06, deadline_matches != [])
+            |> maybe_add_float(0.05, artifact != nil)
+            |> maybe_add_float(0.05, self_user_ids != [])
+            |> maybe_add_float(-0.1, self_user_ids == [])
+            |> clamp(0.0, 1.0)
+
+          priority =
+            urgency_priority(due_at, if(category == "meeting_follow_up", do: 83, else: 86))
+
+          source_id = "slack:#{message.team_id}:#{message.channel_id}:#{message.ts}"
+
+          dedupe_key =
+            "slack:commitment:#{message.team_id}:#{message.channel_id}:#{message.thread_ts || message.ts}"
+
+          record =
+            commitment_record(
+              "Follow through on Slack commitment: #{truncate(text, 120)}",
+              person,
+              source_id,
+              due_at,
+              "unresolved",
+              evidence,
+              next_action
+            )
+
+          [
+            %{
+              source: "slack",
+              source_id: source_id,
+              source_occurred_at: message.occurred_at,
+              category: category,
+              title: truncate(title, 180),
+              summary: summary,
+              recommended_action: next_action,
+              priority: priority,
+              confidence: confidence,
+              due_at: due_at,
+              dedupe_key: dedupe_key,
+              metadata: %{
+                "team_id" => message.team_id,
+                "channel_id" => message.channel_id,
+                "channel_name" => message.channel_name,
+                "thread_ts" => message.thread_ts,
+                "signals" => Enum.uniq(promise_matches ++ action_matches ++ planning_matches),
+                "record" => record
+              }
             }
-          }
-        ]
+            |> ConversationContext.apply_to_candidate(conversation_context)
+          ]
+        end
       end
     else
       []
     end
   end
 
-  defp reply_candidates(message, all_messages, self_user_ids, _state) do
+  defp reply_candidates(message, all_messages, self_user_ids, state) do
     text = message.text || ""
     normalized = String.downcase(text)
     reply_matches = matched_terms(normalized, @reply_request_terms)
@@ -479,69 +490,77 @@ defmodule Maraithon.Behaviors.SlackFollowthroughAgent do
       if reply_sent_after?(all_messages, message, self_user_ids) do
         []
       else
-        person = message.user_id || "the sender"
-        due_at = infer_deadline_from_text(normalized, message.occurred_at)
-        due_at = due_at || DateTime.add(message.occurred_at || DateTime.utc_now(), 8, :hour)
+        conversation_context =
+          build_slack_conversation_context(message, all_messages, self_user_ids, state)
 
-        next_action =
-          "Send a Slack reply now with owner, next step, and a concrete timing commitment."
-
-        evidence =
+        if resolved_conversation?(conversation_context) do
           []
-          |> maybe_append("Incoming DM/MPIM message appears to request a response.", true)
-          |> maybe_append(
-            "Reply request terms: #{Enum.join(reply_matches, ", ")}.",
-            reply_matches != []
-          )
-          |> maybe_append("No reply from you was found afterward in this conversation.", true)
-          |> Enum.take(@max_evidence_points)
+        else
+          person = message.user_id || "the sender"
+          due_at = infer_deadline_from_text(normalized, message.occurred_at)
+          due_at = due_at || DateTime.add(message.occurred_at || DateTime.utc_now(), 8, :hour)
 
-        confidence =
-          0.7
-          |> maybe_add_float(0.12, reply_matches != [])
-          |> maybe_add_float(0.06, String.contains?(normalized, "?"))
-          |> maybe_add_float(0.05, self_user_ids != [])
-          |> clamp(0.0, 1.0)
+          next_action =
+            "Send a Slack reply now with owner, next step, and a concrete timing commitment."
 
-        priority = urgency_priority(due_at, 82)
-        source_id = "slack:#{message.team_id}:#{message.channel_id}:#{message.ts}"
-        dedupe_key = "slack:reply:#{message.team_id}:#{message.channel_id}:#{message.ts}"
+          evidence =
+            []
+            |> maybe_append("Incoming DM/MPIM message appears to request a response.", true)
+            |> maybe_append(
+              "Reply request terms: #{Enum.join(reply_matches, ", ")}.",
+              reply_matches != []
+            )
+            |> maybe_append("No reply from you was found afterward in this conversation.", true)
+            |> Enum.take(@max_evidence_points)
 
-        record =
-          commitment_record(
-            "Reply to #{person} in Slack",
-            person,
-            source_id,
-            due_at,
-            "unresolved",
-            evidence,
-            next_action
-          )
+          confidence =
+            0.7
+            |> maybe_add_float(0.12, reply_matches != [])
+            |> maybe_add_float(0.06, String.contains?(normalized, "?"))
+            |> maybe_add_float(0.05, self_user_ids != [])
+            |> clamp(0.0, 1.0)
 
-        [
-          %{
-            source: "slack",
-            source_id: source_id,
-            source_occurred_at: message.occurred_at,
-            category: "reply_urgent",
-            title: "Slack reply owed to #{person}",
-            summary:
-              "You still owe #{person} a Slack response #{deadline_phrase(due_at)} and no reply was detected.",
-            recommended_action: next_action,
-            priority: priority,
-            confidence: confidence,
-            due_at: due_at,
-            dedupe_key: dedupe_key,
-            metadata: %{
-              "team_id" => message.team_id,
-              "channel_id" => message.channel_id,
-              "channel_name" => message.channel_name,
-              "thread_ts" => message.thread_ts,
-              "signals" => reply_matches,
-              "record" => record
+          priority = urgency_priority(due_at, 82)
+          source_id = "slack:#{message.team_id}:#{message.channel_id}:#{message.ts}"
+          dedupe_key = "slack:reply:#{message.team_id}:#{message.channel_id}:#{message.ts}"
+
+          record =
+            commitment_record(
+              "Reply to #{person} in Slack",
+              person,
+              source_id,
+              due_at,
+              "unresolved",
+              evidence,
+              next_action
+            )
+
+          [
+            %{
+              source: "slack",
+              source_id: source_id,
+              source_occurred_at: message.occurred_at,
+              category: "reply_urgent",
+              title: "Slack reply owed to #{person}",
+              summary:
+                "You still owe #{person} a Slack response #{deadline_phrase(due_at)} and no reply was detected.",
+              recommended_action: next_action,
+              priority: priority,
+              confidence: confidence,
+              due_at: due_at,
+              dedupe_key: dedupe_key,
+              metadata: %{
+                "team_id" => message.team_id,
+                "channel_id" => message.channel_id,
+                "channel_name" => message.channel_name,
+                "thread_ts" => message.thread_ts,
+                "signals" => reply_matches,
+                "record" => record
+              }
             }
-          }
-        ]
+            |> ConversationContext.apply_to_candidate(conversation_context)
+          ]
+        end
       end
     else
       []
@@ -646,6 +665,101 @@ defmodule Maraithon.Behaviors.SlackFollowthroughAgent do
       end
     end)
     |> Enum.uniq()
+  end
+
+  defp build_slack_conversation_context(message, all_messages, self_user_ids, state) do
+    fallback_messages = Enum.filter(all_messages, &same_thread_or_channel?(&1, message))
+
+    case fetch_slack_thread_messages(message, state) do
+      {:ok, messages} when is_list(messages) and messages != [] ->
+        ConversationContext.from_slack(messages, message,
+          self_user_ids: self_user_ids,
+          default_owner: "user_owner"
+        )
+
+      {:error, reason} ->
+        if present?(message.thread_ts) do
+          fallback_messages
+          |> ConversationContext.from_slack(message,
+            self_user_ids: self_user_ids,
+            default_owner: "user_owner"
+          )
+          |> Map.put("notification_posture", "insufficient_context")
+          |> Map.put(
+            "insufficient_context_reason",
+            "slack_thread_fetch_failed: #{inspect(reason)}"
+          )
+        else
+          ConversationContext.from_slack(fallback_messages, message,
+            self_user_ids: self_user_ids,
+            default_owner: "user_owner"
+          )
+        end
+
+      _ ->
+        ConversationContext.from_slack(fallback_messages, message,
+          self_user_ids: self_user_ids,
+          default_owner: "user_owner"
+        )
+    end
+  end
+
+  defp fetch_slack_thread_messages(message, state) do
+    if present?(message.thread_ts) do
+      case slack_access_token_for_thread(state.user_id, message.team_id) do
+        nil ->
+          {:error, :no_token}
+
+        access_token ->
+          case Slack.get_thread_replies(access_token, message.channel_id, message.thread_ts,
+                 limit: 50
+               ) do
+            {:ok, response} ->
+              messages =
+                response["messages"]
+                |> normalize_list()
+                |> Enum.map(&thread_reply_message(&1, message))
+
+              {:ok, messages}
+
+            {:error, reason} ->
+              {:error, reason}
+          end
+      end
+    else
+      {:ok, []}
+    end
+  end
+
+  defp slack_access_token_for_thread(user_id, team_id) do
+    resolve_user_token(user_id, team_id) ||
+      case OAuth.get_valid_access_token(user_id, "slack:#{team_id}") do
+        {:ok, access_token} -> access_token
+        _ -> nil
+      end
+  end
+
+  defp thread_reply_message(reply, message) when is_map(reply) do
+    %{
+      "source" => "slack",
+      "team_id" => message.team_id,
+      "channel_id" => message.channel_id,
+      "channel_name" => message.channel_name,
+      "is_dm" => message.is_dm,
+      "is_mpim" => message.is_mpim,
+      "counterparty_id" => message.counterparty_id,
+      "self_user_id" => message.self_user_id,
+      "user_id" => read_string(reply, "user", nil),
+      "text" => read_string(reply, "text", ""),
+      "ts" => read_string(reply, "ts", nil),
+      "thread_ts" => read_string(reply, "thread_ts", message.thread_ts || message.ts)
+    }
+  end
+
+  defp thread_reply_message(_reply, _message), do: %{}
+
+  defp resolved_conversation?(context) when is_map(context) do
+    read_string(context, "notification_posture", nil) == "resolved"
   end
 
   defp followthrough_message(messages, source_message, self_user_ids) do
