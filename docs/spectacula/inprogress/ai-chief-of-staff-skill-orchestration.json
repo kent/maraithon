@@ -1,0 +1,71 @@
+{
+  "spec_id": "ai-chief-of-staff-skill-orchestration",
+  "slug": "ai-chief-of-staff-skill-orchestration",
+  "title": "AI Chief of Staff Skill-Orchestrated Agent Architecture",
+  "stage": "inprogress",
+  "spec_path": "../specs/ai-chief-of-staff-skill-orchestration.md",
+  "created_at": "2026-03-15T15:59:14Z",
+  "started_at": "2026-03-16T00:36:57Z",
+  "updated_at": "2026-03-16T00:36:57Z",
+  "summary": "Implementation started for the `AI Chief of Staff` composition root, the Chief of Staff skill registry/contract, and the first skill-backed builder path that unifies travel logistics, follow-through, and briefing under one assistant identity.",
+  "next_action": "Ship the first vertical slice: the new `ai_chief_of_staff` behavior, skill adapters for the existing domain modules, and builder support for launching the unified assistant.",
+  "blockers": [],
+  "reference_examples": [
+    "docs/spectacula/specs/conversation-context-aware-followthrough-insights.md",
+    "docs/spectacula/specs/personal-assistant-travel-prep.md"
+  ],
+  "verification": {
+    "format": "pending",
+    "lint": "pending",
+    "typecheck": "pending",
+    "build": "pending",
+    "tests": "pending",
+    "spec_review": "pending",
+    "notes": "Implementation is in progress. The first target slice is the new behavior shell, skill registry, adapter-based orchestration of current travel/follow-through/briefing modules, and builder wiring for `AI Chief of Staff`."
+  },
+  "resume_context": {
+    "last_completed_step": "Created the initial architecture spec and moved the work into implementation.",
+    "pending_steps": [
+      "Add the new `ai_chief_of_staff` behavior and skill registry",
+      "Wrap the existing follow-through, travel, and briefing modules as internal skills",
+      "Wire the unified assistant into the builder and validation surfaces",
+      "Run project verification and review the implementation against the spec"
+    ],
+    "open_questions": [
+      "Whether Slack follow-through should stay bundled inside the initial `followthrough` skill or become its own skill later",
+      "Whether assistant-level prioritization should take over Telegram staging directly in v1 or remain additive metadata first"
+    ],
+    "last_reviewed_sections": [
+      "2. Current State and Constraints",
+      "5. Proposed Architecture",
+      "7. Backend Changes By Area",
+      "10. Test Plan and Validation Matrix"
+    ],
+    "artifacts": [
+      "docs/spectacula/specs/ai-chief-of-staff-skill-orchestration.md",
+      "lib/maraithon/behaviors.ex",
+      "lib/maraithon/agent_builder.ex",
+      "lib/maraithon/behaviors/founder_followthrough_agent.ex",
+      "lib/maraithon/behaviors/personal_assistant_agent.ex",
+      "lib/maraithon/behaviors/chief_of_staff_brief_agent.ex",
+      "lib/maraithon/travel.ex"
+    ],
+    "notes": "The implementation plan intentionally starts with adapter-based reuse of the existing deterministic travel and follow-through systems. Shared Gmail/Calendar/Slack acquisition remains a later phase after the top-level assistant shell is working."
+  },
+  "history": [
+    {
+      "at": "2026-03-15T15:59:14Z",
+      "event": "spec_created",
+      "from_stage": null,
+      "to_stage": "specs",
+      "note": "Initial draft created for a skill-oriented `AI Chief of Staff` architecture that consolidates travel, follow-through, and briefing under one user-facing assistant."
+    },
+    {
+      "at": "2026-03-16T00:36:57Z",
+      "event": "implementation_started",
+      "from_stage": "specs",
+      "to_stage": "inprogress",
+      "note": "Implementation began for the new `ai_chief_of_staff` behavior, the Chief of Staff skill registry/contract, adapter-based orchestration of the current travel and follow-through modules, and builder support for launching the unified assistant."
+    }
+  ]
+}
