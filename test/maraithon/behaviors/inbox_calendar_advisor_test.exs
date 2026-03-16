@@ -1,5 +1,5 @@
 defmodule Maraithon.Behaviors.InboxCalendarAdvisorTest do
-  use Maraithon.DataCase, async: true
+  use Maraithon.DataCase, async: false
 
   alias Maraithon.Accounts
   alias Maraithon.Agents
@@ -11,6 +11,16 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisorTest do
   alias Maraithon.Repo
 
   setup do
+    original_gmail_config = Application.get_env(:maraithon, :gmail)
+
+    on_exit(fn ->
+      if original_gmail_config do
+        Application.put_env(:maraithon, :gmail, original_gmail_config)
+      else
+        Application.delete_env(:maraithon, :gmail)
+      end
+    end)
+
     user_id = "advisor-user@example.com"
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
 
@@ -486,11 +496,42 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisorTest do
 
       [stored | _] = Insights.list_open_for_user(user_id)
       assert stored.category == "important_fyi"
-      assert stored.title =~ "Sports update"
+      assert stored.title =~ "Watch hockey emails"
       assert stored.metadata["ackable"] == true
+      assert stored.metadata["fyi_class"] == "watch_topic"
       assert stored.metadata["watch_rule_ids"] != []
       assert stored.metadata["why_now"] =~ "Watch hockey emails"
-      assert stored.recommended_action =~ "attend, reply, or change plans"
+      assert stored.recommended_action =~ "Review the update and decide the next step"
+    end
+
+    test "does not surface hockey Gmail without a saved watch rule", %{
+      user_id: user_id,
+      context: context
+    } do
+      state = InboxCalendarAdvisor.init(%{"user_id" => user_id})
+
+      payload = %{
+        "source" => "gmail",
+        "data" => %{
+          "messages" => [
+            %{
+              "message_id" => "msg-hockey-unsaved-1",
+              "thread_id" => "thread-hockey-unsaved-1",
+              "subject" => "Team Green next Playoff game = Tuesday March 17 @ 7:15 PM",
+              "snippet" => "Hockey schedule update for this week.",
+              "from" => "Paul Michel <paul@example.com>",
+              "to" => user_id,
+              "labels" => ["INBOX"],
+              "internal_date" => DateTime.utc_now()
+            }
+          ]
+        }
+      }
+
+      assert {:idle, %{pending_candidates: []}} =
+               InboxCalendarAdvisor.handle_wakeup(state, %{context | event: %{payload: payload}})
+
+      assert Insights.list_open_for_user(user_id) == []
     end
 
     test "surfaces RRSP emails as important_fyi", %{user_id: user_id, context: context} do

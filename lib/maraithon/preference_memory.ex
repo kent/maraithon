@@ -23,6 +23,39 @@ defmodule Maraithon.PreferenceMemory do
   @default_applies_to ~w(gmail calendar slack telegram)
   @autosave_threshold 0.90
   @confirm_threshold 0.70
+  @fallback_complex_markers [" unless ", " except ", " if ", " when ", " but "]
+  @fallback_content_filter_markers [
+    "ignore",
+    "mute",
+    "suppress",
+    "skip",
+    "hide",
+    "filter out",
+    "don't show",
+    "do not show",
+    "stop showing",
+    "stop surfacing"
+  ]
+  @fallback_watch_markers [
+    "watch",
+    "surface",
+    "show",
+    "track",
+    "flag",
+    "prioritize",
+    "prioritise",
+    "important",
+    "urgent",
+    "fyi",
+    "treat"
+  ]
+  @fallback_stopwords ~w(
+    a about alerts alert all and any appear are as asap away be do don filter flag for from
+    fyi hide if immediately important into is item items mark me message messages mute my not
+    notification notifications of only out please prioritise prioritize right should show skip
+    stop suppress surface tell that these this thread threads track treat update updates urgent
+    watch with
+  )
 
   @spec prompt_context(String.t() | nil) :: map()
   def prompt_context(user_id) when is_binary(user_id) do
@@ -352,7 +385,7 @@ defmodule Maraithon.PreferenceMemory do
     - Only create durable policies that should affect future triage, not one-off tasks.
     - Prefer empty rules if the instruction is ambiguous or too item-specific.
     - For content_filter, use filters.topics (array of short slugs like receipts, invoices, newsletters, marketing, automated_notifications, sales_outreach, cold_outreach).
-    - For urgency_boost, use filters.topics (array like investor, customer, hiring, external, account_risk, finance, sports, platform_status).
+    - For urgency_boost, use filters.topics (array like investor, customer, hiring, external, account_risk, finance, platform_status, or another durable user-defined topic).
     - For urgency_boost, you may also use filters.keywords, filters.sender_domains, filters.delivery_mode ("interrupt_now" or "important_fyi"), filters.ackable, and filters.priority_bias = "high".
     - For quiet_hours, use filters.start_hour_local, filters.end_hour_local, and filters.allow_if_external.
     - Confidence must be between 0 and 1.
@@ -392,7 +425,7 @@ defmodule Maraithon.PreferenceMemory do
     - Use reasoning, not shallow keyword matching.
     - Learn a rule only if the feedback suggests a durable preference that should generalize.
     - Return empty rules for one-off or ambiguous feedback.
-    - Strong candidates include: ignore receipt-like items, ignore sales outreach unless the user engaged, treat investors as urgent, watch hockey emails, surface RRSP or App Store Connect notifications as important FYI, and suppress after-hours Telegram unless external.
+    - Strong candidates include: suppress a noisy recurring class, boost a recurring class that should always be surfaced, or encode a stable interruption policy.
     """
   end
 
@@ -711,62 +744,15 @@ defmodule Maraithon.PreferenceMemory do
     end
   end
 
-  defp fallback_parse_instruction(user_id, instruction) do
-    _ = user_id
-    text = instruction |> String.downcase() |> String.trim()
+  defp fallback_parse_instruction(_user_id, instruction) do
+    text = instruction |> String.trim() |> String.downcase()
 
     cond do
-      important_watch_instruction?(text, ["hockey", "playoff", "rink", "league"]) ->
-        watch_rule_response(
-          "watch_hockey_email",
-          "Watch hockey emails",
-          "Surface hockey-related emails as important FYI so they appear in Gmail triage and Telegram digests.",
-          ["sports", "hockey"],
-          ["hockey", "playoff", "game", "league"],
-          [],
-          delivery_mode: "important_fyi",
-          ackable: true,
-          reply: "Understood. I'll surface hockey emails as important FYI."
-        )
+      fallback_content_filter_instruction?(text) ->
+        fallback_content_filter_response(text)
 
-      important_watch_instruction?(text, ["rrsp", "401k", "ira", "tax"]) ->
-        watch_rule_response(
-          "watch_finance_notifications",
-          "Watch finance notifications",
-          "Surface RRSP, retirement, and tax-related emails as important FYI because they affect money and planning.",
-          ["finance", "rrsp"],
-          ["rrsp", "401k", "ira", "contribution", "tax"],
-          [],
-          delivery_mode: "important_fyi",
-          ackable: true,
-          reply: "Understood. I'll surface RRSP and similar finance emails as important FYI."
-        )
-
-      important_watch_instruction?(text, ["app store connect", "apple connect", "app review"]) ->
-        watch_rule_response(
-          "watch_app_store_connect",
-          "Watch App Store Connect",
-          "Surface App Store Connect review and release notifications as important FYI.",
-          ["platform_status", "app_store_connect"],
-          ["app store connect", "in review", "ready for sale", "rejected"],
-          ["apple.com"],
-          delivery_mode: "important_fyi",
-          ackable: true,
-          reply: "Understood. I'll surface App Store Connect notifications as important FYI."
-        )
-
-      urgent_watch_instruction?(text, ["meta", "facebook", "ad account", "account blocked"]) ->
-        watch_rule_response(
-          "watch_meta_account_risk",
-          "Watch Meta account risk",
-          "Treat Meta or Facebook account restriction and ad account blocked emails as urgent because they can block revenue or operations.",
-          ["account_risk", "meta"],
-          ["meta", "facebook", "ad account blocked", "account blocked", "account disabled"],
-          ["facebookmail.com", "meta.com"],
-          delivery_mode: "interrupt_now",
-          ackable: false,
-          reply: "Understood. I'll treat Meta account restriction emails as urgent."
-        )
+      fallback_watch_instruction?(text) ->
+        fallback_watch_rule_response(text)
 
       true ->
         nil
@@ -1232,52 +1218,165 @@ defmodule Maraithon.PreferenceMemory do
 
   defp parse_integer(_value, default), do: default
 
-  defp watch_rule_response(
-         id,
-         label,
-         instruction,
-         topics,
-         keywords,
-         sender_domains,
-         opts
-       ) do
-    %{
-      "reply" => Keyword.fetch!(opts, :reply),
-      "rules" => [
-        %{
-          "id" => id,
-          "kind" => "urgency_boost",
-          "label" => label,
-          "instruction" => instruction,
-          "applies_to" => ["gmail", "telegram"],
-          "confidence" => 0.96,
-          "filters" => %{
-            "topics" => topics,
-            "keywords" => keywords,
-            "sender_domains" => sender_domains,
-            "delivery_mode" => Keyword.get(opts, :delivery_mode, "important_fyi"),
-            "ackable" => Keyword.get(opts, :ackable, false),
-            "priority_bias" => "high"
+  defp fallback_content_filter_instruction?(text) when is_binary(text) do
+    not complex_fallback_instruction?(text) and
+      contains_any_phrase?(text, @fallback_content_filter_markers)
+  end
+
+  defp fallback_watch_instruction?(text) when is_binary(text) do
+    not complex_fallback_instruction?(text) and
+      contains_any_phrase?(text, @fallback_watch_markers)
+  end
+
+  defp complex_fallback_instruction?(text) when is_binary(text) do
+    padded = " #{String.trim(text)} "
+    contains_any_phrase?(padded, @fallback_complex_markers)
+  end
+
+  defp fallback_content_filter_response(text) do
+    with {:ok, phrase, topics, keywords} <- fallback_subject_details(text) do
+      humanized = humanize_phrase(phrase)
+
+      %{
+        "reply" => "Understood. I'll suppress #{phrase} unless there is a real human ask.",
+        "rules" => [
+          %{
+            "id" => "ignore_#{normalize_topic(phrase)}",
+            "kind" => "content_filter",
+            "label" => "Ignore #{humanized}",
+            "instruction" =>
+              "Suppress items about #{phrase} unless there is a clear human ask or unresolved commitment.",
+            "applies_to" => infer_applies_to(text, @default_applies_to),
+            "confidence" => 0.78,
+            "filters" => %{
+              "topics" => topics,
+              "keywords" => keywords,
+              "require_human_ask_to_override" => true
+            }
           }
-        }
-      ]
-    }
+        ]
+      }
+    else
+      _ -> nil
+    end
   end
 
-  defp important_watch_instruction?(text, tokens) when is_binary(text) and is_list(tokens) do
-    watch_instruction?(text, tokens) and
-      contains_any_phrase?(text, ["important", "surface", "show", "come up", "fyi", "watch"])
+  defp fallback_watch_rule_response(text) do
+    with {:ok, phrase, topics, keywords} <- fallback_subject_details(text) do
+      delivery_mode =
+        if contains_any_phrase?(text, ["urgent", "immediately", "asap", "right away"]) do
+          "interrupt_now"
+        else
+          "important_fyi"
+        end
+
+      humanized = humanize_phrase(phrase)
+
+      %{
+        "reply" =>
+          if delivery_mode == "interrupt_now" do
+            "Understood. I'll treat #{phrase} as urgent."
+          else
+            "Understood. I'll surface #{phrase} as important FYI."
+          end,
+        "rules" => [
+          %{
+            "id" => "watch_#{normalize_topic(phrase)}",
+            "kind" => "urgency_boost",
+            "label" => "Watch #{humanized}",
+            "instruction" =>
+              if delivery_mode == "interrupt_now" do
+                "Treat items about #{phrase} as urgent and surface them immediately."
+              else
+                "Surface items about #{phrase} as important FYI so they appear in future triage."
+              end,
+            "applies_to" => infer_applies_to(text, @default_applies_to),
+            "confidence" => 0.78,
+            "filters" => %{
+              "topics" => topics,
+              "keywords" => keywords,
+              "sender_domains" => fallback_sender_domains(text),
+              "delivery_mode" => delivery_mode,
+              "ackable" => delivery_mode == "important_fyi",
+              "priority_bias" => "high"
+            }
+          }
+        ]
+      }
+    else
+      _ -> nil
+    end
   end
 
-  defp urgent_watch_instruction?(text, tokens) when is_binary(text) and is_list(tokens) do
-    watch_instruction?(text, tokens) and
-      contains_any_phrase?(text, ["urgent", "important", "surface", "watch"])
+  defp fallback_subject_details(text) when is_binary(text) do
+    keywords =
+      text
+      |> fallback_subject_tokens()
+      |> Enum.take(4)
+
+    case keywords do
+      [] ->
+        :error
+
+      tokens ->
+        phrase = Enum.join(tokens, " ")
+
+        {:ok, phrase, [normalize_topic(phrase)], fallback_keywords(phrase, tokens)}
+    end
   end
 
-  defp watch_instruction?(text, tokens) when is_binary(text) and is_list(tokens) do
-    contains_any_phrase?(text, tokens) and
-      contains_any_phrase?(text, ["email", "emails", "notification", "notifications", "account"])
+  defp fallback_subject_tokens(text) when is_binary(text) do
+    text
+    |> String.replace(~r/[^a-z0-9@\.\s]+/u, " ")
+    |> String.split(~r/\s+/, trim: true)
+    |> Enum.reject(fn token ->
+      token in @fallback_stopwords or token in ~w(email emails gmail slack calendar telegram)
+    end)
+    |> Enum.reject(&(String.length(&1) < 3))
   end
+
+  defp fallback_keywords(phrase, tokens) do
+    [phrase | tokens]
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.uniq()
+  end
+
+  defp fallback_sender_domains(text) when is_binary(text) do
+    Regex.scan(~r/\b([a-z0-9.-]+\.[a-z]{2,})\b/i, text, capture: :all_but_first)
+    |> List.flatten()
+    |> Enum.map(&String.downcase/1)
+    |> Enum.reject(&String.contains?(&1, " "))
+    |> Enum.uniq()
+  end
+
+  defp infer_applies_to(text, default) when is_binary(text) and is_list(default) do
+    cond do
+      contains_any_phrase?(text, ["gmail", "email", "emails", "inbox"]) ->
+        ["gmail", "telegram"]
+
+      contains_any_phrase?(text, ["calendar", "meeting", "meetings"]) ->
+        ["calendar", "telegram"]
+
+      contains_any_phrase?(text, ["slack"]) ->
+        ["slack", "telegram"]
+
+      contains_any_phrase?(text, ["telegram"]) ->
+        ["telegram"]
+
+      true ->
+        default
+    end
+  end
+
+  defp humanize_phrase(value) when is_binary(value) do
+    value
+    |> String.split(~r/\s+/, trim: true)
+    |> Enum.map(&String.capitalize/1)
+    |> Enum.join(" ")
+  end
+
+  defp humanize_phrase(_value), do: "Saved preference"
 
   defp contains_any_phrase?(text, phrases) when is_binary(text) and is_list(phrases) do
     Enum.any?(phrases, &String.contains?(text, &1))

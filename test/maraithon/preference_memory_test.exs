@@ -92,33 +92,24 @@ defmodule Maraithon.PreferenceMemoryTest do
     assert rule["filters"]["topics"] == ["sales_outreach", "cold_outreach"]
   end
 
-  test "falls back to watch-style urgency rules for hockey and App Store Connect", %{
+  test "falls back to dynamic watch-style urgency rules for arbitrary topics", %{
     user_id: user_id
   } do
     invalid_llm = fn _prompt -> {:ok, "not-json"} end
 
-    assert {:ok, %{learned: [hockey_rule]}} =
+    assert {:ok, %{learned: [rule]}} =
              PreferenceMemory.apply_explicit_instruction(
                user_id,
-               "hockey emails are important",
+               "board game meetup notifications should appear as FYI",
                llm_complete: invalid_llm
              )
 
-    assert hockey_rule["kind"] == "urgency_boost"
-    assert hockey_rule["filters"]["delivery_mode"] == "important_fyi"
-    assert hockey_rule["filters"]["ackable"] == true
-    assert "hockey" in hockey_rule["filters"]["keywords"]
-
-    assert {:ok, %{learned: [app_store_rule]}} =
-             PreferenceMemory.apply_explicit_instruction(
-               user_id,
-               "App Store Connect notifications should appear as FYI",
-               llm_complete: invalid_llm
-             )
-
-    assert app_store_rule["filters"]["delivery_mode"] == "important_fyi"
-    assert app_store_rule["filters"]["ackable"] == true
-    assert "apple.com" in app_store_rule["filters"]["sender_domains"]
+    assert rule["id"] == "watch_board_game_meetup"
+    assert rule["kind"] == "urgency_boost"
+    assert rule["filters"]["topics"] == ["board_game_meetup"]
+    assert rule["filters"]["delivery_mode"] == "important_fyi"
+    assert rule["filters"]["ackable"] == true
+    assert "board game meetup" in rule["filters"]["keywords"]
   end
 
   test "quiet hours suppress internal telegram interruptions but allow external ones", %{

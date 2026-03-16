@@ -207,14 +207,6 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
     "contribution room"
   ]
 
-  @sports_terms [
-    "hockey",
-    "playoff",
-    "rink",
-    "league",
-    "game time"
-  ]
-
   @app_store_connect_terms [
     "app store connect",
     "apple connect",
@@ -768,7 +760,6 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
   defp builtin_fyi_profile(body) when is_binary(body) do
     account_risk_matches = matched_terms(body, @account_risk_terms)
     finance_matches = matched_terms(body, @finance_terms)
-    sports_matches = matched_terms(body, @sports_terms)
     app_store_matches = matched_terms(body, @app_store_connect_terms)
 
     cond do
@@ -814,26 +805,6 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
           evidence:
             Enum.map(finance_matches, fn match ->
               "Finance signal detected: #{match}."
-            end)
-        }
-
-      sports_matches != [] ->
-        %{
-          type: "sports_watch",
-          topics: ["sports"],
-          summary: "This looks like a sports schedule or logistics update.",
-          recommended_action:
-            "Review the update and confirm whether you need to attend, reply, or change plans.",
-          priority: 78,
-          confidence: 0.8,
-          telegram_fit_score: 0.75,
-          telegram_fit_reason:
-            "Sports updates are useful when they match an explicit watch preference.",
-          why_now: "This affects an upcoming sports schedule or logistics detail.",
-          ackable: true,
-          evidence:
-            Enum.map(sports_matches, fn match ->
-              "Sports signal detected: #{match}."
             end)
         }
 
@@ -953,6 +924,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
     watch_topics = watch_matches |> Enum.flat_map(& &1.topic_matches) |> Enum.uniq()
     keyword_matches = watch_matches |> Enum.flat_map(& &1.keyword_matches) |> Enum.uniq()
     domain_matches = watch_matches |> Enum.flat_map(& &1.domain_matches) |> Enum.uniq()
+    watch_label = watch_matches |> Enum.map(& &1.label) |> Enum.find(&present?/1)
     watch_delivery_mode = Enum.find_value(watch_matches, & &1.delivery_mode)
     watch_ackable = Enum.any?(watch_matches, & &1.ackable)
     watch_priority_bonus = if Enum.any?(watch_matches), do: 8, else: 0
@@ -961,7 +933,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
     base_type =
       cond do
         builtin.type != nil -> builtin.type
-        watch_topics != [] -> "watch_topic"
+        watch_matches != [] -> "watch_topic"
         true -> "important_fyi"
       end
 
@@ -974,7 +946,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
           "This matches a saved watch topic and looks worth surfacing.",
       recommended_action:
         builtin.recommended_action ||
-          default_watch_action(watch_topics, due_at),
+          default_watch_action(due_at),
       priority:
         builtin.priority
         |> Kernel.+(watch_priority_bonus)
@@ -999,6 +971,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
           "This looks important based on your saved watch preferences."
         ]),
       ackable: builtin.ackable or watch_ackable or watch_delivery_mode == "important_fyi",
+      watch_label: watch_label,
       evidence:
         builtin.evidence ++
           Enum.map(keyword_matches, &"Matched saved keyword: #{&1}.") ++
@@ -1014,7 +987,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
         "account_risk" -> "Account risk"
         "platform_status" -> "Platform status"
         "finance_important" -> "Finance update"
-        "sports_watch" -> "Sports update"
+        "watch_topic" -> Map.get(profile, :watch_label) || "Important FYI"
         _ -> "Important FYI"
       end
 
@@ -1048,21 +1021,8 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
     end
   end
 
-  defp default_watch_action(topics, due_at) do
-    cond do
-      "hockey" in topics or "sports" in topics ->
-        "Review the schedule update and confirm whether you need to attend, reply, or change plans."
-
-      "finance" in topics or "rrsp" in topics ->
-        "Review the money or tax update and decide whether anything needs confirmation or follow-up."
-
-      "platform_status" in topics ->
-        "Acknowledge the status change and monitor it for the next update."
-
-      true ->
-        "Review the update and decide the next step#{watch_due_suffix(due_at)}."
-    end
-  end
+  defp default_watch_action(due_at),
+    do: "Review the update and decide the next step#{watch_due_suffix(due_at)}."
 
   defp watch_due_suffix(%DateTime{} = due_at) do
     case hours_until(due_at) do
