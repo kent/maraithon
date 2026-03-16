@@ -17,6 +17,7 @@ defmodule Maraithon.Insights.Insight do
     "event_prep_needed",
     "commitment_unresolved",
     "meeting_follow_up",
+    "important_fyi",
     "product_opportunity",
     "general"
   ]

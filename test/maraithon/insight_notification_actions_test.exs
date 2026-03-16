@@ -342,6 +342,58 @@ defmodule Maraithon.InsightNotificationActionsTest do
     assert completed.text =~ "Marked complete from Telegram"
   end
 
+  test "acknowledges important FYI insights directly from Telegram", %{
+    agent: agent,
+    user_id: user_id
+  } do
+    {:ok, [insight]} =
+      Insights.record_many(user_id, agent.id, [
+        %{
+          "source" => "gmail",
+          "category" => "important_fyi",
+          "title" => "Platform status: App Store Connect In Review",
+          "summary" =>
+            "App review status changed. This is important FYI because it affects release timing.",
+          "recommended_action" =>
+            "Acknowledge the status change and monitor it; step in only if the review stalls or changes again.",
+          "priority" => 83,
+          "confidence" => 0.88,
+          "dedupe_key" => "telegram-actions:fyi:1",
+          "metadata" => %{
+            "ackable" => true,
+            "why_now" => "App review state changed and could affect release planning."
+          }
+        }
+      ])
+
+    result = InsightNotifications.dispatch_telegram_batch(batch_size: 10)
+    assert result.sent == 1
+
+    delivery =
+      Repo.get_by!(Delivery, insight_id: insight.id, user_id: user_id, channel: "telegram")
+
+    sent = last_telegram_message(:send)
+    assert button_labels(sent.opts) |> Enum.member?("Ack")
+    refute button_labels(sent.opts) |> Enum.member?("Draft Email")
+
+    :ok =
+      InsightNotifications.handle_telegram_event(%{
+        type: "callback_query",
+        data: %{
+          callback_id: "cb-ack",
+          chat_id: 12345,
+          message_id: 123,
+          data: "insact:#{delivery.id}:ack"
+        }
+      })
+
+    updated_insight = Repo.get!(Maraithon.Insights.Insight, insight.id)
+    completed = last_telegram_message(:edit)
+
+    assert updated_insight.status == "acknowledged"
+    assert completed.text =~ "Acknowledged from Telegram"
+  end
+
   test "renders conversation-progress language for heads_up insights in Telegram", %{
     agent: agent,
     user_id: user_id

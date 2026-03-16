@@ -118,10 +118,10 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
       case length(top_items) do
         0 ->
           {"Morning brief: clean slate",
-           "No urgent open loops are surfacing right now across Gmail, Calendar, or Slack."}
+           "No urgent open items are surfacing right now across Gmail, Calendar, or Slack."}
 
         count ->
-          {"Morning brief: #{count} loops worth watching",
+          {"Morning brief: #{count} items worth watching",
            "#{length(due_today)} due today, #{overdue_count(open_insights, state.timezone_offset_hours, now)} overdue, and #{count_by_source(open_insights, "slack")} from Slack."}
       end
 
@@ -158,7 +158,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
            "Nothing high-confidence still looks open at the end of the day."}
 
         count ->
-          {"End-of-day debt: #{count} loops still open",
+          {"End-of-day debt: #{count} items still open",
            "#{overdue_count(debt_items, state.timezone_offset_hours, plan.scheduled_for)} overdue and #{due_today_count(debt_items, state.timezone_offset_hours, plan.scheduled_for)} still due today."}
       end
 
@@ -202,10 +202,11 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
       "cadence" => "weekly_review",
       "scheduled_for" => plan.scheduled_for,
       "dedupe_key" => dedupe_key("weekly_review", plan.period_key),
-      "title" => "Weekly review: #{open_count} loops still open",
+      "title" => "Weekly review: #{open_count} items still open",
       "summary" =>
         "#{length(weekly_items)} items surfaced this week, #{closed_count} were resolved or triaged, and #{open_count} remain open.",
-      "body" => weekly_body(top_open, weekly_items),
+      "body" =>
+        weekly_body(top_open, weekly_items, state.timezone_offset_hours, plan.scheduled_for),
       "metadata" => metadata_for(plan, state.assistant_behavior, weekly_items)
     }
   end
@@ -313,10 +314,10 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
   defp morning_body(top_items, open_insights, offset_hours, now) do
     """
     Focus today:
-    #{format_items(top_items)}
+    #{format_items(top_items, offset_hours, now)}
 
     Snapshot:
-    - #{length(open_insights)} open loops across Gmail, Calendar, and Slack
+    - #{length(open_insights)} open items across Gmail, Calendar, and Slack
     - #{overdue_count(open_insights, offset_hours, now)} already overdue
     - #{due_today_count(open_insights, offset_hours, now)} due today
     """
@@ -325,8 +326,8 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
 
   defp end_of_day_body(debt_items, open_insights, offset_hours, now) do
     """
-    Still open tonight:
-    #{format_items(debt_items)}
+    Tonight's top actions:
+    #{format_items(debt_items, offset_hours, now)}
 
     Why it matters:
     - #{overdue_count(open_insights, offset_hours, now)} items are already overdue
@@ -335,34 +336,79 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
     |> String.trim()
   end
 
-  defp weekly_body(top_open, weekly_items) do
+  defp weekly_body(top_open, weekly_items, offset_hours, reference_at) do
     """
     Weekly scorecard:
     - #{count_by_source(weekly_items, "gmail")} Gmail items
     - #{count_by_source(weekly_items, "calendar")} Calendar follow-ups
     - #{count_by_source(weekly_items, "slack")} Slack loops
 
-    Most important open loops:
-    #{format_items(top_open)}
+    Most important open items:
+    #{format_items(top_open, offset_hours, reference_at)}
     """
     |> String.trim()
   end
 
-  defp format_items([]), do: "- Nothing high-signal is open."
+  defp format_items([], _offset_hours, _reference_at), do: "1. Nothing high-signal is open."
 
-  defp format_items(items) do
+  defp format_items(items, offset_hours, reference_at) do
     items
+    |> Enum.with_index(1)
     |> Enum.map(fn insight ->
-      source = source_label(insight.source)
-
-      due_text =
-        if insight.due_at,
-          do: " (due #{Calendar.strftime(insight.due_at, "%m-%d %H:%M UTC")})",
-          else: ""
-
-      "- [#{source}] #{insight.title}#{due_text}"
+      format_item_block(insight, offset_hours, reference_at)
     end)
     |> Enum.join("\n")
+  end
+
+  defp format_item_block({insight, index}, offset_hours, reference_at) do
+    source = source_label(insight.source)
+    why_now = item_why_now(insight, offset_hours, reference_at)
+
+    """
+    #{index}. [#{source}] #{insight.title}
+    Next: #{insight.recommended_action}
+    Why now: #{why_now}
+    """
+    |> String.trim()
+  end
+
+  defp item_why_now(insight, offset_hours, reference_at) do
+    metadata = insight.metadata || %{}
+
+    case read_string(metadata, "why_now") do
+      nil ->
+        due_context(insight, offset_hours, reference_at) || insight.summary
+
+      why_now ->
+        due_context(insight, offset_hours, reference_at) || why_now
+    end
+  end
+
+  defp due_context(insight, offset_hours, reference_at) do
+    case insight.due_at do
+      %DateTime{} = due_at ->
+        due_local = shift_local(due_at, offset_hours)
+        now_local = shift_local(reference_at, offset_hours)
+        due_date = DateTime.to_date(due_local)
+        today = DateTime.to_date(now_local)
+
+        cond do
+          DateTime.compare(due_local, now_local) == :lt ->
+            "Overdue since #{Calendar.strftime(due_local, "%a %-m/%-d %-I:%M %p")}."
+
+          due_date == today ->
+            "Due today by #{Calendar.strftime(due_local, "%-I:%M %p")}."
+
+          due_date == Date.add(today, 1) ->
+            "Due tomorrow by #{Calendar.strftime(due_local, "%-I:%M %p")}."
+
+          true ->
+            "Due #{Calendar.strftime(due_local, "%a %-m/%-d %-I:%M %p")}."
+        end
+
+      _ ->
+        nil
+    end
   end
 
   defp metadata_for(plan, behavior, insights) do
@@ -460,4 +506,12 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
   end
 
   defp normalize_string(_), do: nil
+
+  defp read_string(attrs, key) when is_map(attrs) and is_binary(key) do
+    attrs
+    |> Map.get(key)
+    |> normalize_string()
+  end
+
+  defp read_string(_attrs, _key), do: nil
 end

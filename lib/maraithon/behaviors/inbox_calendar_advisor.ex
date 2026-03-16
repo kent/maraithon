@@ -16,6 +16,9 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
   alias Maraithon.Followthrough.ConversationContext
   alias Maraithon.InsightFeedback
   alias Maraithon.Insights
+  alias Maraithon.Insights.Insight
+  alias Maraithon.PreferenceMemory
+  alias Maraithon.Repo
   alias Maraithon.Tools.GmailHelpers
 
   require Logger
@@ -30,6 +33,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
   @max_follow_up_ideas 3
   @max_evidence_points 3
   @max_attendee_preview 4
+  @max_watch_rules 4
 
   @promise_terms [
     "i will",
@@ -178,6 +182,51 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
     "team planning"
   ]
 
+  @account_risk_terms [
+    "ad account blocked",
+    "account blocked",
+    "account disabled",
+    "account suspended",
+    "account restricted",
+    "business restricted",
+    "access suspended",
+    "access restricted",
+    "verification required"
+  ]
+
+  @finance_terms [
+    "rrsp",
+    "401k",
+    "ira",
+    "tfsa",
+    "hsa",
+    "rrsp contribution",
+    "retirement contribution",
+    "tax slip",
+    "tax document",
+    "contribution room"
+  ]
+
+  @sports_terms [
+    "hockey",
+    "playoff",
+    "rink",
+    "league",
+    "game time"
+  ]
+
+  @app_store_connect_terms [
+    "app store connect",
+    "apple connect",
+    "apple connect notifications",
+    "app review",
+    "in review",
+    "ready for sale",
+    "rejected",
+    "metadata rejected",
+    "waiting for review"
+  ]
+
   @weekday_numbers %{
     "monday" => 1,
     "tuesday" => 2,
@@ -208,6 +257,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
       google_account: nil,
       google_accounts: [],
       pending_candidates: [],
+      pending_direct_insights: [],
       last_scan_at: nil
     }
   end
@@ -229,34 +279,59 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
 
       true ->
         feedback_context = InsightFeedback.prompt_context(state.user_id)
+        watch_rules = gmail_watch_rules(state.user_id)
 
-        candidates =
+        scan_result =
           case context[:event] do
             %{payload: payload} ->
-              candidates_from_pubsub_payload(payload, state, context)
+              candidates_from_pubsub_payload(payload, state, context, watch_rules)
 
             _ ->
-              candidates_from_periodic_scan(state, context)
+              candidates_from_periodic_scan(state, context, watch_rules)
           end
+
+        candidates =
+          scan_result.llm_candidates
           |> dedupe_candidates()
           |> Enum.take(state.max_insights_per_cycle * 2)
 
-        if candidates == [] do
-          {:idle, %{state | pending_candidates: [], last_scan_at: context.timestamp}}
-        else
-          params = %{
-            "messages" => [
-              %{
-                "role" => "user",
-                "content" => build_llm_prompt(candidates, context.timestamp, feedback_context)
-              }
-            ],
-            "max_tokens" => 1_800,
-            "temperature" => 0.15
-          }
+        direct_insights =
+          scan_result.direct_insights
+          |> dedupe_candidates()
+          |> Enum.take(state.max_insights_per_cycle)
 
-          {:effect, {:llm_call, params},
-           %{state | pending_candidates: candidates, last_scan_at: context.timestamp}}
+        cond do
+          candidates == [] and direct_insights == [] ->
+            {:idle,
+             %{
+               state
+               | pending_candidates: [],
+                 pending_direct_insights: [],
+                 last_scan_at: context.timestamp
+             }}
+
+          candidates == [] ->
+            persist_and_reply(direct_insights, state, context)
+
+          true ->
+            params = %{
+              "messages" => [
+                %{
+                  "role" => "user",
+                  "content" => build_llm_prompt(candidates, context.timestamp, feedback_context)
+                }
+              ],
+              "max_tokens" => 1_800,
+              "temperature" => 0.15
+            }
+
+            {:effect, {:llm_call, params},
+             %{
+               state
+               | pending_candidates: candidates,
+                 pending_direct_insights: direct_insights,
+                 last_scan_at: context.timestamp
+             }}
         end
     end
   end
@@ -268,7 +343,8 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
     insights =
       parse_llm_response(response.content, candidates, state)
       |> Enum.filter(&high_signal_unresolved?(&1, state))
-      |> Enum.take(state.max_insights_per_cycle)
+      |> Kernel.++(state.pending_direct_insights)
+      |> prioritize_insights(state.max_insights_per_cycle)
 
     result = persist_insights(insights, state, context)
 
@@ -280,11 +356,11 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
             count: length(stored),
             user_id: state.user_id,
             categories: stored |> Enum.map(& &1.category) |> Enum.uniq()
-          }}, %{state | pending_candidates: []}}
+          }}, %{state | pending_candidates: [], pending_direct_insights: []}}
 
       {:error, reason} ->
         {:emit, {:insight_error, %{reason: inspect(reason), attempted_count: length(insights)}},
-         %{state | pending_candidates: []}}
+         %{state | pending_candidates: [], pending_direct_insights: []}}
     end
   end
 
@@ -329,7 +405,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
 
   defp google_accounts_for_user(_user_id, _source_scope), do: []
 
-  defp candidates_from_periodic_scan(state, _context) do
+  defp candidates_from_periodic_scan(state, _context, watch_rules) do
     emails = fetch_recent_inbox_messages(state)
     sent_messages = fetch_recent_sent_messages(state)
     events = fetch_recent_calendar_events(state)
@@ -346,10 +422,15 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
       events
       |> Enum.flat_map(&meeting_follow_up_candidates(&1, state, sent_messages))
 
-    incoming_reply_candidates ++ explicit_promise_candidates ++ meeting_follow_up_candidates
+    %{
+      llm_candidates:
+        incoming_reply_candidates ++ explicit_promise_candidates ++ meeting_follow_up_candidates,
+      direct_insights: important_fyi_candidates(emails, state, watch_rules)
+    }
   end
 
-  defp candidates_from_pubsub_payload(payload, state, context) when is_map(payload) do
+  defp candidates_from_pubsub_payload(payload, state, context, watch_rules)
+       when is_map(payload) do
     source =
       payload["source"] ||
         payload[:source] ||
@@ -368,31 +449,37 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
     case source do
       "gmail" ->
         google_source = google_source_from_context(state, context)
+        incoming_messages = extract_email_batch(data, google_source)
 
         incoming =
-          data
-          |> extract_email_batch(google_source)
+          incoming_messages
           |> Enum.flat_map(&incoming_email_candidates(&1, state, sent_messages))
+
+        important_fyi = important_fyi_candidates(incoming_messages, state, watch_rules)
 
         outgoing =
           sent_messages
           |> Enum.flat_map(&sent_commitment_candidates(&1, state, sent_messages))
 
-        incoming ++ outgoing
+        %{llm_candidates: incoming ++ outgoing, direct_insights: important_fyi}
 
       "google_calendar" ->
-        data
-        |> extract_calendar_batch()
-        |> Enum.flat_map(&meeting_follow_up_candidates(&1, state, sent_messages))
+        %{
+          llm_candidates:
+            data
+            |> extract_calendar_batch()
+            |> Enum.flat_map(&meeting_follow_up_candidates(&1, state, sent_messages)),
+          direct_insights: []
+        }
 
       _ ->
         # Unknown payload format. Fall back to broad periodic scan.
-        candidates_from_periodic_scan(state, context)
+        candidates_from_periodic_scan(state, context, watch_rules)
     end
   end
 
-  defp candidates_from_pubsub_payload(_payload, state, context),
-    do: candidates_from_periodic_scan(state, context)
+  defp candidates_from_pubsub_payload(_payload, state, context, watch_rules),
+    do: candidates_from_periodic_scan(state, context, watch_rules)
 
   defp extract_email_batch(%{"messages" => messages}, google_source) when is_list(messages),
     do: annotate_google_items(messages, google_source)
@@ -567,6 +654,484 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
   defp resolved_conversation?(context) when is_map(context) do
     read_string(context, "notification_posture", nil) == "resolved"
   end
+
+  defp gmail_watch_rules(user_id) when is_binary(user_id) do
+    user_id
+    |> PreferenceMemory.active_rules()
+    |> Enum.filter(fn rule ->
+      read_string(rule, "kind", nil) == "urgency_boost" and
+        "gmail" in read_list(rule, "applies_to")
+    end)
+    |> Enum.take(@max_watch_rules)
+  end
+
+  defp gmail_watch_rules(_user_id), do: []
+
+  defp important_fyi_candidates(emails, state, watch_rules) when is_list(emails) do
+    Enum.flat_map(emails, &important_fyi_email_candidates(&1, state, watch_rules))
+  end
+
+  defp important_fyi_candidates(_emails, _state, _watch_rules), do: []
+
+  defp important_fyi_email_candidates(email, state, watch_rules) when is_map(email) do
+    subject = read_string(email, "subject", "(no subject)")
+    snippet = read_string(email, "snippet", "")
+    from = read_string(email, "from", "unknown sender")
+    to = read_string(email, "to", "")
+    message_id = read_string(email, "message_id", Ecto.UUID.generate())
+    thread_id = read_string(email, "thread_id", message_id)
+    labels = read_list(email, "labels") |> Enum.map(&to_string/1)
+    occurred_at = message_timestamp(email)
+
+    body =
+      String.downcase(
+        Enum.join(
+          Enum.reject([subject, snippet, from, to, Enum.join(labels, " ")], &blank?/1),
+          " "
+        )
+      )
+
+    builtin = builtin_fyi_profile(body)
+    watch_matches = matching_watch_rules(body, from, builtin.topics, watch_rules)
+
+    if builtin.type == nil and watch_matches == [] do
+      []
+    else
+      profile = merge_fyi_profile(builtin, watch_matches, subject, occurred_at)
+      person = primary_contact(from) || from
+      due_at = important_fyi_due_at(profile, occurred_at)
+
+      evidence =
+        profile.evidence
+        |> maybe_append("Sender: #{from}.", present?(from))
+        |> Enum.take(@max_evidence_points)
+
+      record =
+        commitment_record(
+          "Review \"#{truncate(subject, 70)}\"",
+          person,
+          "gmail_thread:#{thread_id}",
+          due_at,
+          "unresolved",
+          evidence,
+          profile.recommended_action
+        )
+
+      dedupe_key = "gmail:fyi:#{thread_id}:#{profile.type}"
+
+      if suppress_acknowledged_fyi?(state.user_id, dedupe_key, message_id) do
+        []
+      else
+        [
+          %{
+            source: "gmail",
+            source_id: message_id,
+            source_occurred_at: occurred_at,
+            category: "important_fyi",
+            title: important_fyi_title(profile, subject),
+            summary: profile.summary,
+            recommended_action: profile.recommended_action,
+            priority: profile.priority,
+            confidence: profile.confidence,
+            due_at: due_at,
+            dedupe_key: dedupe_key,
+            metadata:
+              compact_map(%{
+                "account" => read_string(email, "account", state.google_account),
+                "thread_id" => thread_id,
+                "from" => from,
+                "to" => to,
+                "subject" => subject,
+                "labels" => labels,
+                "ackable" => profile.ackable,
+                "important_fyi" => true,
+                "fyi_class" => profile.type,
+                "watch_rule_ids" => Enum.map(watch_matches, & &1.rule_id),
+                "watch_topics" => Enum.flat_map(watch_matches, & &1.topic_matches) |> Enum.uniq(),
+                "matched_keywords" =>
+                  Enum.flat_map(watch_matches, & &1.keyword_matches) |> Enum.uniq(),
+                "telegram_fit_score" => profile.telegram_fit_score,
+                "telegram_fit_reason" => profile.telegram_fit_reason,
+                "why_now" => profile.why_now,
+                "context_brief" => profile.why_now,
+                "record" => record
+              })
+          }
+          |> normalize_candidate(state)
+        ]
+      end
+    end
+  end
+
+  defp important_fyi_email_candidates(_email, _state, _watch_rules), do: []
+
+  defp builtin_fyi_profile(body) when is_binary(body) do
+    account_risk_matches = matched_terms(body, @account_risk_terms)
+    finance_matches = matched_terms(body, @finance_terms)
+    sports_matches = matched_terms(body, @sports_terms)
+    app_store_matches = matched_terms(body, @app_store_connect_terms)
+
+    cond do
+      account_risk_matches != [] ->
+        %{
+          type: "account_risk",
+          topics: ["account_risk"],
+          summary:
+            "This looks like an account restriction or access issue that can block work or revenue.",
+          recommended_action:
+            "Open the notice now, confirm the exact restriction, and coordinate the unblock owner today.",
+          priority: 96,
+          confidence: 0.94,
+          telegram_fit_score: 0.95,
+          telegram_fit_reason: "Account restrictions are high-impact and time-sensitive.",
+          why_now:
+            "A blocked or restricted account can stop important work until someone resolves it.",
+          ackable: false,
+          evidence:
+            Enum.map(account_risk_matches, fn match ->
+              "Account-risk signal detected: #{match}."
+            end)
+        }
+
+      app_store_matches != [] ->
+        platform_profile(app_store_matches)
+
+      finance_matches != [] ->
+        %{
+          type: "finance_important",
+          topics: ["finance"],
+          summary: "This looks like a finance or tax update that affects money or planning.",
+          recommended_action:
+            "Review the update and decide whether it changes any filing, transfer, or contribution work.",
+          priority: 84,
+          confidence: 0.86,
+          telegram_fit_score: 0.84,
+          telegram_fit_reason:
+            "Money and tax-related updates are worth surfacing even without reply debt.",
+          why_now:
+            "Finance and tax updates can affect deadlines, cash, or contribution planning.",
+          ackable: true,
+          evidence:
+            Enum.map(finance_matches, fn match ->
+              "Finance signal detected: #{match}."
+            end)
+        }
+
+      sports_matches != [] ->
+        %{
+          type: "sports_watch",
+          topics: ["sports"],
+          summary: "This looks like a sports schedule or logistics update.",
+          recommended_action:
+            "Review the update and confirm whether you need to attend, reply, or change plans.",
+          priority: 78,
+          confidence: 0.8,
+          telegram_fit_score: 0.75,
+          telegram_fit_reason:
+            "Sports updates are useful when they match an explicit watch preference.",
+          why_now: "This affects an upcoming sports schedule or logistics detail.",
+          ackable: true,
+          evidence:
+            Enum.map(sports_matches, fn match ->
+              "Sports signal detected: #{match}."
+            end)
+        }
+
+      true ->
+        %{
+          type: nil,
+          topics: [],
+          summary: nil,
+          recommended_action: nil,
+          priority: 0,
+          confidence: 0.0,
+          telegram_fit_score: 0.0,
+          telegram_fit_reason: nil,
+          why_now: nil,
+          ackable: false,
+          evidence: []
+        }
+    end
+  end
+
+  defp builtin_fyi_profile(_body) do
+    %{
+      type: nil,
+      topics: [],
+      summary: nil,
+      recommended_action: nil,
+      priority: 0,
+      confidence: 0.0,
+      telegram_fit_score: 0.0,
+      telegram_fit_reason: nil,
+      why_now: nil,
+      ackable: false,
+      evidence: []
+    }
+  end
+
+  defp platform_profile(matches) do
+    cond do
+      "rejected" in matches or "metadata rejected" in matches ->
+        %{
+          type: "platform_status",
+          topics: ["platform_status", "app_store_connect"],
+          summary: "App review status changed in a way that likely needs intervention.",
+          recommended_action:
+            "Review the rejection details and decide the fix or follow-up today.",
+          priority: 92,
+          confidence: 0.9,
+          telegram_fit_score: 0.9,
+          telegram_fit_reason:
+            "A review rejection can block release timing and needs fast triage.",
+          why_now: "App review status changed and may block release unless someone responds.",
+          ackable: false,
+          evidence:
+            Enum.map(matches, fn match ->
+              "Platform-status signal detected: #{match}."
+            end)
+        }
+
+      true ->
+        %{
+          type: "platform_status",
+          topics: ["platform_status", "app_store_connect"],
+          summary:
+            "App review status changed. This is important FYI because it affects release timing.",
+          recommended_action:
+            "Acknowledge the status change and monitor it; step in only if the review stalls or changes again.",
+          priority: 82,
+          confidence: 0.87,
+          telegram_fit_score: 0.83,
+          telegram_fit_reason:
+            "Release-status changes are important FYI even when no reply is owed.",
+          why_now: "App review state changed and could affect release planning.",
+          ackable: true,
+          evidence:
+            Enum.map(matches, fn match ->
+              "Platform-status signal detected: #{match}."
+            end)
+        }
+    end
+  end
+
+  defp matching_watch_rules(body, from, derived_topics, rules)
+       when is_binary(body) and is_binary(from) and is_list(derived_topics) and is_list(rules) do
+    sender_domains = sender_domains(from)
+
+    rules
+    |> Enum.reduce([], fn rule, acc ->
+      filters = read_map(rule, "filters")
+      topic_matches = intersect_topics(read_list(filters, "topics"), derived_topics)
+      keyword_matches = matched_terms(body, read_list(filters, "keywords"))
+      domain_matches = intersect_topics(read_list(filters, "sender_domains"), sender_domains)
+
+      if topic_matches != [] or keyword_matches != [] or domain_matches != [] do
+        [
+          %{
+            rule_id: read_string(rule, "id", nil),
+            label: read_string(rule, "label", "watch topic"),
+            delivery_mode: read_string(filters, "delivery_mode", "important_fyi"),
+            ackable: read_boolean(filters, "ackable", false),
+            priority_bias: read_string(filters, "priority_bias", "high"),
+            topic_matches: topic_matches,
+            keyword_matches: keyword_matches,
+            domain_matches: domain_matches
+          }
+          | acc
+        ]
+      else
+        acc
+      end
+    end)
+    |> Enum.reverse()
+  end
+
+  defp matching_watch_rules(_body, _from, _derived_topics, _rules), do: []
+
+  defp merge_fyi_profile(builtin, watch_matches, subject, occurred_at) do
+    watch_topics = watch_matches |> Enum.flat_map(& &1.topic_matches) |> Enum.uniq()
+    keyword_matches = watch_matches |> Enum.flat_map(& &1.keyword_matches) |> Enum.uniq()
+    domain_matches = watch_matches |> Enum.flat_map(& &1.domain_matches) |> Enum.uniq()
+    watch_delivery_mode = Enum.find_value(watch_matches, & &1.delivery_mode)
+    watch_ackable = Enum.any?(watch_matches, & &1.ackable)
+    watch_priority_bonus = if Enum.any?(watch_matches), do: 8, else: 0
+    watch_reason = watch_reason_text(watch_matches)
+
+    base_type =
+      cond do
+        builtin.type != nil -> builtin.type
+        watch_topics != [] -> "watch_topic"
+        true -> "important_fyi"
+      end
+
+    due_at = important_fyi_due_at(%{type: base_type, summary: builtin.summary}, occurred_at)
+
+    %{
+      type: base_type,
+      summary:
+        builtin.summary ||
+          "This matches a saved watch topic and looks worth surfacing.",
+      recommended_action:
+        builtin.recommended_action ||
+          default_watch_action(watch_topics, due_at),
+      priority:
+        builtin.priority
+        |> Kernel.+(watch_priority_bonus)
+        |> maybe_raise_priority(watch_delivery_mode == "interrupt_now", 90)
+        |> clamp(0, 100),
+      confidence:
+        builtin.confidence
+        |> maybe_add_float(0.09, watch_matches != [])
+        |> clamp(0.0, 1.0),
+      telegram_fit_score:
+        builtin.telegram_fit_score
+        |> maybe_add_float(0.12, watch_matches != [])
+        |> maybe_raise_float(watch_delivery_mode == "interrupt_now", 0.9)
+        |> clamp(0.0, 1.0),
+      telegram_fit_reason:
+        builtin.telegram_fit_reason ||
+          "This matches a saved watch topic and should be surfaced in Telegram.",
+      why_now:
+        first_present_string([
+          watch_reason,
+          builtin.why_now,
+          "This looks important based on your saved watch preferences."
+        ]),
+      ackable: builtin.ackable or watch_ackable or watch_delivery_mode == "important_fyi",
+      evidence:
+        builtin.evidence ++
+          Enum.map(keyword_matches, &"Matched saved keyword: #{&1}.") ++
+          Enum.map(domain_matches, &"Matched saved sender domain: #{&1}.") ++
+          Enum.map(watch_topics, &"Matched saved topic: #{&1}."),
+      subject: subject
+    }
+  end
+
+  defp important_fyi_title(profile, subject) do
+    prefix =
+      case profile.type do
+        "account_risk" -> "Account risk"
+        "platform_status" -> "Platform status"
+        "finance_important" -> "Finance update"
+        "sports_watch" -> "Sports update"
+        _ -> "Important FYI"
+      end
+
+    "#{prefix}: #{truncate(subject, 90)}"
+  end
+
+  defp important_fyi_due_at(profile, occurred_at) do
+    base = occurred_at || DateTime.utc_now()
+
+    case profile.type do
+      "account_risk" -> DateTime.add(base, 4, :hour)
+      "platform_status" -> DateTime.add(base, 12, :hour)
+      "finance_important" -> DateTime.add(base, 24, :hour)
+      _ -> DateTime.add(base, 24, :hour)
+    end
+  end
+
+  defp watch_reason_text([]), do: nil
+
+  defp watch_reason_text(watch_matches) do
+    labels =
+      watch_matches
+      |> Enum.map(& &1.label)
+      |> Enum.reject(&blank?/1)
+      |> Enum.uniq()
+
+    case labels do
+      [] -> nil
+      [label] -> "This matches your saved watch rule: #{label}."
+      values -> "This matches your saved watch rules: #{Enum.join(values, ", ")}."
+    end
+  end
+
+  defp default_watch_action(topics, due_at) do
+    cond do
+      "hockey" in topics or "sports" in topics ->
+        "Review the schedule update and confirm whether you need to attend, reply, or change plans."
+
+      "finance" in topics or "rrsp" in topics ->
+        "Review the money or tax update and decide whether anything needs confirmation or follow-up."
+
+      "platform_status" in topics ->
+        "Acknowledge the status change and monitor it for the next update."
+
+      true ->
+        "Review the update and decide the next step#{watch_due_suffix(due_at)}."
+    end
+  end
+
+  defp watch_due_suffix(%DateTime{} = due_at) do
+    case hours_until(due_at) do
+      hours when is_integer(hours) and hours <= 12 -> " today"
+      _ -> ""
+    end
+  end
+
+  defp watch_due_suffix(_), do: ""
+
+  defp sender_domains(value) when is_binary(value) do
+    value
+    |> parse_email_addresses()
+    |> Enum.map(fn email ->
+      email
+      |> String.split("@", parts: 2)
+      |> Enum.at(1)
+      |> normalize_string()
+    end)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
+  end
+
+  defp sender_domains(_), do: []
+
+  defp intersect_topics(left, right) when is_list(left) and is_list(right) do
+    left_set = MapSet.new(Enum.map(left, &normalize_topic/1))
+    right_set = MapSet.new(Enum.map(right, &normalize_topic/1))
+
+    left_set
+    |> MapSet.intersection(right_set)
+    |> MapSet.to_list()
+    |> Enum.sort()
+  end
+
+  defp intersect_topics(_left, _right), do: []
+
+  defp normalize_topic(value) when is_binary(value) do
+    value
+    |> String.downcase()
+    |> String.replace(~r/[^a-z0-9]+/u, "_")
+    |> String.trim("_")
+  end
+
+  defp normalize_topic(value), do: value |> to_string() |> normalize_topic()
+
+  defp maybe_raise_priority(value, true, minimum), do: max(value, minimum)
+  defp maybe_raise_priority(value, false, _minimum), do: value
+
+  defp maybe_raise_float(value, true, minimum), do: max(value, minimum)
+  defp maybe_raise_float(value, false, _minimum), do: value
+
+  defp first_present_string(values) when is_list(values) do
+    Enum.find_value(values, &normalize_string/1)
+  end
+
+  defp suppress_acknowledged_fyi?(user_id, dedupe_key, source_id)
+       when is_binary(user_id) and is_binary(dedupe_key) and is_binary(source_id) do
+    case Repo.get_by(Insight, user_id: user_id, dedupe_key: dedupe_key) do
+      %Insight{status: status, source_id: ^source_id}
+      when status in ["acknowledged", "dismissed"] ->
+        true
+
+      _ ->
+        false
+    end
+  end
+
+  defp suppress_acknowledged_fyi?(_user_id, _dedupe_key, _source_id), do: false
 
   defp incoming_email_candidates(email, state, sent_messages) when is_map(email) do
     subject = read_string(email, "subject", "(no subject)")
@@ -988,6 +1553,48 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
         Logger.warning("InboxCalendarAdvisor failed to persist insights", reason: inspect(reason))
         {:error, reason}
     end
+  end
+
+  defp persist_and_reply(insights, state, context) do
+    insights = prioritize_insights(insights, state.max_insights_per_cycle)
+    result = persist_insights(insights, state, context)
+
+    case result do
+      {:ok, stored} ->
+        {:emit,
+         {:insights_recorded,
+          %{
+            count: length(stored),
+            user_id: state.user_id,
+            categories: stored |> Enum.map(& &1.category) |> Enum.uniq()
+          }},
+         %{
+           state
+           | pending_candidates: [],
+             pending_direct_insights: [],
+             last_scan_at: context.timestamp
+         }}
+
+      {:error, reason} ->
+        {:emit, {:insight_error, %{reason: inspect(reason), attempted_count: length(insights)}},
+         %{
+           state
+           | pending_candidates: [],
+             pending_direct_insights: [],
+             last_scan_at: context.timestamp
+         }}
+    end
+  end
+
+  defp prioritize_insights(insights, limit) when is_list(insights) and is_integer(limit) do
+    insights
+    |> Enum.sort_by(
+      fn insight ->
+        {read_integer(insight, "priority", 0), read_float(insight, "confidence", 0.0)}
+      end,
+      :desc
+    )
+    |> Enum.take(limit)
   end
 
   defp parse_llm_response(content, candidates, state) when is_binary(content) do

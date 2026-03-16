@@ -78,4 +78,64 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgentTest do
     assert brief.title =~ "Morning brief"
     assert brief.body =~ "Send the investor deck"
   end
+
+  test "renders end-of-day briefs as concrete next actions with why-now context", %{
+    user_id: user_id,
+    agent: agent
+  } do
+    scheduled_at = ~U[2026-03-11 23:05:00Z]
+
+    {:ok, _insights} =
+      Insights.record_many(user_id, agent.id, [
+        %{
+          "source" => "gmail",
+          "category" => "important_fyi",
+          "title" => "Account risk: Meta Ad Account Blocked",
+          "summary" =>
+            "This looks like an account restriction or access issue that can block work or revenue.",
+          "recommended_action" =>
+            "Open the notice now, confirm the exact restriction, and coordinate the unblock owner today.",
+          "priority" => 96,
+          "confidence" => 0.94,
+          "dedupe_key" => "brief-test:meta-blocked",
+          "due_at" => DateTime.add(scheduled_at, -2, :hour),
+          "metadata" => %{
+            "why_now" =>
+              "A blocked or restricted account can stop important work until someone resolves it."
+          }
+        }
+      ])
+
+    state =
+      ChiefOfStaffBriefAgent.init(%{
+        "user_id" => user_id,
+        "timezone_offset_hours" => "-5",
+        "morning_brief_hour_local" => "8",
+        "end_of_day_brief_hour_local" => "18",
+        "weekly_review_day_local" => "5",
+        "weekly_review_hour_local" => "16",
+        "brief_max_items" => "3"
+      })
+
+    context = %{
+      agent_id: agent.id,
+      user_id: user_id,
+      timestamp: scheduled_at,
+      budget: %{llm_calls: 10, tool_calls: 10},
+      recent_events: [],
+      last_message: nil,
+      event: nil
+    }
+
+    assert {:emit, {:briefs_recorded, payload}, _next_state} =
+             ChiefOfStaffBriefAgent.handle_wakeup(state, context)
+
+    assert "end_of_day" in payload.cadences
+
+    [brief] = Briefs.list_recent_for_user(user_id, limit: 1)
+    assert brief.cadence == "end_of_day"
+    assert brief.body =~ "Tonight's top actions"
+    assert brief.body =~ "Next: Open the notice now"
+    assert brief.body =~ "Why now: Overdue since"
+  end
 end

@@ -387,6 +387,185 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisorTest do
       assert {:idle, %{pending_candidates: []}} =
                InboxCalendarAdvisor.handle_wakeup(state, %{context | event: %{payload: payload}})
     end
+
+    test "persists high-impact account-risk Gmail as important_fyi without an llm pass", %{
+      user_id: user_id,
+      context: context
+    } do
+      state = InboxCalendarAdvisor.init(%{"user_id" => user_id})
+
+      payload = %{
+        "source" => "gmail",
+        "data" => %{
+          "messages" => [
+            %{
+              "message_id" => "msg-meta-risk",
+              "thread_id" => "thread-meta-risk",
+              "subject" => "Meta Ad Account Blocked",
+              "snippet" =>
+                "Your ad account is blocked and access is restricted pending verification.",
+              "from" => "Meta Support <security@facebookmail.com>",
+              "to" => user_id,
+              "labels" => ["INBOX"],
+              "internal_date" => DateTime.utc_now()
+            }
+          ]
+        }
+      }
+
+      assert {:emit, {:insights_recorded, result}, final_state} =
+               InboxCalendarAdvisor.handle_wakeup(state, %{context | event: %{payload: payload}})
+
+      assert result.count == 1
+      assert final_state.pending_candidates == []
+      assert final_state.pending_direct_insights == []
+
+      [stored | _] = Insights.list_open_for_user(user_id)
+      assert stored.category == "important_fyi"
+      assert stored.title =~ "Account risk"
+      assert stored.recommended_action =~ "coordinate the unblock owner"
+      assert stored.metadata["ackable"] == false
+      assert stored.metadata["fyi_class"] == "account_risk"
+      assert stored.metadata["telegram_fit_score"] == 0.95
+      assert stored.metadata["why_now"] =~ "blocked or restricted account"
+    end
+
+    test "uses saved watch rules to surface hockey Gmail as important_fyi", %{
+      user_id: user_id,
+      context: context
+    } do
+      {:ok, [_rule]} =
+        PreferenceMemory.save_interpreted_rules(
+          user_id,
+          [
+            %{
+              "id" => "watch_hockey_email",
+              "kind" => "urgency_boost",
+              "label" => "Watch hockey emails",
+              "instruction" =>
+                "Surface hockey-related emails as important FYI so they appear in Gmail triage and Telegram digests.",
+              "applies_to" => ["gmail", "telegram"],
+              "confidence" => 0.97,
+              "filters" => %{
+                "topics" => ["sports", "hockey"],
+                "keywords" => ["hockey", "playoff", "game"],
+                "delivery_mode" => "important_fyi",
+                "ackable" => true,
+                "priority_bias" => "high"
+              }
+            }
+          ],
+          "explicit_telegram",
+          explicit?: true
+        )
+
+      state = InboxCalendarAdvisor.init(%{"user_id" => user_id})
+
+      payload = %{
+        "source" => "gmail",
+        "data" => %{
+          "messages" => [
+            %{
+              "message_id" => "msg-hockey-1",
+              "thread_id" => "thread-hockey-1",
+              "subject" => "Team Green next Playoff game = Tuesday March 17 @ 7:15 PM",
+              "snippet" => "Hockey schedule update for this week.",
+              "from" => "Paul Michel <paul@example.com>",
+              "to" => user_id,
+              "labels" => ["INBOX"],
+              "internal_date" => DateTime.utc_now()
+            }
+          ]
+        }
+      }
+
+      assert {:emit, {:insights_recorded, result}, _final_state} =
+               InboxCalendarAdvisor.handle_wakeup(state, %{context | event: %{payload: payload}})
+
+      assert result.count == 1
+
+      [stored | _] = Insights.list_open_for_user(user_id)
+      assert stored.category == "important_fyi"
+      assert stored.title =~ "Sports update"
+      assert stored.metadata["ackable"] == true
+      assert stored.metadata["watch_rule_ids"] != []
+      assert stored.metadata["why_now"] =~ "Watch hockey emails"
+      assert stored.recommended_action =~ "attend, reply, or change plans"
+    end
+
+    test "surfaces RRSP emails as important_fyi", %{user_id: user_id, context: context} do
+      state = InboxCalendarAdvisor.init(%{"user_id" => user_id})
+
+      payload = %{
+        "source" => "gmail",
+        "data" => %{
+          "messages" => [
+            %{
+              "message_id" => "msg-rrsp-1",
+              "thread_id" => "thread-rrsp-1",
+              "subject" => "Your RRSP contribution receipt is ready",
+              "snippet" =>
+                "Your RRSP contribution and contribution room details are now available.",
+              "from" => "Wealthsimple <no-reply@wealthsimple.com>",
+              "to" => user_id,
+              "labels" => ["INBOX"],
+              "internal_date" => DateTime.utc_now()
+            }
+          ]
+        }
+      }
+
+      assert {:emit, {:insights_recorded, result}, _final_state} =
+               InboxCalendarAdvisor.handle_wakeup(state, %{context | event: %{payload: payload}})
+
+      assert result.count == 1
+
+      [stored | _] = Insights.list_open_for_user(user_id)
+      assert stored.category == "important_fyi"
+      assert stored.title =~ "Finance update"
+      assert stored.metadata["ackable"] == true
+      assert stored.metadata["fyi_class"] == "finance_important"
+      assert stored.metadata["why_now"] =~ "Finance and tax updates"
+      assert stored.recommended_action =~ "filing, transfer, or contribution work"
+    end
+
+    test "surfaces App Store Connect notifications as important_fyi", %{
+      user_id: user_id,
+      context: context
+    } do
+      state = InboxCalendarAdvisor.init(%{"user_id" => user_id})
+
+      payload = %{
+        "source" => "gmail",
+        "data" => %{
+          "messages" => [
+            %{
+              "message_id" => "msg-app-store-1",
+              "thread_id" => "thread-app-store-1",
+              "subject" => "Apple Connect Notifications: App Store Connect In Review",
+              "snippet" => "Your app is now In Review in App Store Connect.",
+              "from" => "App Store Connect <no_reply@email.apple.com>",
+              "to" => user_id,
+              "labels" => ["INBOX"],
+              "internal_date" => DateTime.utc_now()
+            }
+          ]
+        }
+      }
+
+      assert {:emit, {:insights_recorded, result}, _final_state} =
+               InboxCalendarAdvisor.handle_wakeup(state, %{context | event: %{payload: payload}})
+
+      assert result.count == 1
+
+      [stored | _] = Insights.list_open_for_user(user_id)
+      assert stored.category == "important_fyi"
+      assert stored.title =~ "Platform status"
+      assert stored.metadata["ackable"] == true
+      assert stored.metadata["fyi_class"] == "platform_status"
+      assert stored.metadata["why_now"] =~ "release planning"
+      assert stored.recommended_action =~ "monitor it"
+    end
   end
 
   describe "handle_effect_result/3" do

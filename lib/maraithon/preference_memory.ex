@@ -352,7 +352,8 @@ defmodule Maraithon.PreferenceMemory do
     - Only create durable policies that should affect future triage, not one-off tasks.
     - Prefer empty rules if the instruction is ambiguous or too item-specific.
     - For content_filter, use filters.topics (array of short slugs like receipts, invoices, newsletters, marketing, automated_notifications, sales_outreach, cold_outreach).
-    - For urgency_boost, use filters.topics (array like investor, customer, hiring, external) and optionally filters.priority_bias = "high".
+    - For urgency_boost, use filters.topics (array like investor, customer, hiring, external, account_risk, finance, sports, platform_status).
+    - For urgency_boost, you may also use filters.keywords, filters.sender_domains, filters.delivery_mode ("interrupt_now" or "important_fyi"), filters.ackable, and filters.priority_bias = "high".
     - For quiet_hours, use filters.start_hour_local, filters.end_hour_local, and filters.allow_if_external.
     - Confidence must be between 0 and 1.
     """
@@ -391,7 +392,7 @@ defmodule Maraithon.PreferenceMemory do
     - Use reasoning, not shallow keyword matching.
     - Learn a rule only if the feedback suggests a durable preference that should generalize.
     - Return empty rules for one-off or ambiguous feedback.
-    - Strong candidates include: ignore receipt-like items, ignore sales outreach unless the user engaged, treat investors as urgent, suppress after-hours Telegram unless external.
+    - Strong candidates include: ignore receipt-like items, ignore sales outreach unless the user engaged, treat investors as urgent, watch hockey emails, surface RRSP or App Store Connect notifications as important FYI, and suppress after-hours Telegram unless external.
     """
   end
 
@@ -569,6 +570,10 @@ defmodule Maraithon.PreferenceMemory do
   defp normalize_filters("urgency_boost", filters) when is_map(filters) do
     %{
       "topics" => normalize_topic_list(filters["topics"]),
+      "keywords" => normalize_keyword_list(filters["keywords"]),
+      "sender_domains" => normalize_domain_list(filters["sender_domains"]),
+      "delivery_mode" => normalize_delivery_mode(filters["delivery_mode"]),
+      "ackable" => boolean_or_default(filters["ackable"], false),
       "priority_bias" => non_empty_string(filters["priority_bias"]) || "high"
     }
   end
@@ -592,6 +597,24 @@ defmodule Maraithon.PreferenceMemory do
 
   defp normalize_topic_list(_value), do: []
 
+  defp normalize_keyword_list(value) when is_list(value) do
+    value
+    |> Enum.map(&normalize_keyword/1)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
+  end
+
+  defp normalize_keyword_list(_value), do: []
+
+  defp normalize_domain_list(value) when is_list(value) do
+    value
+    |> Enum.map(&normalize_domain/1)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
+  end
+
+  defp normalize_domain_list(_value), do: []
+
   defp normalize_topic(value) when is_binary(value) do
     value
     |> String.downcase()
@@ -600,6 +623,37 @@ defmodule Maraithon.PreferenceMemory do
   end
 
   defp normalize_topic(value), do: value |> to_string() |> normalize_topic()
+
+  defp normalize_keyword(value) do
+    value
+    |> non_empty_string()
+    |> case do
+      nil -> nil
+      keyword -> String.downcase(keyword)
+    end
+  end
+
+  defp normalize_domain(value) do
+    value
+    |> non_empty_string()
+    |> case do
+      nil ->
+        nil
+
+      domain ->
+        domain
+        |> String.downcase()
+        |> String.trim_leading("@")
+    end
+  end
+
+  defp normalize_delivery_mode(value) do
+    case value |> non_empty_string() do
+      "interrupt_now" -> "interrupt_now"
+      "important_fyi" -> "important_fyi"
+      _ -> "interrupt_now"
+    end
+  end
 
   defp normalize_applies_to(values) when is_list(values) do
     values
@@ -659,8 +713,64 @@ defmodule Maraithon.PreferenceMemory do
 
   defp fallback_parse_instruction(user_id, instruction) do
     _ = user_id
-    _ = instruction
-    nil
+    text = instruction |> String.downcase() |> String.trim()
+
+    cond do
+      important_watch_instruction?(text, ["hockey", "playoff", "rink", "league"]) ->
+        watch_rule_response(
+          "watch_hockey_email",
+          "Watch hockey emails",
+          "Surface hockey-related emails as important FYI so they appear in Gmail triage and Telegram digests.",
+          ["sports", "hockey"],
+          ["hockey", "playoff", "game", "league"],
+          [],
+          delivery_mode: "important_fyi",
+          ackable: true,
+          reply: "Understood. I'll surface hockey emails as important FYI."
+        )
+
+      important_watch_instruction?(text, ["rrsp", "401k", "ira", "tax"]) ->
+        watch_rule_response(
+          "watch_finance_notifications",
+          "Watch finance notifications",
+          "Surface RRSP, retirement, and tax-related emails as important FYI because they affect money and planning.",
+          ["finance", "rrsp"],
+          ["rrsp", "401k", "ira", "contribution", "tax"],
+          [],
+          delivery_mode: "important_fyi",
+          ackable: true,
+          reply: "Understood. I'll surface RRSP and similar finance emails as important FYI."
+        )
+
+      important_watch_instruction?(text, ["app store connect", "apple connect", "app review"]) ->
+        watch_rule_response(
+          "watch_app_store_connect",
+          "Watch App Store Connect",
+          "Surface App Store Connect review and release notifications as important FYI.",
+          ["platform_status", "app_store_connect"],
+          ["app store connect", "in review", "ready for sale", "rejected"],
+          ["apple.com"],
+          delivery_mode: "important_fyi",
+          ackable: true,
+          reply: "Understood. I'll surface App Store Connect notifications as important FYI."
+        )
+
+      urgent_watch_instruction?(text, ["meta", "facebook", "ad account", "account blocked"]) ->
+        watch_rule_response(
+          "watch_meta_account_risk",
+          "Watch Meta account risk",
+          "Treat Meta or Facebook account restriction and ad account blocked emails as urgent because they can block revenue or operations.",
+          ["account_risk", "meta"],
+          ["meta", "facebook", "ad account blocked", "account blocked", "account disabled"],
+          ["facebookmail.com", "meta.com"],
+          delivery_mode: "interrupt_now",
+          ackable: false,
+          reply: "Understood. I'll treat Meta account restriction emails as urgent."
+        )
+
+      true ->
+        nil
+    end
   end
 
   defp fallback_infer_from_feedback(_user_id, %Insight{} = insight, "not_helpful") do
@@ -1121,6 +1231,57 @@ defmodule Maraithon.PreferenceMemory do
   end
 
   defp parse_integer(_value, default), do: default
+
+  defp watch_rule_response(
+         id,
+         label,
+         instruction,
+         topics,
+         keywords,
+         sender_domains,
+         opts
+       ) do
+    %{
+      "reply" => Keyword.fetch!(opts, :reply),
+      "rules" => [
+        %{
+          "id" => id,
+          "kind" => "urgency_boost",
+          "label" => label,
+          "instruction" => instruction,
+          "applies_to" => ["gmail", "telegram"],
+          "confidence" => 0.96,
+          "filters" => %{
+            "topics" => topics,
+            "keywords" => keywords,
+            "sender_domains" => sender_domains,
+            "delivery_mode" => Keyword.get(opts, :delivery_mode, "important_fyi"),
+            "ackable" => Keyword.get(opts, :ackable, false),
+            "priority_bias" => "high"
+          }
+        }
+      ]
+    }
+  end
+
+  defp important_watch_instruction?(text, tokens) when is_binary(text) and is_list(tokens) do
+    watch_instruction?(text, tokens) and
+      contains_any_phrase?(text, ["important", "surface", "show", "come up", "fyi", "watch"])
+  end
+
+  defp urgent_watch_instruction?(text, tokens) when is_binary(text) and is_list(tokens) do
+    watch_instruction?(text, tokens) and
+      contains_any_phrase?(text, ["urgent", "important", "surface", "watch"])
+  end
+
+  defp watch_instruction?(text, tokens) when is_binary(text) and is_list(tokens) do
+    contains_any_phrase?(text, tokens) and
+      contains_any_phrase?(text, ["email", "emails", "notification", "notifications", "account"])
+  end
+
+  defp contains_any_phrase?(text, phrases) when is_binary(text) and is_list(phrases) do
+    Enum.any?(phrases, &String.contains?(text, &1))
+  end
 
   defp clamp(value, min, _max) when value < min, do: min
   defp clamp(value, _min, max) when value > max, do: max

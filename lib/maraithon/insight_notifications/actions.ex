@@ -176,16 +176,18 @@ defmodule Maraithon.InsightNotifications.Actions do
         []
 
       _ ->
+        completion_button =
+          if ackable_insight?(delivery.insight) do
+            %{"text" => "Ack", "callback_data" => callback_data(delivery.id, "ack")}
+          else
+            %{"text" => "Mark Done", "callback_data" => callback_data(delivery.id, "done")}
+          end
+
         base_rows =
           case primary_action(delivery.insight) do
             nil ->
               [
-                [
-                  %{
-                    "text" => "Mark Done",
-                    "callback_data" => callback_data(delivery.id, "done")
-                  }
-                ]
+                [completion_button]
               ]
 
             %{label: label, callback_action: callback_action} ->
@@ -195,10 +197,7 @@ defmodule Maraithon.InsightNotifications.Actions do
                     "text" => label,
                     "callback_data" => callback_data(delivery.id, callback_action)
                   },
-                  %{
-                    "text" => "Mark Done",
-                    "callback_data" => callback_data(delivery.id, "done")
-                  }
+                  completion_button
                 ]
               ]
           end
@@ -217,6 +216,7 @@ defmodule Maraithon.InsightNotifications.Actions do
   defp dispatch_action("regenerate", %Delivery{} = delivery), do: draft_action(delivery)
   defp dispatch_action("send", %Delivery{} = delivery), do: execute_action(delivery)
   defp dispatch_action("cancel", %Delivery{} = delivery), do: cancel_action(delivery)
+  defp dispatch_action("ack", %Delivery{} = delivery), do: acknowledge_insight(delivery)
   defp dispatch_action("done", %Delivery{} = delivery), do: mark_done(delivery)
   defp dispatch_action("dismiss", %Delivery{} = delivery), do: dismiss_insight(delivery)
   defp dispatch_action("snooze", %Delivery{} = delivery), do: snooze_insight(delivery)
@@ -273,6 +273,14 @@ defmodule Maraithon.InsightNotifications.Actions do
              %{"status" => "marked_complete_in_telegram"}
            ) do
       {:ok, delivery, "Marked complete"}
+    end
+  end
+
+  defp acknowledge_insight(%Delivery{} = delivery) do
+    with {:ok, _insight} <- Insights.acknowledge(delivery.user_id, delivery.insight_id),
+         {:ok, delivery} <-
+           put_action_state(delivery, %{"status" => "executed", "kind" => "manual_ack"}) do
+      {:ok, delivery, "Acknowledged"}
     end
   end
 
@@ -545,6 +553,9 @@ defmodule Maraithon.InsightNotifications.Actions do
         "manual_complete" ->
           "Marked complete from Telegram."
 
+        "manual_ack" ->
+          "Acknowledged from Telegram."
+
         _ ->
           "Completed."
       end
@@ -572,11 +583,20 @@ defmodule Maraithon.InsightNotifications.Actions do
   end
 
   defp primary_action(%Insight{} = insight) do
-    case insight.source do
-      "gmail" -> %{label: "Draft Email", callback_action: "draft"}
-      "slack" -> %{label: "Draft Slack", callback_action: "draft"}
-      _ -> nil
+    if ackable_insight?(insight) do
+      nil
+    else
+      case insight.source do
+        "gmail" -> %{label: "Draft Email", callback_action: "draft"}
+        "slack" -> %{label: "Draft Slack", callback_action: "draft"}
+        _ -> nil
+      end
     end
+  end
+
+  defp ackable_insight?(%Insight{} = insight) do
+    insight.category == "important_fyi" or
+      read_boolean(insight.metadata || %{}, "ackable", false)
   end
 
   defp parse_callback(value) when is_binary(value) do
@@ -904,6 +924,27 @@ defmodule Maraithon.InsightNotifications.Actions do
 
       _ ->
         nil
+    end
+  end
+
+  defp read_boolean(map, key, default) when is_map(map) and is_binary(key) do
+    case fetch(map, key) do
+      value when value in [true, false] ->
+        value
+
+      value when is_binary(value) ->
+        case String.downcase(String.trim(value)) do
+          "true" -> true
+          "1" -> true
+          "yes" -> true
+          "false" -> false
+          "0" -> false
+          "no" -> false
+          _ -> default
+        end
+
+      _ ->
+        default
     end
   end
 
