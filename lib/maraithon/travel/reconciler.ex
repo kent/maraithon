@@ -231,7 +231,11 @@ defmodule Maraithon.Travel.Reconciler do
 
     Enum.any?(events, fn event ->
       haystack =
-        [event.summary, event.location, event.description]
+        [
+          read_event_field(event, "summary"),
+          read_event_field(event, "location"),
+          read_event_field(event, "description")
+        ]
         |> Enum.filter(&is_binary/1)
         |> Enum.map(&String.downcase/1)
         |> Enum.join(" ")
@@ -243,6 +247,14 @@ defmodule Maraithon.Travel.Reconciler do
   end
 
   defp calendar_match?(_items, _events), do: false
+
+  defp read_event_field(event, field) when is_map(event) and is_binary(field) do
+    Map.get(event, field) || Map.get(event, String.to_existing_atom(field))
+  rescue
+    ArgumentError -> Map.get(event, field)
+  end
+
+  defp read_event_field(_event, _field), do: nil
 
   defp sort_items(items) do
     Enum.sort_by(items, fn item ->

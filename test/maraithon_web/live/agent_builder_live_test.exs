@@ -521,11 +521,32 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
       assert agent.config["name"] == "chief-of-staff"
       assert agent.config["user_id"] == @user_email
       assert agent.config["enabled_skills"] == ["followthrough", "travel_logistics", "briefing"]
+      assert agent.config["source_policy"] == "all_connected"
+      assert agent.config["include_future_sources"] == true
       assert agent.config["team_id"] == "T12345"
       assert agent.config["timezone_offset_hours"] == -8
-      assert agent.config["subscribe"] == ["email:#{@user_email}", "calendar:#{@user_email}"]
 
-      assert get_in(agent.config, ["skill_configs", "followthrough", "team_id"]) == "T12345"
+      assert agent.config["subscribe"] == [
+               "email:#{@user_email}",
+               "calendar:#{@user_email}",
+               "slack:T12345"
+             ]
+
+      assert get_in(agent.config, ["source_scope", "google_accounts"]) == [
+               %{
+                 "account_email" => @user_email,
+                 "provider" => "google",
+                 "services" => ["calendar", "gmail"]
+               }
+             ]
+
+      assert get_in(agent.config, ["source_scope", "slack_workspaces"]) == [
+               %{
+                 "services" => ["channels", "dms"],
+                 "team_id" => "T12345",
+                 "team_name" => "Agora"
+               }
+             ]
 
       assert get_in(agent.config, ["skill_configs", "briefing", "assistant_behavior"]) ==
                "ai_chief_of_staff"

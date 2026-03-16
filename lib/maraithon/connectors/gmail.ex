@@ -173,19 +173,23 @@ defmodule Maraithon.Connectors.Gmail do
   @doc """
   Fetches recent emails from the user's inbox.
   """
-  def fetch_recent_emails(user_id, max_results \\ 10) do
-    fetch_messages(user_id, max_results: max_results, label_ids: ["INBOX"])
+  def fetch_recent_emails(user_id_or_token, max_results \\ 10, opts \\ []) do
+    fetch_messages(
+      user_id_or_token,
+      Keyword.merge(opts, max_results: max_results, label_ids: ["INBOX"])
+    )
   end
 
   @doc """
   Fetches recent Gmail messages with optional labels or search query.
   """
-  def fetch_messages(user_id, opts \\ []) when is_binary(user_id) and is_list(opts) do
+  def fetch_messages(user_id_or_token, opts \\ [])
+      when is_binary(user_id_or_token) and is_list(opts) do
     max_results = Keyword.get(opts, :max_results, 10)
     label_ids = Keyword.get(opts, :label_ids, [])
     query = Keyword.get(opts, :query)
 
-    case OAuth.get_valid_access_token(user_id, "google") do
+    case request_access_token(user_id_or_token, opts) do
       {:ok, token} ->
         params =
           [{"maxResults", max_results}]
@@ -201,7 +205,7 @@ defmodule Maraithon.Connectors.Gmail do
             detailed =
               messages
               |> Enum.take(max_results)
-              |> Enum.map(fn %{"id" => id} -> fetch_message(token, id) end)
+              |> Enum.map(fn %{"id" => id} -> fetch_message(token, id, access_token: true) end)
               |> Enum.filter(&match?({:ok, _}, &1))
               |> Enum.map(fn {:ok, msg} -> msg end)
 
@@ -222,12 +226,8 @@ defmodule Maraithon.Connectors.Gmail do
   @doc """
   Fetches a single email message.
   """
-  def fetch_message(user_id_or_token, message_id) do
-    token =
-      case user_id_or_token do
-        "ya29." <> _ = t -> {:ok, t}
-        user_id -> OAuth.get_valid_access_token(user_id, "google")
-      end
+  def fetch_message(user_id_or_token, message_id, opts \\ []) do
+    token = request_access_token(user_id_or_token, opts)
 
     case token do
       {:ok, access_token} ->
@@ -249,12 +249,9 @@ defmodule Maraithon.Connectors.Gmail do
   @doc """
   Fetches a single Gmail message with decoded text and html body content.
   """
-  def fetch_message_content(user_id_or_token, message_id) when is_binary(message_id) do
-    token =
-      case user_id_or_token do
-        "ya29." <> _ = t -> {:ok, t}
-        user_id -> OAuth.get_valid_access_token(user_id, "google")
-      end
+  def fetch_message_content(user_id_or_token, message_id, opts \\ [])
+      when is_binary(message_id) do
+    token = request_access_token(user_id_or_token, opts)
 
     case token do
       {:ok, access_token} ->
@@ -276,12 +273,8 @@ defmodule Maraithon.Connectors.Gmail do
   @doc """
   Fetches all available messages in one Gmail thread using metadata format.
   """
-  def fetch_thread(user_id_or_token, thread_id) when is_binary(thread_id) do
-    token =
-      case user_id_or_token do
-        "ya29." <> _ = t -> {:ok, t}
-        user_id -> OAuth.get_valid_access_token(user_id, "google")
-      end
+  def fetch_thread(user_id_or_token, thread_id, opts \\ []) when is_binary(thread_id) do
+    token = request_access_token(user_id_or_token, opts)
 
     case token do
       {:ok, access_token} ->
@@ -354,6 +347,22 @@ defmodule Maraithon.Connectors.Gmail do
 
   defp get_access_token(user_id, _) do
     OAuth.get_valid_access_token(user_id, "google")
+  end
+
+  defp request_access_token("ya29." <> _ = token, _opts), do: {:ok, token}
+
+  defp request_access_token(token, opts) when is_binary(token) and is_list(opts) do
+    if Keyword.get(opts, :access_token, false) do
+      {:ok, token}
+    else
+      case Keyword.get(opts, :provider) do
+        provider when is_binary(provider) and provider != "" ->
+          OAuth.get_valid_access_token(token, provider)
+
+        _ ->
+          get_access_token(token, nil)
+      end
+    end
   end
 
   defp access_token_for_send("ya29." <> _ = access_token, _attrs) do

@@ -24,6 +24,7 @@ defmodule Maraithon.Behaviors.PersonalAssistantAgent do
       event_scan_limit: positive_integer(config["event_scan_limit"], @default_event_scan_limit),
       lookback_hours: positive_integer(config["lookback_hours"], @default_lookback_hours),
       min_confidence: float_in_range(config["min_confidence"], @default_min_confidence, 0.0, 1.0),
+      source_scope: config["source_scope"] || %{},
       wakeup_interval_ms:
         positive_integer(config["wakeup_interval_ms"], @default_wakeup_interval_ms),
       timezone_offset_hours:
@@ -49,6 +50,7 @@ defmodule Maraithon.Behaviors.PersonalAssistantAgent do
              event_scan_limit: state.event_scan_limit,
              lookback_hours: state.lookback_hours,
              min_confidence: state.min_confidence,
+             source_scope: state.source_scope,
              timezone_offset_hours: state.timezone_offset_hours
            ) do
         {:ok, %{queued_briefs: []}} ->

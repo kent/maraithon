@@ -170,7 +170,8 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
   defp shared_skill_config(config, user_id) do
     %{}
     |> maybe_put("user_id", user_id)
-    |> maybe_put("team_id", normalize_string(read_string(config, "team_id", nil)))
+    |> maybe_put("source_policy", read_string(config, "source_policy", nil))
+    |> maybe_put("source_scope", read_map(config, "source_scope"))
     |> maybe_put_integer("timezone_offset_hours", read_integer(config, "timezone_offset_hours"))
     |> maybe_put_integer(
       "morning_brief_hour_local",

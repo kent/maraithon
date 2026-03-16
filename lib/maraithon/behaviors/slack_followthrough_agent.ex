@@ -122,6 +122,7 @@ defmodule Maraithon.Behaviors.SlackFollowthroughAgent do
     %{
       user_id: normalize_string(config["user_id"]),
       team_id: normalize_string(config["team_id"]),
+      team_ids: normalize_team_ids(config["team_ids"]),
       channel_scan_limit:
         to_positive_integer(config["channel_scan_limit"], @default_channel_scan_limit),
       dm_scan_limit: to_positive_integer(config["dm_scan_limit"], @default_dm_scan_limit),
@@ -614,22 +615,36 @@ defmodule Maraithon.Behaviors.SlackFollowthroughAgent do
   end
 
   defp resolve_team_ids(state) do
-    if state.team_id do
-      [state.team_id]
-    else
-      state.user_id
-      |> OAuth.list_user_tokens()
-      |> Enum.map(& &1.provider)
-      |> Enum.filter(&is_binary/1)
-      |> Enum.flat_map(fn provider ->
-        case Regex.run(~r/^slack:([^:]+)$/, provider, capture: :all_but_first) do
-          [team_id] -> [team_id]
-          _ -> []
-        end
-      end)
-      |> Enum.uniq()
+    cond do
+      state.team_ids not in [nil, []] ->
+        state.team_ids
+
+      state.team_id ->
+        [state.team_id]
+
+      true ->
+        state.user_id
+        |> OAuth.list_user_tokens()
+        |> Enum.map(& &1.provider)
+        |> Enum.filter(&is_binary/1)
+        |> Enum.flat_map(fn provider ->
+          case Regex.run(~r/^slack:([^:]+)$/, provider, capture: :all_but_first) do
+            [team_id] -> [team_id]
+            _ -> []
+          end
+        end)
+        |> Enum.uniq()
     end
   end
+
+  defp normalize_team_ids(values) when is_list(values) do
+    values
+    |> Enum.map(&normalize_string/1)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
+  end
+
+  defp normalize_team_ids(_values), do: []
 
   defp resolve_user_token(user_id, team_id) do
     user_id

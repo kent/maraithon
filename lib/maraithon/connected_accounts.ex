@@ -48,11 +48,13 @@ defmodule Maraithon.ConnectedAccounts do
         nil
 
       value ->
-        Repo.get_by(ConnectedAccount,
-          provider: provider,
-          external_account_id: value,
-          status: "connected"
-        ) || find_connected_by_metadata_identifier(provider, value)
+        if provider == "telegram" do
+          find_connected_by_metadata_identifier(provider, value) ||
+            find_connected_by_external_id(provider, value)
+        else
+          find_connected_by_external_id(provider, value) ||
+            find_connected_by_metadata_identifier(provider, value)
+        end
     end
   end
 
@@ -218,6 +220,7 @@ defmodule Maraithon.ConnectedAccounts do
        when is_binary(provider) and is_binary(external_account_id) do
     ConnectedAccount
     |> where([account], account.provider == ^provider and account.status == "connected")
+    |> order_by([account], desc: account.updated_at, desc: account.inserted_at, desc: account.id)
     |> Repo.all()
     |> Enum.find(fn account ->
       metadata_identifiers(account.metadata)
@@ -226,6 +229,17 @@ defmodule Maraithon.ConnectedAccounts do
   end
 
   defp find_connected_by_metadata_identifier(_provider, _external_account_id), do: nil
+
+  defp find_connected_by_external_id(provider, external_account_id)
+       when is_binary(provider) and is_binary(external_account_id) do
+    Repo.get_by(ConnectedAccount,
+      provider: provider,
+      external_account_id: external_account_id,
+      status: "connected"
+    )
+  end
+
+  defp find_connected_by_external_id(_provider, _external_account_id), do: nil
 
   defp metadata_identifiers(metadata) when is_map(metadata) do
     metadata

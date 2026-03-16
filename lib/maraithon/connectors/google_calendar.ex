@@ -180,7 +180,9 @@ defmodule Maraithon.Connectors.GoogleCalendar do
   Returns `{:ok, events}` or `{:error, reason}`.
   """
   def sync_calendar_events(user_id, opts \\ []) do
-    case OAuth.get_valid_access_token(user_id, "google") do
+    provider = Keyword.get(opts, :provider, "google")
+
+    case OAuth.get_valid_access_token(user_id, provider) do
       {:ok, token} ->
         fetch_events(token, opts)
 

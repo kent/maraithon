@@ -10,12 +10,12 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
 
   @behaviour Maraithon.Behaviors.Behavior
 
+  alias Maraithon.ChiefOfStaff.SourceScope
   alias Maraithon.Connectors.Gmail
   alias Maraithon.Connectors.GoogleCalendar
   alias Maraithon.Followthrough.ConversationContext
   alias Maraithon.InsightFeedback
   alias Maraithon.Insights
-  alias Maraithon.OAuth
   alias Maraithon.Tools.GmailHelpers
 
   require Logger
@@ -204,7 +204,9 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
       max_insights_per_cycle:
         to_positive_integer(config["max_insights_per_cycle"], @default_max_insights_per_cycle),
       min_confidence: to_float(config["min_confidence"], @default_min_confidence),
+      source_scope: SourceScope.normalize(read_map(config, "source_scope")),
       google_account: nil,
+      google_accounts: [],
       pending_candidates: [],
       last_scan_at: nil
     }
@@ -215,7 +217,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
     state =
       state
       |> ensure_user_id(context)
-      |> hydrate_google_account()
+      |> hydrate_google_accounts()
 
     cond do
       is_nil(state.user_id) ->
@@ -298,41 +300,34 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
     end
   end
 
-  defp hydrate_google_account(%{user_id: nil} = state), do: state
+  defp hydrate_google_accounts(%{user_id: nil} = state), do: state
 
-  defp hydrate_google_account(state) do
-    Map.put(state, :google_account, google_account_for_user(state.user_id))
+  defp hydrate_google_accounts(state) do
+    google_accounts = google_accounts_for_user(state.user_id, state.source_scope)
+
+    state
+    |> Map.put(:google_accounts, google_accounts)
+    |> Map.put(:google_account, google_accounts |> List.first() |> account_email())
   end
 
-  defp google_account_for_user(user_id) when is_binary(user_id) do
-    case OAuth.get_token(user_id, "google") do
-      %{metadata: metadata, provider: provider} ->
-        metadata = metadata || %{}
+  defp google_accounts_for_user(user_id, source_scope) when is_binary(user_id) do
+    live_scope = SourceScope.resolve(user_id)
 
-        normalize_string(metadata["account_email"]) ||
-          normalize_string(metadata[:account_email]) ||
-          normalize_string(metadata["email"]) ||
-          normalize_string(metadata[:email]) ||
-          google_provider_account(provider)
+    scope =
+      case SourceScope.google_accounts(live_scope) do
+        [] -> source_scope
+        _ -> live_scope
+      end
 
-      _ ->
-        nil
-    end
+    scope
+    |> SourceScope.google_accounts()
+    |> Enum.filter(fn account ->
+      account_supports_service?(account, "gmail") or
+        account_supports_service?(account, "calendar")
+    end)
   end
 
-  defp google_account_for_user(_user_id), do: nil
-
-  defp google_provider_account("google:" <> account) when is_binary(account) do
-    account = normalize_string(account)
-
-    if account && String.starts_with?(account, "sub-") do
-      nil
-    else
-      account
-    end
-  end
-
-  defp google_provider_account(_provider), do: nil
+  defp google_accounts_for_user(_user_id, _source_scope), do: []
 
   defp candidates_from_periodic_scan(state, _context) do
     emails = fetch_recent_inbox_messages(state)
@@ -372,9 +367,11 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
 
     case source do
       "gmail" ->
+        google_source = google_source_from_context(state, context)
+
         incoming =
           data
-          |> extract_email_batch()
+          |> extract_email_batch(google_source)
           |> Enum.flat_map(&incoming_email_candidates(&1, state, sent_messages))
 
         outgoing =
@@ -397,10 +394,16 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
   defp candidates_from_pubsub_payload(_payload, state, context),
     do: candidates_from_periodic_scan(state, context)
 
-  defp extract_email_batch(%{"messages" => messages}) when is_list(messages), do: messages
-  defp extract_email_batch(%{messages: messages}) when is_list(messages), do: messages
-  defp extract_email_batch(message) when is_map(message), do: [message]
-  defp extract_email_batch(_), do: []
+  defp extract_email_batch(%{"messages" => messages}, google_source) when is_list(messages),
+    do: annotate_google_items(messages, google_source)
+
+  defp extract_email_batch(%{messages: messages}, google_source) when is_list(messages),
+    do: annotate_google_items(messages, google_source)
+
+  defp extract_email_batch(message, google_source) when is_map(message),
+    do: annotate_google_items([message], google_source)
+
+  defp extract_email_batch(_message, _google_source), do: []
 
   defp extract_calendar_batch(%{"events" => events}) when is_list(events), do: events
   defp extract_calendar_batch(%{events: events}) when is_list(events), do: events
@@ -408,53 +411,80 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
   defp extract_calendar_batch(_), do: []
 
   defp fetch_recent_inbox_messages(state) do
-    case Gmail.fetch_recent_emails(state.user_id, state.email_scan_limit) do
-      {:ok, value} ->
-        value
+    google_accounts_for_service(state, "gmail")
+    |> Enum.flat_map(fn account ->
+      provider = account_provider(account)
 
-      {:error, reason} ->
-        Logger.warning("InboxCalendarAdvisor failed to fetch inbox email",
-          reason: inspect(reason)
-        )
+      case Gmail.fetch_recent_emails(state.user_id, state.email_scan_limit, provider: provider) do
+        {:ok, value} ->
+          annotate_google_items(value, account)
 
-        []
-    end
+        {:error, reason} ->
+          Logger.warning("InboxCalendarAdvisor failed to fetch inbox email",
+            provider: provider,
+            reason: inspect(reason)
+          )
+
+          []
+      end
+    end)
   end
 
   defp fetch_recent_sent_messages(state) do
     sent_limit = max(state.email_scan_limit * 2, 12)
     query = "in:sent newer_than:#{@sent_query_lookback_days}d"
 
-    case GmailHelpers.list_messages(state.user_id,
-           max_results: sent_limit,
-           query: query,
-           label_ids: []
-         ) do
-      {:ok, value} ->
-        value
+    google_accounts_for_service(state, "gmail")
+    |> Enum.flat_map(fn account ->
+      provider = account_provider(account)
 
-      {:error, reason} ->
-        Logger.warning("InboxCalendarAdvisor failed to fetch sent email", reason: inspect(reason))
-        []
-    end
+      case GmailHelpers.list_messages(state.user_id,
+             max_results: sent_limit,
+             query: query,
+             label_ids: [],
+             provider: provider
+           ) do
+        {:ok, value} ->
+          annotate_google_items(value, account)
+
+        {:error, reason} ->
+          Logger.warning("InboxCalendarAdvisor failed to fetch sent email",
+            provider: provider,
+            reason: inspect(reason)
+          )
+
+          []
+      end
+    end)
   end
 
   defp fetch_recent_calendar_events(state) do
-    case GoogleCalendar.sync_calendar_events(state.user_id) do
-      {:ok, value} ->
-        value
-        |> Enum.take(state.event_scan_limit)
+    google_accounts_for_service(state, "calendar")
+    |> Enum.flat_map(fn account ->
+      provider = account_provider(account)
 
-      {:error, reason} ->
-        Logger.warning("InboxCalendarAdvisor failed to fetch calendar", reason: inspect(reason))
-        []
-    end
+      case GoogleCalendar.sync_calendar_events(state.user_id, provider: provider) do
+        {:ok, value} ->
+          value
+          |> annotate_google_items(account)
+          |> Enum.take(state.event_scan_limit)
+
+        {:error, reason} ->
+          Logger.warning("InboxCalendarAdvisor failed to fetch calendar",
+            provider: provider,
+            reason: inspect(reason)
+          )
+
+          []
+      end
+    end)
   end
 
   defp build_gmail_conversation_context(state, thread_id, trigger_message) do
     self_refs = gmail_self_refs(state)
+    provider = read_string(trigger_message, "google_provider", nil)
 
-    case Gmail.fetch_thread(state.user_id, thread_id) do
+    case Gmail.fetch_thread(state.user_id, thread_id, provider: provider) do
       {:ok, messages} when is_list(messages) and messages != [] ->
         ConversationContext.from_gmail(messages, trigger_message,
           self_refs: self_refs,
@@ -480,10 +510,59 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
   end
 
   defp gmail_self_refs(state) do
-    [state.user_id, state.google_account]
+    ([state.user_id, state.google_account] ++ Enum.map(state.google_accounts, &account_email/1))
     |> Enum.filter(&is_binary/1)
     |> Enum.uniq()
   end
+
+  defp google_accounts_for_service(state, service) do
+    state.google_accounts
+    |> Enum.filter(&account_supports_service?(&1, service))
+  end
+
+  defp google_source_from_context(state, context) do
+    context
+    |> Map.get(:event)
+    |> case do
+      %{topic: "email:" <> account_email} ->
+        SourceScope.google_account_for_email(state.source_scope, account_email)
+
+      _ ->
+        nil
+    end
+  end
+
+  defp annotate_google_items(items, google_source) when is_list(items) do
+    provider = account_provider(google_source)
+    account = account_email(google_source)
+
+    Enum.map(items, fn item ->
+      item
+      |> stringify_keys()
+      |> maybe_put("google_provider", provider)
+      |> maybe_put("account", account)
+    end)
+  end
+
+  defp annotate_google_items(_items, _google_source), do: []
+
+  defp account_provider(account) when is_map(account) do
+    normalize_string(Map.get(account, "provider"))
+  end
+
+  defp account_provider(_account), do: nil
+
+  defp account_email(account) when is_map(account) do
+    normalize_string(Map.get(account, "account_email"))
+  end
+
+  defp account_email(_account), do: nil
+
+  defp account_supports_service?(account, service) when is_map(account) and is_binary(service) do
+    service in read_list(account, "services")
+  end
+
+  defp account_supports_service?(_account, _service), do: false
 
   defp resolved_conversation?(context) when is_map(context) do
     read_string(context, "notification_posture", nil) == "resolved"
@@ -618,7 +697,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
                 dedupe_key: "gmail:thread:#{thread_id}:reply_owed",
                 metadata:
                   compact_map(%{
-                    "account" => state.google_account,
+                    "account" => read_string(email, "account", state.google_account),
                     "thread_id" => thread_id,
                     "from" => from,
                     "to" => to,
@@ -749,7 +828,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
               dedupe_key: "gmail:commitment:#{thread_id}",
               metadata:
                 compact_map(%{
-                  "account" => state.google_account,
+                  "account" => read_string(sent_email, "account", state.google_account),
                   "thread_id" => thread_id,
                   "from" => from,
                   "to" => to,
@@ -878,7 +957,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
             dedupe_key: "calendar:follow_up:#{event_id}",
             metadata:
               compact_map(%{
-                "account" => state.google_account,
+                "account" => read_string(event, "account", state.google_account),
                 "summary" => summary,
                 "organizer" => organizer,
                 "attendee_count" => attendee_count,

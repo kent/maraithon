@@ -16,6 +16,11 @@ defmodule Maraithon.TestSupport.TravelGmailStub do
     end
   end
 
+  def fetch_message_content(user_id, message_id, _opts)
+      when is_binary(user_id) and is_binary(message_id) do
+    fetch_message_content(user_id, message_id)
+  end
+
   defp config(key, default) do
     Application.get_env(:maraithon, __MODULE__, [])
     |> Keyword.get(key, default)

@@ -4,6 +4,7 @@ defmodule Maraithon.AgentBuilder do
   """
 
   alias Maraithon.Agents.Agent
+  alias Maraithon.ChiefOfStaff.SourceScope
   alias Maraithon.ChiefOfStaff.Skills, as: ChiefOfStaffSkills
   alias Maraithon.ConnectedAccounts
   alias Maraithon.OAuth
@@ -1108,11 +1109,13 @@ defmodule Maraithon.AgentBuilder do
              "Chief of Staff travel wakeup interval"
            ) do
       team_id = empty_to_nil(launch["team_id"])
+      source_scope = SourceScope.resolve(user_id)
 
       skill_configs = %{
         "followthrough" => %{
           "user_id" => user_id,
-          "team_id" => team_id,
+          "source_policy" => "all_connected",
+          "source_scope" => source_scope,
           "email_scan_limit" => follow_email_scan_limit,
           "event_scan_limit" => follow_event_scan_limit,
           "prep_window_hours" => follow_prep_window_hours,
@@ -1125,6 +1128,8 @@ defmodule Maraithon.AgentBuilder do
         },
         "travel_logistics" => %{
           "user_id" => user_id,
+          "source_policy" => "all_connected",
+          "source_scope" => source_scope,
           "email_scan_limit" => travel_email_scan_limit,
           "event_scan_limit" => travel_event_scan_limit,
           "lookback_hours" => travel_lookback_hours,
@@ -1135,6 +1140,8 @@ defmodule Maraithon.AgentBuilder do
         "briefing" => %{
           "user_id" => user_id,
           "assistant_behavior" => "ai_chief_of_staff",
+          "source_policy" => "all_connected",
+          "source_scope" => source_scope,
           "timezone_offset_hours" => timezone_offset_hours,
           "morning_brief_hour_local" => morning_brief_hour_local,
           "end_of_day_brief_hour_local" => end_of_day_brief_hour_local,
@@ -1149,6 +1156,9 @@ defmodule Maraithon.AgentBuilder do
          "name" => launch_name(launch),
          "user_id" => user_id,
          "enabled_skills" => enabled_skills,
+         "source_policy" => "all_connected",
+         "include_future_sources" => true,
+         "source_scope" => source_scope,
          "team_id" => team_id,
          "timezone_offset_hours" => timezone_offset_hours,
          "morning_brief_hour_local" => morning_brief_hour_local,
@@ -1157,7 +1167,11 @@ defmodule Maraithon.AgentBuilder do
          "weekly_review_hour_local" => weekly_review_hour_local,
          "brief_max_items" => brief_max_items,
          "skill_configs" => skill_configs,
-         "subscribe" => ChiefOfStaffSkills.subscriptions(skill_configs, user_id, enabled_skills)
+         "subscribe" =>
+           Enum.uniq(
+             SourceScope.subscriptions(source_scope, user_id) ++
+               ChiefOfStaffSkills.subscriptions(skill_configs, user_id, enabled_skills)
+           )
        }}
       |> drop_nil_values()
     end
@@ -1465,6 +1479,9 @@ defmodule Maraithon.AgentBuilder do
       "name",
       "user_id",
       "enabled_skills",
+      "source_policy",
+      "include_future_sources",
+      "source_scope",
       "team_id",
       "timezone_offset_hours",
       "morning_brief_hour_local",

@@ -12,8 +12,9 @@ defmodule Maraithon.Tools.GoogleCalendarHelpers do
     query = Keyword.get(opts, :query)
     time_min = Keyword.get(opts, :time_min, DateTime.utc_now() |> DateTime.to_iso8601())
     time_max = Keyword.get(opts, :time_max)
+    provider = Keyword.get(opts, :provider, "google")
 
-    with {:ok, access_token} <- OAuth.get_valid_access_token(user_id, "google"),
+    with {:ok, access_token} <- OAuth.get_valid_access_token(user_id, provider),
          {:ok, events} <-
            fetch_events(access_token, calendar_id, max_results, query, time_min, time_max) do
       {:ok, events}

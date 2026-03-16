@@ -6,6 +6,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.TravelLogistics do
   @behaviour Maraithon.ChiefOfStaff.Skill
 
   alias Maraithon.Behaviors.PersonalAssistantAgent
+  alias Maraithon.ChiefOfStaff.SourceScope
 
   @default_email_scan_limit 25
   @default_event_scan_limit 25
@@ -57,8 +58,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.TravelLogistics do
   end
 
   @impl true
-  def subscriptions(_config, user_id) when is_binary(user_id) do
-    ["email:#{user_id}", "calendar:#{user_id}"]
+  def subscriptions(config, user_id) when is_binary(user_id) do
+    SourceScope.subscriptions(Map.get(config, "source_scope", %{}), user_id)
   end
 
   def subscriptions(_config, _user_id), do: []

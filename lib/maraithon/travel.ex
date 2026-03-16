@@ -7,6 +7,7 @@ defmodule Maraithon.Travel do
 
   alias Maraithon.Briefs
   alias Maraithon.Briefs.Brief
+  alias Maraithon.ChiefOfStaff.SourceScope
   alias Maraithon.ConnectedAccounts
   alias Maraithon.Connectors.Gmail
   alias Maraithon.OAuth
@@ -29,10 +30,13 @@ defmodule Maraithon.Travel do
     lookback_hours = Keyword.get(opts, :lookback_hours, @default_lookback_hours)
     timezone_offset_hours = Keyword.get(opts, :timezone_offset_hours, -5)
     min_confidence = Keyword.get(opts, :min_confidence, @default_min_confidence)
+    source_scope = Keyword.get(opts, :source_scope, %{})
 
-    with :ok <- ensure_runtime_prereqs(user_id),
-         {:ok, messages} <- candidate_messages(user_id, email_scan_limit, lookback_hours, event),
-         {:ok, events} <- calendar_events(user_id, event_scan_limit, lookback_hours, now, event),
+    with :ok <- ensure_runtime_prereqs(user_id, source_scope),
+         {:ok, messages} <-
+           candidate_messages(user_id, email_scan_limit, lookback_hours, event, source_scope),
+         {:ok, events} <-
+           calendar_events(user_id, event_scan_limit, lookback_hours, now, event, source_scope),
          itineraries <-
            Reconciler.ingest(
              user_id,
@@ -167,8 +171,9 @@ defmodule Maraithon.Travel do
     }
   end
 
-  defp candidate_messages(user_id, email_scan_limit, lookback_hours, event) do
-    with {:ok, messages} <- message_candidates(user_id, email_scan_limit, lookback_hours, event) do
+  defp candidate_messages(user_id, email_scan_limit, lookback_hours, event, source_scope) do
+    with {:ok, messages} <-
+           message_candidates(user_id, email_scan_limit, lookback_hours, event, source_scope) do
       full_messages =
         messages
         |> Enum.filter(&Extractor.candidate?/1)
@@ -180,7 +185,7 @@ defmodule Maraithon.Travel do
     end
   end
 
-  defp calendar_events(user_id, event_scan_limit, lookback_hours, now, event) do
+  defp calendar_events(user_id, event_scan_limit, lookback_hours, now, event, source_scope) do
     case calendar_events_from_event(event, event_scan_limit) do
       {:ok, events} ->
         {:ok, events}
@@ -196,14 +201,11 @@ defmodule Maraithon.Travel do
           |> DateTime.add(14, :day)
           |> DateTime.to_iso8601()
 
-        case calendar_module().list_events(user_id,
-               max_results: event_scan_limit,
-               time_min: time_min,
-               time_max: time_max
-             ) do
-          {:ok, events} -> {:ok, events}
-          {:error, reason} -> {:error, reason}
-        end
+        calendar_events_from_sources(user_id, source_scope,
+          max_results: event_scan_limit,
+          time_min: time_min,
+          time_max: time_max
+        )
     end
   end
 
@@ -400,7 +402,7 @@ defmodule Maraithon.Travel do
 
   defp travel_delivery_ref(_brief), do: nil
 
-  defp ensure_runtime_prereqs(user_id) do
+  defp ensure_runtime_prereqs(user_id, source_scope) do
     telegram_ready? =
       case ConnectedAccounts.get(user_id, "telegram") do
         %{status: "connected"} -> true
@@ -408,17 +410,22 @@ defmodule Maraithon.Travel do
       end
 
     cond do
-      not google_service_ready?(user_id, "gmail") -> {:error, :gmail_not_connected}
-      not google_service_ready?(user_id, "calendar") -> {:error, :calendar_not_connected}
-      not telegram_ready? -> {:error, :telegram_not_connected}
-      true -> :ok
+      not google_service_ready?(user_id, "gmail", source_scope) ->
+        {:error, :gmail_not_connected}
+
+      not google_service_ready?(user_id, "calendar", source_scope) ->
+        {:error, :calendar_not_connected}
+
+      not telegram_ready? ->
+        {:error, :telegram_not_connected}
+
+      true ->
+        :ok
     end
   end
 
-  defp google_service_ready?(user_id, service) do
-    OAuth.list_user_tokens(user_id)
-    |> Enum.filter(&google_provider?(&1.provider))
-    |> Enum.any?(&google_token_supports_service?(&1, service))
+  defp google_service_ready?(user_id, service, source_scope) do
+    google_source_providers(user_id, source_scope, service) != []
   end
 
   defp google_token_supports_service?(token, service) when is_binary(service) do
@@ -440,15 +447,15 @@ defmodule Maraithon.Travel do
 
   defp google_scope_matches?(_scope, _service), do: false
 
-  defp message_candidates(user_id, email_scan_limit, lookback_hours, event) do
-    case messages_from_event(event, email_scan_limit * 2) do
+  defp message_candidates(user_id, email_scan_limit, lookback_hours, event, source_scope) do
+    case messages_from_event(event, email_scan_limit * 2, source_scope) do
       {:ok, messages} ->
         {:ok, messages}
 
       :fallback ->
         query = "newer_than:#{max(div(lookback_hours, 24), 1)}d"
 
-        gmail_module().fetch_messages(user_id,
+        message_candidates_from_sources(user_id, source_scope,
           max_results: email_scan_limit * 2,
           label_ids: [],
           query: query
@@ -458,23 +465,53 @@ defmodule Maraithon.Travel do
 
   defp hydrate_message(user_id, message) do
     message_id = Map.get(message, :message_id) || Map.get(message, "message_id")
+    provider = Map.get(message, :google_provider) || Map.get(message, "google_provider")
 
     if is_binary(message_id) do
-      case gmail_module().fetch_message_content(user_id, message_id) do
-        {:ok, detailed} -> detailed
-        {:error, _reason} -> nil
+      case gmail_module().fetch_message_content(user_id, message_id, provider: provider) do
+        {:ok, detailed} ->
+          detailed
+          |> maybe_put("google_provider", provider)
+          |> maybe_put("account", Map.get(message, :account) || Map.get(message, "account"))
+
+        {:error, _reason} ->
+          nil
       end
     end
   end
 
-  defp messages_from_event(%{topic: "email:" <> _, payload: payload}, limit) do
+  defp messages_from_event(%{topic: "email:" <> _ = topic, payload: payload}, limit, source_scope) do
+    google_source = SourceScope.google_account_for_email_topic(source_scope, topic)
+
     case Map.get(event_data(payload), "messages", []) do
-      messages when is_list(messages) and messages != [] -> {:ok, Enum.take(messages, limit)}
-      _ -> :fallback
+      messages when is_list(messages) and messages != [] ->
+        {:ok, Enum.take(annotate_google_items(messages, google_source), limit)}
+
+      _ ->
+        :fallback
     end
   end
 
-  defp messages_from_event(_event, _limit), do: :fallback
+  defp messages_from_event(_event, _limit, _source_scope), do: :fallback
+
+  defp message_candidates_from_sources(user_id, source_scope, opts) do
+    providers = google_source_providers(user_id, source_scope, "gmail")
+
+    results =
+      Enum.map(providers, fn provider ->
+        google_source = SourceScope.google_account_for_provider(source_scope, provider)
+
+        case gmail_module().fetch_messages(user_id, Keyword.put(opts, :provider, provider)) do
+          {:ok, messages} ->
+            {:ok, annotate_google_items(messages, google_source)}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+      end)
+
+    merge_source_results(results)
+  end
 
   defp calendar_events_from_event(%{topic: "calendar:" <> _, payload: payload}, limit) do
     case Map.get(event_data(payload), "events", []) do
@@ -484,6 +521,86 @@ defmodule Maraithon.Travel do
   end
 
   defp calendar_events_from_event(_event, _limit), do: :fallback
+
+  defp calendar_events_from_sources(user_id, source_scope, opts) do
+    providers = google_source_providers(user_id, source_scope, "calendar")
+
+    results =
+      Enum.map(providers, fn provider ->
+        google_source = SourceScope.google_account_for_provider(source_scope, provider)
+
+        case calendar_module().list_events(user_id, Keyword.put(opts, :provider, provider)) do
+          {:ok, events} ->
+            {:ok, annotate_google_items(events, google_source)}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+      end)
+
+    merge_source_results(results)
+  end
+
+  defp google_source_providers(user_id, source_scope, service) do
+    scope = normalized_source_scope(user_id, source_scope)
+
+    providers =
+      SourceScope.google_account_providers(scope, service)
+      |> Enum.filter(&google_provider?/1)
+
+    if providers == [] do
+      OAuth.list_user_tokens(user_id)
+      |> Enum.filter(&google_provider?(&1.provider))
+      |> Enum.filter(&google_token_supports_service?(&1, service))
+      |> Enum.map(& &1.provider)
+      |> Enum.uniq()
+    else
+      providers
+    end
+  end
+
+  defp normalized_source_scope(user_id, source_scope) do
+    live_scope = SourceScope.resolve(user_id)
+
+    if SourceScope.google_accounts(live_scope) == [] do
+      SourceScope.normalize(source_scope)
+    else
+      live_scope
+    end
+  end
+
+  defp annotate_google_items(items, google_source) when is_list(items) do
+    provider = google_source && Map.get(google_source, "provider")
+    account = google_source && Map.get(google_source, "account_email")
+
+    Enum.map(items, fn item ->
+      item
+      |> normalize_event_map()
+      |> maybe_put("google_provider", provider)
+      |> maybe_put("account", account)
+    end)
+  end
+
+  defp annotate_google_items(_items, _google_source), do: []
+
+  defp merge_source_results(results) when is_list(results) do
+    data =
+      results
+      |> Enum.flat_map(fn
+        {:ok, items} when is_list(items) -> items
+        _ -> []
+      end)
+
+    case {data, Enum.find(results, &match?({:error, _}, &1))} do
+      {items, _} when items != [] -> {:ok, items}
+      {[], {:error, reason}} -> {:error, reason}
+      _ -> {:ok, []}
+    end
+  end
+
+  defp maybe_put(map, _key, nil) when is_map(map), do: map
+  defp maybe_put(map, _key, ""), do: map
+  defp maybe_put(map, key, value) when is_map(map), do: Map.put(map, key, value)
 
   defp event_data(payload) when is_map(payload) do
     payload

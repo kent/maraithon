@@ -7,6 +7,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.Followthrough do
 
   alias Maraithon.Behaviors.InboxCalendarAdvisor
   alias Maraithon.Behaviors.SlackFollowthroughAgent
+  alias Maraithon.ChiefOfStaff.SourceScope
 
   @default_email_scan_limit 14
   @default_event_scan_limit 12
@@ -81,6 +82,10 @@ defmodule Maraithon.ChiefOfStaff.Skills.Followthrough do
   end
 
   @impl true
+  def subscriptions(config, user_id) when is_binary(user_id) do
+    SourceScope.subscriptions(Map.get(config, "source_scope", %{}), user_id)
+  end
+
   def subscriptions(_config, _user_id), do: []
 
   @impl true
