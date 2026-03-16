@@ -247,6 +247,33 @@ defmodule Maraithon.Connectors.Gmail do
   end
 
   @doc """
+  Fetches a single Gmail message with decoded text and html body content.
+  """
+  def fetch_message_content(user_id_or_token, message_id) when is_binary(message_id) do
+    token =
+      case user_id_or_token do
+        "ya29." <> _ = t -> {:ok, t}
+        user_id -> OAuth.get_valid_access_token(user_id, "google")
+      end
+
+    case token do
+      {:ok, access_token} ->
+        url = "#{api_base_url()}/users/me/messages/#{message_id}?format=full"
+
+        case Google.api_request(:get, url, access_token) do
+          {:ok, response} ->
+            {:ok, parse_message_content(response)}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+
+      error ->
+        error
+    end
+  end
+
+  @doc """
   Fetches all available messages in one Gmail thread using metadata format.
   """
   def fetch_thread(user_id_or_token, thread_id) when is_binary(thread_id) do
@@ -445,6 +472,57 @@ defmodule Maraithon.Connectors.Gmail do
       internal_date: parse_internal_date(message["internalDate"])
     }
   end
+
+  defp parse_message_content(message) do
+    {text_body, html_body} = extract_message_bodies(message["payload"] || %{})
+
+    parse_message(message)
+    |> Map.merge(%{
+      text_body: text_body,
+      html_body: html_body
+    })
+  end
+
+  defp extract_message_bodies(payload) when is_map(payload) do
+    plain = collect_body(payload, "text/plain")
+    html = collect_body(payload, "text/html")
+
+    {plain || fallback_body(payload), html}
+  end
+
+  defp collect_body(payload, mime_type) when is_map(payload) do
+    cond do
+      payload["mimeType"] == mime_type ->
+        decode_body(payload["body"])
+
+      is_list(payload["parts"]) ->
+        Enum.find_value(payload["parts"], &collect_body(&1, mime_type))
+
+      true ->
+        nil
+    end
+  end
+
+  defp fallback_body(payload) when is_map(payload) do
+    case decode_body(payload["body"]) do
+      nil ->
+        if is_list(payload["parts"]) do
+          Enum.find_value(payload["parts"], &fallback_body/1)
+        end
+
+      decoded ->
+        decoded
+    end
+  end
+
+  defp decode_body(%{"data" => data}) when is_binary(data) do
+    case Base.url_decode64(data, padding: false) do
+      {:ok, decoded} -> decoded
+      :error -> nil
+    end
+  end
+
+  defp decode_body(_body), do: nil
 
   defp fetch_reply_headers(_access_token, nil), do: %{}
   defp fetch_reply_headers(_access_token, ""), do: %{}

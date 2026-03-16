@@ -8,6 +8,7 @@ defmodule Maraithon.Runtime.Agent do
 
   alias Maraithon.Events
   alias Maraithon.Behaviors
+  alias Maraithon.Insights.Refresh, as: InsightRefresh
   alias Maraithon.Runtime.Dispatch
   alias Maraithon.Runtime.Scheduler
 
@@ -205,6 +206,9 @@ defmodule Maraithon.Runtime.Agent do
   end
 
   def idle(:info, {:message, message, metadata, message_id}, data) do
+    metadata = normalize_message_metadata(metadata)
+    data = maybe_reset_open_insights_for_refresh(data, message, metadata)
+
     data =
       emit_event(data, "message_received", %{
         message: message,
@@ -490,6 +494,30 @@ defmodule Maraithon.Runtime.Agent do
       event: data.current_event
     }
   end
+
+  defp maybe_reset_open_insights_for_refresh(data, message, metadata) do
+    if InsightRefresh.refresh_request?(message, metadata) do
+      reset_count =
+        InsightRefresh.reset_open_insights_for_agent(
+          data.user_id,
+          data.agent_id,
+          data.behavior_module
+        )
+
+      if reset_count > 0 do
+        Logger.info("Reset open insights before queued refresh",
+          agent_id: data.agent_id,
+          reset_count: reset_count
+        )
+      end
+    end
+
+    data
+  end
+
+  defp normalize_message_metadata(nil), do: %{}
+  defp normalize_message_metadata(metadata) when is_map(metadata), do: metadata
+  defp normalize_message_metadata(_metadata), do: %{}
 
   defp init_budget(nil), do: %{llm_calls: 500, tool_calls: 1000}
 

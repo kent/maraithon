@@ -1321,6 +1321,57 @@ defmodule MaraithonWeb.AgentBuilderLive do
     ]
   end
 
+  defp dynamic_input_preview("ai_chief_of_staff", launch) do
+    [
+      %{
+        title: "Operating profile",
+        body: cost_profile_summary("ai_chief_of_staff", launch["cost_profile"])
+      },
+      %{
+        title: "Built-in skills",
+        body:
+          "Runs follow-through, travel logistics, and recurring briefing inside one assistant."
+      },
+      %{
+        title: "Slack scope",
+        body:
+          if(launch["team_id"] == "",
+            do: "Scanning all connected Slack teams for the follow-through skill.",
+            else: "Scoped to Slack team #{launch["team_id"]} for follow-through."
+          )
+      },
+      %{
+        title: "Brief timing",
+        body:
+          "Uses timezone offset #{blank_fallback(launch["timezone_offset_hours"], "-5")} with morning brief #{launch["morning_brief_hour_local"]}:00 and end-of-day brief #{launch["end_of_day_brief_hour_local"]}:00."
+      }
+    ]
+  end
+
+  defp dynamic_input_preview("personal_assistant_agent", launch) do
+    [
+      %{
+        title: "Operating profile",
+        body: cost_profile_summary("personal_assistant_agent", launch["cost_profile"])
+      },
+      %{
+        title: "Travel scan coverage",
+        body:
+          "Checks up to #{launch["email_scan_limit"]} Gmail travel candidates and #{launch["event_scan_limit"]} calendar events over the last #{launch["lookback_hours"]} hours."
+      },
+      %{
+        title: "Delivery timing",
+        body:
+          "Computes the send window from the trip start time, then delivers the day-before brief in your local offset (#{blank_fallback(launch["timezone_offset_hours"], "-5")})."
+      },
+      %{
+        title: "Confidence gate",
+        body:
+          "Requires a minimum itinerary confidence of #{launch["min_confidence"]} before interrupting you."
+      }
+    ]
+  end
+
   defp dynamic_input_preview("slack_followthrough_agent", launch) do
     [
       %{
@@ -1391,12 +1442,32 @@ defmodule MaraithonWeb.AgentBuilderLive do
     ]
   end
 
+  defp dynamic_output_preview("ai_chief_of_staff", _launch) do
+    [
+      %{
+        title: "Stored records",
+        body:
+          "The assistant can persist both follow-through insights and travel-related brief artifacts under one agent identity."
+      }
+    ]
+  end
+
   defp dynamic_output_preview("inbox_calendar_advisor", _launch) do
     [
       %{
         title: "Stored records",
         body:
           "Each insight stores a structured commitment record with evidence and next action, unified across Gmail, Calendar, and Slack sources."
+      }
+    ]
+  end
+
+  defp dynamic_output_preview("personal_assistant_agent", _launch) do
+    [
+      %{
+        title: "Stored records",
+        body:
+          "Each trip persists a travel itinerary plus normalized flight and hotel items, then routes the prep brief through Telegram."
       }
     ]
   end
@@ -1445,6 +1516,20 @@ defmodule MaraithonWeb.AgentBuilderLive do
 
   defp starter_values(spec, launch) do
     case spec.id do
+      "ai_chief_of_staff" ->
+        [
+          %{label: "Cost profile", value: cost_profile_label(launch["cost_profile"])},
+          %{
+            label: "Slack team",
+            value: if(launch["team_id"] == "", do: "All connected teams", else: launch["team_id"])
+          },
+          %{
+            label: "Timezone",
+            value: blank_fallback(launch["timezone_offset_hours"], "-5")
+          },
+          %{label: "Brief max items", value: launch["brief_max_items"]}
+        ]
+
       "prompt_agent" ->
         [
           %{
@@ -1469,6 +1554,15 @@ defmodule MaraithonWeb.AgentBuilderLive do
             value: if(launch["team_id"] == "", do: "All connected teams", else: launch["team_id"])
           },
           %{label: "Slack DM scan", value: launch["dm_scan_limit"]}
+        ]
+
+      "personal_assistant_agent" ->
+        [
+          %{label: "Cost profile", value: cost_profile_label(launch["cost_profile"])},
+          %{label: "Email scan limit", value: launch["email_scan_limit"]},
+          %{label: "Calendar scan limit", value: launch["event_scan_limit"]},
+          %{label: "Lookback", value: launch["lookback_hours"] <> " hours"},
+          %{label: "Min confidence", value: launch["min_confidence"]}
         ]
 
       "slack_followthrough_agent" ->
@@ -1563,6 +1657,18 @@ defmodule MaraithonWeb.AgentBuilderLive do
 
   defp cost_profile_summary("github_product_planner", "thorough"),
     do: "Checks more frequently with a larger planning budget for fast-moving repositories."
+
+  defp cost_profile_summary("ai_chief_of_staff", "lean"),
+    do:
+      "Smaller follow-through scans, a tighter travel confidence gate, and lower assistant-wide spend."
+
+  defp cost_profile_summary("ai_chief_of_staff", "balanced"),
+    do:
+      "Good default coverage across follow-through, travel logistics, and recurring briefing without turning every cycle into a deep crawl."
+
+  defp cost_profile_summary("ai_chief_of_staff", "thorough"),
+    do:
+      "Broader follow-through coverage, faster travel checks, and higher assistant-wide budget for founders who want one proactive operating layer."
 
   defp cost_profile_summary("inbox_calendar_advisor", "lean"),
     do:

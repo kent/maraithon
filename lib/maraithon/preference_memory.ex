@@ -81,6 +81,7 @@ defmodule Maraithon.PreferenceMemory do
 
         Send /prefer followed by a durable rule, for example:
         /prefer ignore receipts
+        /prefer ignore sales outreach unless I've engaged
         /prefer treat investors as urgent
         /prefer don't interrupt after 8pm unless external
         """
@@ -350,7 +351,7 @@ defmodule Maraithon.PreferenceMemory do
     Rules:
     - Only create durable policies that should affect future triage, not one-off tasks.
     - Prefer empty rules if the instruction is ambiguous or too item-specific.
-    - For content_filter, use filters.topics (array of short slugs like receipts, invoices, newsletters, marketing, automated_notifications).
+    - For content_filter, use filters.topics (array of short slugs like receipts, invoices, newsletters, marketing, automated_notifications, sales_outreach, cold_outreach).
     - For urgency_boost, use filters.topics (array like investor, customer, hiring, external) and optionally filters.priority_bias = "high".
     - For quiet_hours, use filters.start_hour_local, filters.end_hour_local, and filters.allow_if_external.
     - Confidence must be between 0 and 1.
@@ -390,7 +391,7 @@ defmodule Maraithon.PreferenceMemory do
     - Use reasoning, not shallow keyword matching.
     - Learn a rule only if the feedback suggests a durable preference that should generalize.
     - Return empty rules for one-off or ambiguous feedback.
-    - Strong candidates include: ignore receipt-like items, treat investors as urgent, suppress after-hours Telegram unless external.
+    - Strong candidates include: ignore receipt-like items, ignore sales outreach unless the user engaged, treat investors as urgent, suppress after-hours Telegram unless external.
     """
   end
 
@@ -934,7 +935,8 @@ defmodule Maraithon.PreferenceMemory do
     Agent
     |> where(
       [agent],
-      agent.user_id == ^user_id and agent.behavior == "founder_followthrough_agent"
+      agent.user_id == ^user_id and
+        agent.behavior in ["founder_followthrough_agent", "ai_chief_of_staff"]
     )
     |> order_by([agent], desc: agent.updated_at, desc: agent.inserted_at)
     |> limit(1)

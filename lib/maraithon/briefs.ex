@@ -1,6 +1,6 @@
 defmodule Maraithon.Briefs do
   @moduledoc """
-  Persistence and Telegram delivery for chief-of-staff briefing messages.
+  Persistence and Telegram delivery for operator briefing messages.
   """
 
   import Ecto.Query
@@ -10,6 +10,7 @@ defmodule Maraithon.Briefs do
   alias Maraithon.Connectors.Telegram
   alias Maraithon.Repo
   alias Maraithon.TelegramAssistant
+  alias Maraithon.Travel
   alias MaraithonWeb.Endpoint
 
   require Logger
@@ -93,6 +94,10 @@ defmodule Maraithon.Briefs do
   def send_brief(%Brief{} = brief) do
     case TelegramAssistant.deliver_brief(brief) do
       :ok ->
+        Brief
+        |> Repo.get!(brief.id)
+        |> maybe_mark_travel_delivered()
+
         :ok
 
       {:fallback, :disabled} ->
@@ -112,14 +117,17 @@ defmodule Maraithon.Briefs do
               {:ok, result} ->
                 message_id = read_message_id(result)
 
-                brief
-                |> Ecto.Changeset.change(%{
-                  status: "sent",
-                  sent_at: DateTime.utc_now(),
-                  provider_message_id: message_id,
-                  error_message: nil
-                })
-                |> Repo.update()
+                {:ok, updated_brief} =
+                  brief
+                  |> Ecto.Changeset.change(%{
+                    status: "sent",
+                    sent_at: DateTime.utc_now(),
+                    provider_message_id: message_id,
+                    error_message: nil
+                  })
+                  |> Repo.update()
+
+                maybe_mark_travel_delivered(updated_brief)
 
                 :ok
 
@@ -192,54 +200,78 @@ defmodule Maraithon.Briefs do
   end
 
   defp render_telegram_text(%Brief{} = brief) do
-    cadence_label = cadence_label(brief.cadence)
-    scheduled_at = Calendar.strftime(brief.scheduled_for, "%Y-%m-%d %H:%M UTC")
+    if travel_brief?(brief) do
+      safe(brief.body)
+    else
+      cadence_label = cadence_label(brief.cadence)
+      scheduled_at = Calendar.strftime(brief.scheduled_for, "%Y-%m-%d %H:%M UTC")
 
-    """
-    <b>#{safe(cadence_label)}</b>
-    <b>#{safe(brief.title)}</b>
+      """
+      <b>#{safe(cadence_label)}</b>
+      <b>#{safe(brief.title)}</b>
 
-    #{safe(brief.summary)}
+      #{safe(brief.summary)}
 
-    #{safe(brief.body)}
+      #{safe(brief.body)}
 
-    <i>Scheduled for #{safe(scheduled_at)}</i>
-    """
-    |> String.trim()
+      <i>Scheduled for #{safe(scheduled_at)}</i>
+      """
+      |> String.trim()
+    end
   end
 
   defp brief_reply_markup(%Brief{} = brief) do
-    buttons = [
-      [
-        %{"text" => "Open Dashboard", "url" => "#{Endpoint.url()}/dashboard"}
+    if travel_brief?(brief) do
+      nil
+    else
+      buttons = [
+        [
+          %{"text" => "Open Dashboard", "url" => "#{Endpoint.url()}/dashboard"}
+        ]
       ]
-    ]
 
-    case brief.metadata do
-      %{"agent_behavior" => behavior} when is_binary(behavior) and behavior != "" ->
-        %{
-          "inline_keyboard" =>
-            buttons ++
-              [
+      case brief.metadata do
+        %{"agent_behavior" => behavior} when is_binary(behavior) and behavior != "" ->
+          %{
+            "inline_keyboard" =>
+              buttons ++
                 [
-                  %{
-                    "text" => "Tune Agent",
-                    "url" =>
-                      "#{Endpoint.url()}/agents/new?behavior=#{URI.encode_www_form(behavior)}"
-                  }
+                  [
+                    %{
+                      "text" => "Tune Agent",
+                      "url" =>
+                        "#{Endpoint.url()}/agents/new?behavior=#{URI.encode_www_form(behavior)}"
+                    }
+                  ]
                 ]
-              ]
-        }
+          }
 
-      _ ->
-        %{"inline_keyboard" => buttons}
+        _ ->
+          %{"inline_keyboard" => buttons}
+      end
     end
   end
 
   defp cadence_label("morning"), do: "Morning brief"
   defp cadence_label("end_of_day"), do: "End-of-day debt"
   defp cadence_label("weekly_review"), do: "Weekly review"
+  defp cadence_label("travel_prep"), do: "Travel prep"
+  defp cadence_label("travel_update"), do: "Travel update"
   defp cadence_label(other), do: other
+
+  defp travel_brief?(%Brief{metadata: %{"brief_type" => type}})
+       when type in ["travel_prep", "travel_update"],
+       do: true
+
+  defp travel_brief?(%Brief{cadence: cadence}) when cadence in ["travel_prep", "travel_update"],
+    do: true
+
+  defp travel_brief?(_brief), do: false
+
+  defp maybe_mark_travel_delivered(%Brief{} = brief) do
+    _ = Travel.note_brief_delivered(brief)
+    :ok
+  end
 
   defp safe(value) when is_binary(value),
     do: Phoenix.HTML.html_escape(value) |> Phoenix.HTML.safe_to_string()

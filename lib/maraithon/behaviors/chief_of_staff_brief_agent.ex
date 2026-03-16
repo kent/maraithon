@@ -23,6 +23,8 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
   def init(config) do
     %{
       user_id: normalize_string(config["user_id"]),
+      assistant_behavior:
+        normalize_string(config["assistant_behavior"]) || "founder_followthrough_agent",
       timezone_offset_hours:
         integer_in_range(config["timezone_offset_hours"], @default_timezone_offset_hours, -12, 14),
       morning_hour:
@@ -130,7 +132,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
       "title" => title,
       "summary" => summary,
       "body" => morning_body(top_items, open_insights, state.timezone_offset_hours, now),
-      "metadata" => metadata_for(plan, "founder_followthrough_agent", open_insights)
+      "metadata" => metadata_for(plan, state.assistant_behavior, open_insights)
     }
   end
 
@@ -173,7 +175,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
           state.timezone_offset_hours,
           plan.scheduled_for
         ),
-      "metadata" => metadata_for(plan, "founder_followthrough_agent", debt_items)
+      "metadata" => metadata_for(plan, state.assistant_behavior, debt_items)
     }
   end
 
@@ -204,7 +206,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
       "summary" =>
         "#{length(weekly_items)} items surfaced this week, #{closed_count} were resolved or triaged, and #{open_count} remain open.",
       "body" => weekly_body(top_open, weekly_items),
-      "metadata" => metadata_for(plan, "founder_followthrough_agent", weekly_items)
+      "metadata" => metadata_for(plan, state.assistant_behavior, weekly_items)
     }
   end
 

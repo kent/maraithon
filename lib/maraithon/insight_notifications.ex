@@ -370,6 +370,7 @@ defmodule Maraithon.InsightNotifications do
     Preference commands:
     /preferences
     /prefer ignore receipts
+    /prefer ignore sales outreach unless I've engaged
     /prefer treat investors as urgent
     /prefer don't interrupt after 8pm unless external
     /forget RULE_ID

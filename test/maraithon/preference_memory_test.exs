@@ -57,6 +57,41 @@ defmodule Maraithon.PreferenceMemoryTest do
     assert PreferenceMemory.render_summary(user_id) =~ "`ignore_receipts`"
   end
 
+  test "stores sales outreach content filters as durable preference rules", %{user_id: user_id} do
+    llm_complete = fn _prompt ->
+      {:ok,
+       Jason.encode!(%{
+         "reply" => "Understood. I'll ignore sales outreach unless you've engaged first.",
+         "rules" => [
+           %{
+             "id" => "ignore_sales_outreach_unless_engaged",
+             "kind" => "content_filter",
+             "label" => "Ignore sales outreach unless engaged",
+             "instruction" =>
+               "Suppress unsolicited sales outreach unless I already engaged or explicitly asked for the information.",
+             "applies_to" => ["gmail", "telegram"],
+             "confidence" => 0.96,
+             "filters" => %{
+               "topics" => ["sales_outreach", "cold_outreach"],
+               "require_human_ask_to_override" => true
+             }
+           }
+         ]
+       })}
+    end
+
+    assert {:ok, %{reply: reply, learned: [rule]}} =
+             PreferenceMemory.apply_explicit_instruction(
+               user_id,
+               "ignore sales outreach unless I've engaged",
+               llm_complete: llm_complete
+             )
+
+    assert reply =~ "ignore sales outreach"
+    assert rule["kind"] == "content_filter"
+    assert rule["filters"]["topics"] == ["sales_outreach", "cold_outreach"]
+  end
+
   test "quiet hours suppress internal telegram interruptions but allow external ones", %{
     user_id: user_id
   } do

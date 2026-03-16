@@ -11,6 +11,8 @@ defmodule Mix.Tasks.Maraithon.Admin do
     activity_limit: :string,
     failure_limit: :string,
     log_limit: :string,
+    user_id: :string,
+    reason: :string,
     app: :string,
     region: :string,
     limit: :string,
@@ -77,6 +79,29 @@ defmodule Mix.Tasks.Maraithon.Admin do
             Mix.raise("Failed to start CLI client: #{inspect(reason)}")
         end
 
+      ["refresh-insights"] ->
+        payload =
+          %{}
+          |> maybe_put_param("user_id", opts[:user_id])
+          |> maybe_put_param("reason", opts[:reason])
+
+        case Client.post("/api/v1/admin/insights/refresh", client_opts(opts, %{}, payload)) do
+          {:ok, body} ->
+            Mix.shell().info(Jason.encode!(body, pretty: true))
+
+          {:error, message} when is_binary(message) ->
+            Mix.raise(message)
+
+          {:error, {:http_status, status, body}} ->
+            Mix.raise("Request failed with status #{status}: #{render_body(body)}")
+
+          {:error, {:request_failed, exception}} ->
+            Mix.raise("Request failed: #{Exception.message(exception)}")
+
+          {:error, {:startup_failed, reason}} ->
+            Mix.raise("Failed to start CLI client: #{inspect(reason)}")
+        end
+
       ["help"] ->
         Mix.shell().info(usage())
 
@@ -85,11 +110,12 @@ defmodule Mix.Tasks.Maraithon.Admin do
     end
   end
 
-  defp client_opts(opts, params) do
+  defp client_opts(opts, params, json \\ nil) do
     []
     |> maybe_put_opt(:base_url, opts[:base_url])
     |> maybe_put_opt(:token, opts[:token])
     |> maybe_put_opt(:params, params)
+    |> maybe_put_opt(:json, json)
   end
 
   defp maybe_put_opt(opts, _key, nil), do: opts
@@ -107,6 +133,7 @@ defmodule Mix.Tasks.Maraithon.Admin do
     """
     Usage:
       mix maraithon.admin dashboard [--activity-limit N] [--failure-limit N] [--log-limit N]
+      mix maraithon.admin refresh-insights [--user-id USER_ID] [--reason TEXT]
       mix maraithon.admin fly-logs [--app APP] [--region REGION] [--limit N] [--next-token TOKEN]
 
     Shared configuration:

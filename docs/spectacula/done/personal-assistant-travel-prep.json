@@ -1,0 +1,88 @@
+{
+  "spec_id": "personal-assistant-travel-prep",
+  "slug": "personal-assistant-travel-prep",
+  "title": "Personal Assistant Agent Travel Prep",
+  "stage": "done",
+  "spec_path": "../specs/personal-assistant-travel-prep.md",
+  "created_at": "2026-03-14T20:27:30Z",
+  "started_at": "2026-03-14T20:43:05Z",
+  "completed_at": "2026-03-14T21:05:00Z",
+  "updated_at": "2026-03-14T21:05:00Z",
+  "summary": "Implemented the Personal Assistant Agent travel-prep flow with required Gmail plus Calendar validation, durable itinerary persistence, screenshot-style Telegram travel briefs, post-send travel updates, and reply-thread itinerary context.",
+  "next_action": "No further implementation work is pending. Optional manual product validation can verify a real flight-plus-hotel itinerary produces the expected Telegram brief and later change update in production.",
+  "blockers": [],
+  "reference_examples": [
+    "docs/spectacula/specs/unified-telegram-operator-chat.md",
+    "docs/spectacula/specs/telegram-assistant-liveness-feedback.md",
+    "docs/spectacula/specs/evidence-first-insight-detail.md"
+  ],
+  "verification": {
+    "format": "passed",
+    "lint": "not_applicable",
+    "typecheck": "not_applicable",
+    "build": "passed",
+    "tests": "passed",
+    "spec_review": "passed",
+    "notes": "`mix precommit` passed on 2026-03-14 after implementing the travel itinerary schemas and context, Gmail message hydration, Calendar-required builder validation, day-before heuristic scheduling, Telegram brief/update delivery, and focused behavior and LiveView coverage. The project has no separate lint or typecheck gate beyond compile and test."
+  },
+  "resume_context": {
+    "last_completed_step": "Implemented the travel-prep spec end to end, updated the spec decisions to match the approved product direction, and passed the full repo verification gate.",
+    "pending_steps": [],
+    "open_questions": [],
+    "last_reviewed_sections": [
+      "1. Overview and Goals",
+      "2. Current State and Problem",
+      "5. Functional Requirements",
+      "6. Data and Domain Model",
+      "7. Backend / Service / Context Changes",
+      "8. Frontend / UI / Rendering Changes",
+      "10. Failure Modes, Edge Cases, and Backward Compatibility",
+      "12. Test Plan and Validation Matrix"
+    ],
+    "artifacts": [
+      "docs/spectacula/specs/personal-assistant-travel-prep.md",
+      "lib/maraithon/travel.ex",
+      "lib/maraithon/travel/itinerary.ex",
+      "lib/maraithon/travel/itinerary_item.ex",
+      "lib/maraithon/travel/extractor.ex",
+      "lib/maraithon/travel/reconciler.ex",
+      "lib/maraithon/travel/brief_renderer.ex",
+      "lib/maraithon/behaviors/personal_assistant_agent.ex",
+      "lib/maraithon/agent_builder.ex",
+      "lib/maraithon_web/live/agent_builder_live.ex",
+      "lib/maraithon/connectors/gmail.ex",
+      "lib/maraithon/briefs.ex",
+      "lib/maraithon/briefs/brief.ex",
+      "lib/maraithon/telegram_assistant/context.ex",
+      "lib/maraithon/telegram_assistant/push_broker.ex",
+      "priv/repo/migrations/20260314204305_create_travel_itineraries.exs",
+      "test/maraithon/travel_test.exs",
+      "test/maraithon/behaviors/personal_assistant_agent_test.exs",
+      "test/maraithon_web/live/agent_builder_live_test.exs"
+    ],
+    "notes": "The delivered flow keeps email as the primary source of record, requires Calendar corroboration, computes the day-before send time from local trip timing, sends both initial and change briefs through the existing `Briefs` plus Telegram push path, and threads the persisted itinerary into Telegram reply context."
+  },
+  "history": [
+    {
+      "at": "2026-03-14T20:27:30Z",
+      "event": "spec_created",
+      "from_stage": null,
+      "to_stage": "specs",
+      "note": "Initial draft created from the current Gmail/Calendar connector stack, the agent runtime, the brief pipeline, and the Telegram assistant push broker."
+    },
+    {
+      "at": "2026-03-14T20:43:05Z",
+      "event": "implementation_started",
+      "from_stage": "specs",
+      "to_stage": "inprogress",
+      "note": "Implementation began after approval of required Calendar corroboration, corrective travel updates, and itinerary-computed send timing."
+    },
+    {
+      "at": "2026-03-14T21:05:00Z",
+      "event": "implementation_completed",
+      "from_stage": "inprogress",
+      "to_stage": "done",
+      "note": "Implemented the Personal Assistant Agent travel flow, including itinerary persistence, Gmail plus Calendar reconciliation, Telegram prep/update pushes, builder integration, and passing `mix precommit` verification."
+    }
+  ]
+}

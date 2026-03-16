@@ -78,6 +78,8 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
              urgency: 0.7,
              interrupt_now: true,
              why_now: brief.summary,
+             structured_data: brief_structured_data(brief),
+             conversation_metadata: brief_conversation_metadata(brief),
              telegram_opts: [parse_mode: "HTML", reply_markup: payload.reply_markup]
            }) do
         {:ok, %{decision: "sent_now", message_id: message_id}} ->
@@ -151,13 +153,15 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
                  "root_message_id" => message_id,
                  "linked_delivery_id" => candidate.linked_delivery_id,
                  "linked_insight_id" => candidate.linked_insight_id,
-                 "metadata" => %{
-                   "mode" => "push_thread",
-                   "last_push_origin" => %{
-                     "origin_type" => candidate.origin_type,
-                     "origin_id" => candidate.origin_id
+                 "metadata" =>
+                   %{
+                     "mode" => "push_thread",
+                     "last_push_origin" => %{
+                       "origin_type" => candidate.origin_type,
+                       "origin_id" => candidate.origin_id
+                     }
                    }
-                 }
+                   |> Map.merge(candidate.conversation_metadata)
                }),
              {:ok, {_conversation, turn}} <-
                TelegramConversations.append_turn(conversation, %{
@@ -167,11 +171,13 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
                  "turn_kind" => "assistant_push",
                  "origin_type" => candidate.origin_type,
                  "origin_id" => candidate.origin_id,
-                 "structured_data" => %{
-                   "title" => candidate.title,
-                   "why_now" => candidate.why_now,
-                   "urgency" => candidate.urgency
-                 }
+                 "structured_data" =>
+                   %{
+                     "title" => candidate.title,
+                     "why_now" => candidate.why_now,
+                     "urgency" => candidate.urgency
+                   }
+                   |> Map.merge(candidate.structured_data)
                }),
              {:ok, _receipt} <-
                TelegramAssistant.record_push_receipt(%{
@@ -206,6 +212,10 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
       urgency: normalize_urgency(Map.get(candidate, :urgency) || candidate["urgency"]),
       interrupt_now: truthy?(Map.get(candidate, :interrupt_now) || candidate["interrupt_now"]),
       why_now: Map.get(candidate, :why_now) || candidate["why_now"],
+      structured_data:
+        Map.get(candidate, :structured_data) || candidate["structured_data"] || %{},
+      conversation_metadata:
+        Map.get(candidate, :conversation_metadata) || candidate["conversation_metadata"] || %{},
       dedupe_key:
         Map.get(candidate, :dedupe_key) || candidate["dedupe_key"] ||
           "telegram_push:#{Map.get(candidate, :origin_type) || candidate["origin_type"]}:#{Map.get(candidate, :origin_id) || candidate["origin_id"]}",
@@ -264,4 +274,21 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
   defp normalize_id(value) when is_integer(value), do: Integer.to_string(value)
   defp normalize_id(value) when is_binary(value), do: value
   defp normalize_id(value), do: to_string(value)
+
+  defp brief_structured_data(%Brief{metadata: %{"travel_itinerary_id" => itinerary_id} = metadata})
+       when is_binary(itinerary_id) do
+    %{
+      "brief_type" => metadata["brief_type"] || "travel_prep",
+      "travel_itinerary_id" => itinerary_id
+    }
+  end
+
+  defp brief_structured_data(_brief), do: %{}
+
+  defp brief_conversation_metadata(%Brief{metadata: %{"travel_itinerary_id" => itinerary_id}})
+       when is_binary(itinerary_id) do
+    %{"travel_itinerary_id" => itinerary_id}
+  end
+
+  defp brief_conversation_metadata(_brief), do: %{}
 end

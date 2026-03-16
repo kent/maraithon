@@ -1,0 +1,76 @@
+{
+  "spec_id": "cold-outreach-disqualification-followthrough-insights",
+  "slug": "cold-outreach-disqualification-followthrough-insights",
+  "title": "Cold-Outreach Disqualification For Follow-Through Insights",
+  "stage": "done",
+  "spec_path": "../specs/cold-outreach-disqualification-followthrough-insights.md",
+  "created_at": "2026-03-15T11:30:55Z",
+  "started_at": "2026-03-15T11:35:00Z",
+  "completed_at": "2026-03-15T15:40:02Z",
+  "updated_at": "2026-03-15T15:40:02Z",
+  "summary": "Implemented cold-outreach disqualification for Gmail follow-through insights by adding thread engagement context, explicit positive and negative evidence fields, deterministic suppression of clear outbound sales sequences before the LLM, a stricter reply-obligation gate after the LLM, durable sales-outreach preference memory coverage, and a regression test for the Ayoub/Outly-style false positive.",
+  "next_action": "Deploy and monitor production Gmail follow-through insights to confirm cold outreach stays out of Telegram while engaged external threads still surface.",
+  "blockers": [],
+  "reference_examples": [
+    "docs/spectacula/specs/conversation-context-aware-followthrough-insights.md",
+    "docs/spectacula/specs/evidence-first-insight-detail.md"
+  ],
+  "verification": {
+    "format": "passed",
+    "lint": "not_applicable",
+    "typecheck": "not_applicable",
+    "build": "passed",
+    "tests": "passed",
+    "spec_review": "passed",
+    "notes": "`mix precommit` passed on 2026-03-15 after implementing Gmail cold-outreach suppression, requiring both positive and negative reply-owed evidence in the LLM contract, tightening post-LLM acceptance so ambiguous or disqualified outreach cannot persist as actionable insight rows, extending durable preference memory for `sales_outreach` and `cold_outreach`, and adding a regression test for the Ayoub/Outly sequence."
+  },
+  "resume_context": {
+    "last_completed_step": "Implemented the cold-outreach disqualification flow end to end and passed the full repo verification gate.",
+    "pending_steps": [],
+    "open_questions": [
+      "Whether `digest` should become a first-class persisted queue instead of mapping to non-persistence in the current pipeline",
+      "Whether Telegram staging should enforce `sales_outreach` and `cold_outreach` content filters synchronously in a later pass"
+    ],
+    "last_reviewed_sections": [
+      "2. Current State and Problem",
+      "5. Functional Requirements",
+      "6. Data and Domain Model",
+      "7. Backend / Service / Context Changes",
+      "10. Edge Cases and Failure Handling",
+      "12. Test Plan and Validation Matrix"
+    ],
+    "artifacts": [
+      "docs/spectacula/specs/cold-outreach-disqualification-followthrough-insights.md",
+      "lib/maraithon/behaviors/inbox_calendar_advisor.ex",
+      "lib/maraithon/followthrough/conversation_context.ex",
+      "lib/maraithon/preference_memory.ex",
+      "lib/maraithon/insight_notifications.ex",
+      "test/maraithon/behaviors/inbox_calendar_advisor_test.exs",
+      "test/maraithon/preference_memory_test.exs"
+    ],
+    "notes": "The implementation now treats clear outbound sales sequences as disqualifying unless the operator already engaged or made an explicit commitment, carries structured `evidence_for_reply_owed` and `evidence_against_reply_owed` metadata through the Gmail follow-through pipeline, and teaches preference memory to capture durable `sales_outreach` and `cold_outreach` suppression rules."
+  },
+  "history": [
+    {
+      "at": "2026-03-15T11:30:55Z",
+      "event": "spec_created",
+      "from_stage": null,
+      "to_stage": "specs",
+      "note": "Drafted a Spectacula spec for disqualifying cold outreach before Gmail follow-through insights can become actionable."
+    },
+    {
+      "at": "2026-03-15T11:35:00Z",
+      "event": "implementation_started",
+      "from_stage": "specs",
+      "to_stage": "inprogress",
+      "note": "Implementation began for Gmail triage hints, conversation-context engagement fields, prompt contract changes, deterministic disqualification, durable preference-memory support, and regression coverage."
+    },
+    {
+      "at": "2026-03-15T15:40:02Z",
+      "event": "implementation_completed",
+      "from_stage": "inprogress",
+      "to_stage": "done",
+      "note": "Completed the cold-outreach disqualification feature, passed `mix precommit`, and recorded the shipped behavior in the done-stage Spectacula manifest."
+    }
+  ]
+}

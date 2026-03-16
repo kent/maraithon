@@ -3,6 +3,7 @@ defmodule MaraithonWeb.AdminController do
 
   alias Maraithon.Admin
   alias Maraithon.Connections
+  alias Maraithon.Insights.Refresh, as: InsightRefresh
 
   def dashboard(conn, params) do
     with {:ok, activity_limit} <-
@@ -99,6 +100,18 @@ defmodule MaraithonWeb.AdminController do
       end
 
     json(conn, serialize_connections_snapshot(snapshot))
+  end
+
+  def refresh_insights(conn, params) do
+    user_id = parse_user_id(params["user_id"])
+
+    {:ok, result} =
+      InsightRefresh.queue_for_user(user_id,
+        requested_by: "admin_api",
+        reason: blank_to_nil(params["reason"])
+      )
+
+    json(conn, normalize_json(result))
   end
 
   def disconnect_connection(conn, %{"provider" => provider} = params) do

@@ -4,6 +4,10 @@ defmodule Maraithon.AgentBuilder do
   """
 
   alias Maraithon.Agents.Agent
+  alias Maraithon.ChiefOfStaff.Skills, as: ChiefOfStaffSkills
+  alias Maraithon.ConnectedAccounts
+  alias Maraithon.OAuth
+  alias Maraithon.OAuth.Google
 
   @default_prompt "You are a helpful assistant that watches for events and responds thoughtfully."
   @default_tools "read_file,search_files,http_get"
@@ -48,6 +52,86 @@ defmodule Maraithon.AgentBuilder do
   }
 
   @behavior_specs [
+    %{
+      id: "ai_chief_of_staff",
+      label: "AI Chief of Staff",
+      category: "Workflow",
+      summary:
+        "One assistant that combines follow-through, travel logistics, and recurring chief-of-staff briefing as built-in skills.",
+      inputs: [
+        "Gmail, Calendar, and Slack activity relevant to commitments, reply debt, and travel logistics",
+        "Connected Telegram delivery for proactive nudges, travel briefs, and recurring summaries",
+        "Shared operator preferences that shape interruption policy across all built-in skills"
+      ],
+      outputs: [
+        "Unified insights for high-signal unresolved follow-through across inbox, meetings, and Slack",
+        "Travel logistics briefs and updates for upcoming trips",
+        "Morning, end-of-day, and weekly Chief of Staff summaries from the same assistant identity"
+      ],
+      fields:
+        ~w(team_id timezone_offset_hours morning_brief_hour_local end_of_day_brief_hour_local weekly_review_day_local weekly_review_hour_local brief_max_items),
+      simple_fields: ~w(team_id timezone_offset_hours cost_profile),
+      defaults: %{
+        "prompt" => "",
+        "tools" => "",
+        "memory_limit" => "",
+        "team_id" => "",
+        "timezone_offset_hours" => "-5",
+        "morning_brief_hour_local" => "8",
+        "end_of_day_brief_hour_local" => "18",
+        "weekly_review_day_local" => "5",
+        "weekly_review_hour_local" => "16",
+        "brief_max_items" => "3"
+      },
+      requirements: [
+        %{
+          kind: :provider_service,
+          provider: "google",
+          service: "gmail",
+          label: "Google Gmail",
+          description: "Needed for follow-through loops and travel logistics.",
+          required?: true
+        },
+        %{
+          kind: :provider_service,
+          provider: "google",
+          service: "calendar",
+          label: "Google Calendar",
+          description:
+            "Needed for meeting context, follow-through timing, and trip corroboration.",
+          required?: true
+        },
+        %{
+          kind: :provider_service,
+          provider: "slack",
+          service: "channels",
+          label: "Slack Channels",
+          description: "Needed to detect channel commitments and open loops.",
+          required?: true
+        },
+        %{
+          kind: :provider_service,
+          provider: "slack",
+          service: "dms",
+          label: "Slack Personal DMs",
+          description: "Needed to detect private reply debt and direct follow-through loops.",
+          required?: true
+        },
+        %{
+          kind: :provider,
+          provider: "telegram",
+          label: "Telegram",
+          description:
+            "Needed so the assistant can deliver the strongest nudges, travel briefs, and recurring summaries.",
+          required?: true
+        }
+      ],
+      suggestions: [
+        "Use this when you want one assistant persona instead of separate travel and follow-through agents.",
+        "Keep the timezone aligned to your working day so briefs and travel logistics land when you can still react.",
+        "Start on the balanced profile. It gives follow-through enough coverage and keeps travel logistics active without turning every cycle into a deep crawl."
+      ]
+    },
     %{
       id: "prompt_agent",
       label: "Prompt Agent",
@@ -123,6 +207,68 @@ defmodule Maraithon.AgentBuilder do
         "Point this at one product repository, not a monorepo grab bag, so the recommendations stay coherent.",
         "Keep `feature_limit` at 2 or 3. A daily shortlist should force prioritization instead of becoming a backlog dump.",
         "Use the default daily cadence first, then tighten it only if you truly want more operator interrupts."
+      ]
+    },
+    %{
+      id: "personal_assistant_agent",
+      label: "Personal Assistant Agent",
+      category: "Workflow",
+      summary:
+        "Watches Gmail and Calendar for upcoming travel, assembles an itinerary, and sends a Telegram prep brief the day before the trip.",
+      inputs: [
+        "Travel confirmation emails from Gmail",
+        "Calendar events that corroborate destination and timing",
+        "A recurring wakeup cadence that catches upcoming trips and email changes"
+      ],
+      outputs: [
+        "Persisted travel itineraries with normalized flight and hotel items",
+        "Telegram day-before travel briefs",
+        "Telegram follow-up updates when the itinerary materially changes"
+      ],
+      fields:
+        ~w(email_scan_limit event_scan_limit lookback_hours min_confidence timezone_offset_hours wakeup_interval_ms),
+      simple_fields: ~w(timezone_offset_hours cost_profile),
+      defaults: %{
+        "prompt" => "",
+        "tools" => "",
+        "memory_limit" => "",
+        "email_scan_limit" => "25",
+        "event_scan_limit" => "25",
+        "lookback_hours" => "720",
+        "min_confidence" => "0.8",
+        "timezone_offset_hours" => "-5",
+        "wakeup_interval_ms" => "1800000"
+      },
+      requirements: [
+        %{
+          kind: :provider_service,
+          provider: "google",
+          service: "gmail",
+          label: "Google Gmail",
+          description: "Required to find flight and hotel confirmations.",
+          required?: true
+        },
+        %{
+          kind: :provider_service,
+          provider: "google",
+          service: "calendar",
+          label: "Google Calendar",
+          description: "Required to corroborate trip timing and destination context.",
+          required?: true
+        },
+        %{
+          kind: :provider,
+          provider: "telegram",
+          label: "Telegram",
+          description:
+            "Required so Maraithon can deliver the travel brief and any later updates.",
+          required?: true
+        }
+      ],
+      suggestions: [
+        "Keep the timezone aligned to your working day so day-before travel briefs land when you still have time to react.",
+        "Use the balanced profile first. It keeps scan volume high enough for travel confirmations without turning every inbox scan into a deep crawl.",
+        "Raise the confidence threshold if you only want the clearest travel briefs and change alerts."
       ]
     },
     %{
@@ -412,6 +558,59 @@ defmodule Maraithon.AgentBuilder do
   }
 
   @cost_profiles %{
+    "ai_chief_of_staff" => %{
+      "lean" => %{
+        "follow_email_scan_limit" => "8",
+        "follow_event_scan_limit" => "6",
+        "follow_prep_window_hours" => "24",
+        "follow_channel_scan_limit" => "40",
+        "follow_dm_scan_limit" => "20",
+        "follow_lookback_hours" => "24",
+        "follow_max_insights_per_cycle" => "3",
+        "follow_min_confidence" => "0.8",
+        "travel_email_scan_limit" => "12",
+        "travel_event_scan_limit" => "10",
+        "travel_lookback_hours" => "336",
+        "travel_min_confidence" => "0.86",
+        "travel_wakeup_interval_ms" => "3600000",
+        "budget_llm_calls" => "180",
+        "budget_tool_calls" => "320"
+      },
+      "balanced" => %{
+        "follow_email_scan_limit" => "14",
+        "follow_event_scan_limit" => "12",
+        "follow_prep_window_hours" => "36",
+        "follow_channel_scan_limit" => "80",
+        "follow_dm_scan_limit" => "50",
+        "follow_lookback_hours" => "48",
+        "follow_max_insights_per_cycle" => "5",
+        "follow_min_confidence" => "0.72",
+        "travel_email_scan_limit" => "25",
+        "travel_event_scan_limit" => "25",
+        "travel_lookback_hours" => "720",
+        "travel_min_confidence" => "0.8",
+        "travel_wakeup_interval_ms" => "1800000",
+        "budget_llm_calls" => "300",
+        "budget_tool_calls" => "520"
+      },
+      "thorough" => %{
+        "follow_email_scan_limit" => "24",
+        "follow_event_scan_limit" => "18",
+        "follow_prep_window_hours" => "48",
+        "follow_channel_scan_limit" => "120",
+        "follow_dm_scan_limit" => "80",
+        "follow_lookback_hours" => "72",
+        "follow_max_insights_per_cycle" => "7",
+        "follow_min_confidence" => "0.66",
+        "travel_email_scan_limit" => "40",
+        "travel_event_scan_limit" => "40",
+        "travel_lookback_hours" => "1080",
+        "travel_min_confidence" => "0.74",
+        "travel_wakeup_interval_ms" => "900000",
+        "budget_llm_calls" => "520",
+        "budget_tool_calls" => "850"
+      }
+    },
     "prompt_agent" => %{
       "lean" => %{
         "memory_limit" => "20",
@@ -447,6 +646,35 @@ defmodule Maraithon.AgentBuilder do
         "wakeup_interval_ms" => "43200000",
         "budget_llm_calls" => "120",
         "budget_tool_calls" => "40"
+      }
+    },
+    "personal_assistant_agent" => %{
+      "lean" => %{
+        "email_scan_limit" => "12",
+        "event_scan_limit" => "10",
+        "lookback_hours" => "336",
+        "min_confidence" => "0.86",
+        "wakeup_interval_ms" => "3600000",
+        "budget_llm_calls" => "60",
+        "budget_tool_calls" => "120"
+      },
+      "balanced" => %{
+        "email_scan_limit" => "25",
+        "event_scan_limit" => "25",
+        "lookback_hours" => "720",
+        "min_confidence" => "0.8",
+        "wakeup_interval_ms" => "1800000",
+        "budget_llm_calls" => "120",
+        "budget_tool_calls" => "220"
+      },
+      "thorough" => %{
+        "email_scan_limit" => "40",
+        "event_scan_limit" => "40",
+        "lookback_hours" => "1080",
+        "min_confidence" => "0.74",
+        "wakeup_interval_ms" => "900000",
+        "budget_llm_calls" => "240",
+        "budget_tool_calls" => "420"
       }
     },
     "inbox_calendar_advisor" => %{
@@ -580,7 +808,7 @@ defmodule Maraithon.AgentBuilder do
         _ -> @launch_defaults["behavior"]
       end
 
-    defaults = base_launch_params_for_behavior(behavior)
+    defaults = launch_params_for_behavior(behavior)
 
     normalized =
       Enum.reduce(defaults, %{}, fn {key, default}, acc ->
@@ -786,6 +1014,180 @@ defmodule Maraithon.AgentBuilder do
          "base_branch" => normalize_branch(launch["base_branch"]),
          "feature_limit" => feature_limit,
          "wakeup_interval_ms" => wakeup_interval_ms
+       }}
+    end
+  end
+
+  defp build_behavior_config("ai_chief_of_staff", launch, user_id) do
+    enabled_skills = Maraithon.Behaviors.AIChiefOfStaff.default_skill_ids()
+
+    with {:ok, timezone_offset_hours} <-
+           parse_integer_in_range(launch["timezone_offset_hours"], "Timezone offset", -12, 14),
+         {:ok, morning_brief_hour_local} <-
+           parse_integer_in_range(launch["morning_brief_hour_local"], "Morning brief hour", 0, 23),
+         {:ok, end_of_day_brief_hour_local} <-
+           parse_integer_in_range(
+             launch["end_of_day_brief_hour_local"],
+             "End-of-day brief hour",
+             0,
+             23
+           ),
+         {:ok, weekly_review_day_local} <-
+           parse_integer_in_range(launch["weekly_review_day_local"], "Weekly review day", 1, 7),
+         {:ok, weekly_review_hour_local} <-
+           parse_integer_in_range(launch["weekly_review_hour_local"], "Weekly review hour", 0, 23),
+         {:ok, brief_max_items} <-
+           parse_integer_in_range(launch["brief_max_items"], "Brief max items", 1, 5),
+         {:ok, follow_email_scan_limit} <-
+           parse_positive_integer(
+             launch["follow_email_scan_limit"],
+             "Chief of Staff followthrough email scan limit"
+           ),
+         {:ok, follow_event_scan_limit} <-
+           parse_positive_integer(
+             launch["follow_event_scan_limit"],
+             "Chief of Staff followthrough event scan limit"
+           ),
+         {:ok, follow_prep_window_hours} <-
+           parse_positive_integer(
+             launch["follow_prep_window_hours"],
+             "Chief of Staff followthrough prep window"
+           ),
+         {:ok, follow_channel_scan_limit} <-
+           parse_positive_integer(
+             launch["follow_channel_scan_limit"],
+             "Chief of Staff Slack channel scan limit"
+           ),
+         {:ok, follow_dm_scan_limit} <-
+           parse_positive_integer(
+             launch["follow_dm_scan_limit"],
+             "Chief of Staff Slack DM scan limit"
+           ),
+         {:ok, follow_lookback_hours} <-
+           parse_positive_integer(
+             launch["follow_lookback_hours"],
+             "Chief of Staff followthrough lookback"
+           ),
+         {:ok, follow_max_insights_per_cycle} <-
+           parse_positive_integer(
+             launch["follow_max_insights_per_cycle"],
+             "Chief of Staff max insights per cycle"
+           ),
+         {:ok, follow_min_confidence} <-
+           parse_float_in_range(
+             launch["follow_min_confidence"],
+             "Chief of Staff followthrough minimum confidence",
+             0.0,
+             1.0
+           ),
+         {:ok, travel_email_scan_limit} <-
+           parse_positive_integer(
+             launch["travel_email_scan_limit"],
+             "Chief of Staff travel email scan limit"
+           ),
+         {:ok, travel_event_scan_limit} <-
+           parse_positive_integer(
+             launch["travel_event_scan_limit"],
+             "Chief of Staff travel event scan limit"
+           ),
+         {:ok, travel_lookback_hours} <-
+           parse_positive_integer(
+             launch["travel_lookback_hours"],
+             "Chief of Staff travel lookback"
+           ),
+         {:ok, travel_min_confidence} <-
+           parse_float_in_range(
+             launch["travel_min_confidence"],
+             "Chief of Staff travel minimum confidence",
+             0.0,
+             1.0
+           ),
+         {:ok, travel_wakeup_interval_ms} <-
+           parse_positive_integer(
+             launch["travel_wakeup_interval_ms"],
+             "Chief of Staff travel wakeup interval"
+           ) do
+      team_id = empty_to_nil(launch["team_id"])
+
+      skill_configs = %{
+        "followthrough" => %{
+          "user_id" => user_id,
+          "team_id" => team_id,
+          "email_scan_limit" => follow_email_scan_limit,
+          "event_scan_limit" => follow_event_scan_limit,
+          "prep_window_hours" => follow_prep_window_hours,
+          "channel_scan_limit" => follow_channel_scan_limit,
+          "dm_scan_limit" => follow_dm_scan_limit,
+          "lookback_hours" => follow_lookback_hours,
+          "max_insights_per_cycle" => follow_max_insights_per_cycle,
+          "min_confidence" => follow_min_confidence,
+          "timezone_offset_hours" => timezone_offset_hours
+        },
+        "travel_logistics" => %{
+          "user_id" => user_id,
+          "email_scan_limit" => travel_email_scan_limit,
+          "event_scan_limit" => travel_event_scan_limit,
+          "lookback_hours" => travel_lookback_hours,
+          "min_confidence" => travel_min_confidence,
+          "timezone_offset_hours" => timezone_offset_hours,
+          "wakeup_interval_ms" => travel_wakeup_interval_ms
+        },
+        "briefing" => %{
+          "user_id" => user_id,
+          "assistant_behavior" => "ai_chief_of_staff",
+          "timezone_offset_hours" => timezone_offset_hours,
+          "morning_brief_hour_local" => morning_brief_hour_local,
+          "end_of_day_brief_hour_local" => end_of_day_brief_hour_local,
+          "weekly_review_day_local" => weekly_review_day_local,
+          "weekly_review_hour_local" => weekly_review_hour_local,
+          "brief_max_items" => brief_max_items
+        }
+      }
+
+      {:ok,
+       %{
+         "name" => launch_name(launch),
+         "user_id" => user_id,
+         "enabled_skills" => enabled_skills,
+         "team_id" => team_id,
+         "timezone_offset_hours" => timezone_offset_hours,
+         "morning_brief_hour_local" => morning_brief_hour_local,
+         "end_of_day_brief_hour_local" => end_of_day_brief_hour_local,
+         "weekly_review_day_local" => weekly_review_day_local,
+         "weekly_review_hour_local" => weekly_review_hour_local,
+         "brief_max_items" => brief_max_items,
+         "skill_configs" => skill_configs,
+         "subscribe" => ChiefOfStaffSkills.subscriptions(skill_configs, user_id, enabled_skills)
+       }}
+      |> drop_nil_values()
+    end
+  end
+
+  defp build_behavior_config("personal_assistant_agent", launch, user_id) do
+    with :ok <- validate_personal_assistant_prereqs(user_id),
+         {:ok, email_scan_limit} <-
+           parse_positive_integer(launch["email_scan_limit"], "Email scan limit"),
+         {:ok, event_scan_limit} <-
+           parse_positive_integer(launch["event_scan_limit"], "Calendar event scan limit"),
+         {:ok, lookback_hours} <-
+           parse_positive_integer(launch["lookback_hours"], "Lookback window"),
+         {:ok, min_confidence} <-
+           parse_float_in_range(launch["min_confidence"], "Minimum confidence", 0.0, 1.0),
+         {:ok, timezone_offset_hours} <-
+           parse_integer_in_range(launch["timezone_offset_hours"], "Timezone offset", -12, 14),
+         {:ok, wakeup_interval_ms} <-
+           parse_positive_integer(launch["wakeup_interval_ms"], "Wakeup interval") do
+      {:ok,
+       %{
+         "name" => launch_name(launch),
+         "user_id" => user_id,
+         "email_scan_limit" => email_scan_limit,
+         "event_scan_limit" => event_scan_limit,
+         "lookback_hours" => lookback_hours,
+         "min_confidence" => min_confidence,
+         "timezone_offset_hours" => timezone_offset_hours,
+         "wakeup_interval_ms" => wakeup_interval_ms,
+         "subscribe" => ["email:#{user_id}", "calendar:#{user_id}"]
        }}
     end
   end
@@ -1045,6 +1447,35 @@ defmodule Maraithon.AgentBuilder do
       "wakeup_interval_ms"
     ]
 
+  defp known_config_keys("personal_assistant_agent"),
+    do: [
+      "name",
+      "user_id",
+      "email_scan_limit",
+      "event_scan_limit",
+      "lookback_hours",
+      "min_confidence",
+      "timezone_offset_hours",
+      "wakeup_interval_ms",
+      "subscribe"
+    ]
+
+  defp known_config_keys("ai_chief_of_staff"),
+    do: [
+      "name",
+      "user_id",
+      "enabled_skills",
+      "team_id",
+      "timezone_offset_hours",
+      "morning_brief_hour_local",
+      "end_of_day_brief_hour_local",
+      "weekly_review_day_local",
+      "weekly_review_hour_local",
+      "brief_max_items",
+      "skill_configs",
+      "subscribe"
+    ]
+
   defp known_config_keys("inbox_calendar_advisor"),
     do: [
       "name",
@@ -1099,4 +1530,44 @@ defmodule Maraithon.AgentBuilder do
   defp resolve_behavior_id(id) when is_binary(id) do
     Map.get(@behavior_spec_aliases, id, id)
   end
+
+  defp validate_personal_assistant_prereqs(user_id) when is_binary(user_id) do
+    required_google_scopes =
+      Google.scopes_for(["gmail", "calendar"])
+      |> MapSet.new()
+
+    google_ready? =
+      OAuth.list_user_tokens(user_id)
+      |> Enum.filter(fn token -> google_provider?(token.provider) end)
+      |> Enum.any?(fn token ->
+        granted = MapSet.new(token.scopes || [])
+        MapSet.subset?(required_google_scopes, granted)
+      end)
+
+    telegram_ready? =
+      case ConnectedAccounts.get(user_id, "telegram") do
+        %{status: "connected"} -> true
+        _ -> false
+      end
+
+    cond do
+      not google_ready? ->
+        {:error,
+         "Connect one Google account with both Gmail and Calendar before launching this agent"}
+
+      not telegram_ready? ->
+        {:error, "Connect Telegram before launching this agent"}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp validate_personal_assistant_prereqs(_user_id), do: {:error, "User is required"}
+
+  defp google_provider?(provider) when is_binary(provider) do
+    provider == "google" or String.starts_with?(provider, "google:")
+  end
+
+  defp google_provider?(_provider), do: false
 end

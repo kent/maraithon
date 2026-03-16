@@ -5,6 +5,7 @@ defmodule Maraithon.BehaviorsTest do
 
   describe "exists?/1" do
     test "returns true for existing behaviors" do
+      assert Behaviors.exists?("ai_chief_of_staff")
       assert Behaviors.exists?("prompt_agent")
       assert Behaviors.exists?("codebase_advisor")
       assert Behaviors.exists?("watchdog_summarizer")
@@ -21,6 +22,7 @@ defmodule Maraithon.BehaviorsTest do
 
   describe "get/1" do
     test "returns module for existing behavior" do
+      assert Behaviors.get("ai_chief_of_staff") == Maraithon.Behaviors.AIChiefOfStaff
       assert Behaviors.get("prompt_agent") == Maraithon.Behaviors.PromptAgent
       assert Behaviors.get("codebase_advisor") == Maraithon.Behaviors.CodebaseAdvisor
 
@@ -56,6 +58,7 @@ defmodule Maraithon.BehaviorsTest do
       behaviors = Behaviors.list()
 
       assert is_list(behaviors)
+      assert "ai_chief_of_staff" in behaviors
       assert "prompt_agent" in behaviors
       assert "codebase_advisor" in behaviors
       assert "watchdog_summarizer" in behaviors

@@ -16,18 +16,20 @@ defmodule Maraithon.TelegramAssistant.Context do
   alias Maraithon.Repo
   alias Maraithon.TelegramConversations
   alias Maraithon.TelegramConversations.Conversation
+  alias Maraithon.Travel
 
   def build(attrs) when is_map(attrs) do
     user_id = fetch_string!(attrs, :user_id)
     conversation = Map.get(attrs, :conversation)
     linked_delivery = Map.get(attrs, :linked_delivery)
     linked_insight = Map.get(attrs, :linked_insight)
+    linked_travel = linked_travel_itinerary(conversation, user_id)
 
     %{
       user: %{id: user_id},
       chat: %{id: fetch_string!(attrs, :chat_id)},
       conversation: serialize_conversation(conversation),
-      linked_item: serialize_linked_item(linked_delivery, linked_insight),
+      linked_item: serialize_linked_item(linked_delivery, linked_insight, linked_travel),
       recent_turns: serialize_recent_turns(conversation),
       preference_memory: PreferenceMemory.prompt_context(user_id),
       operator_memory: OperatorMemory.summaries_for_prompt(user_id),
@@ -48,6 +50,7 @@ defmodule Maraithon.TelegramAssistant.Context do
       mode: get_in(conversation.metadata || %{}, ["mode"]),
       linked_delivery_id: conversation.linked_delivery_id,
       linked_insight_id: conversation.linked_insight_id,
+      travel_itinerary_id: get_in(conversation.metadata || %{}, ["travel_itinerary_id"]),
       latest_prepared_action_id:
         get_in(conversation.metadata || %{}, ["latest_prepared_action_id"])
     }
@@ -71,7 +74,7 @@ defmodule Maraithon.TelegramAssistant.Context do
 
   defp serialize_recent_turns(_conversation), do: []
 
-  defp serialize_linked_item(%Delivery{} = delivery, linked_insight) do
+  defp serialize_linked_item(%Delivery{} = delivery, linked_insight, linked_travel) do
     insight = linked_insight || Repo.preload(delivery, :insight).insight
     deliveries = insight_deliveries(insight, delivery.user_id)
     detail = insight && Detail.build(insight, deliveries)
@@ -79,20 +82,31 @@ defmodule Maraithon.TelegramAssistant.Context do
     %{
       delivery: serialize_delivery(delivery),
       insight: serialize_insight(insight),
-      detail: detail && serialize_detail(detail)
+      detail: detail && serialize_detail(detail),
+      travel: linked_travel && Travel.serialize_for_prompt(linked_travel)
     }
   end
 
-  defp serialize_linked_item(_delivery, nil), do: %{}
+  defp serialize_linked_item(_delivery, nil, nil), do: %{}
 
-  defp serialize_linked_item(_delivery, insight) do
+  defp serialize_linked_item(_delivery, nil, linked_travel) do
+    %{
+      delivery: nil,
+      insight: nil,
+      detail: nil,
+      travel: Travel.serialize_for_prompt(linked_travel)
+    }
+  end
+
+  defp serialize_linked_item(_delivery, insight, linked_travel) do
     deliveries = insight_deliveries(insight, insight.user_id)
     detail = Detail.build(insight, deliveries)
 
     %{
       delivery: nil,
       insight: serialize_insight(insight),
-      detail: serialize_detail(detail)
+      detail: serialize_detail(detail),
+      travel: linked_travel && Travel.serialize_for_prompt(linked_travel)
     }
   end
 
@@ -255,6 +269,18 @@ defmodule Maraithon.TelegramAssistant.Context do
     end)
     |> Enum.uniq()
   end
+
+  defp linked_travel_itinerary(%Conversation{} = conversation, user_id) do
+    case get_in(conversation.metadata || %{}, ["travel_itinerary_id"]) do
+      itinerary_id when is_binary(itinerary_id) ->
+        Travel.get_itinerary_for_user(user_id, itinerary_id)
+
+      _ ->
+        nil
+    end
+  end
+
+  defp linked_travel_itinerary(_conversation, _user_id), do: nil
 
   defp fetch_string!(attrs, key) do
     value = Map.get(attrs, key) || Map.get(attrs, Atom.to_string(key))

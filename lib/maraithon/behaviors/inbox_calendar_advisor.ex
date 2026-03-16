@@ -94,6 +94,44 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
     "friday"
   ]
 
+  @cold_outreach_social_terms [
+    "saw your post",
+    "saw your tweet",
+    "saw your note",
+    "saw your article"
+  ]
+
+  @cold_outreach_meeting_terms [
+    "calendly",
+    "book time",
+    "book a time",
+    "book some time",
+    "quick call",
+    "quick chat",
+    "15-minute",
+    "15 minute",
+    "demo"
+  ]
+
+  @cold_outreach_pitch_terms [
+    "outbound sales",
+    "sales on autopilot",
+    "prospecting",
+    "outbound prospecting",
+    "automated linkedin",
+    "lead gen",
+    "lead generation"
+  ]
+
+  @cold_outreach_sequence_terms [
+    "following up",
+    "follow up",
+    "follow-up",
+    "circling back",
+    "checking back",
+    "bumping this"
+  ]
+
   @artifact_delivery_terms [
     "attached",
     "attachment",
@@ -496,82 +534,106 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
         if resolved_conversation?(conversation_context) do
           []
         else
-          person = primary_contact(from) || from
-          inferred_deadline = infer_deadline_from_text(body, occurred_at)
-          due_at = inferred_deadline || DateTime.add(occurred_at || DateTime.utc_now(), 8, :hour)
+          triage =
+            gmail_reply_triage(
+              body,
+              labels,
+              conversation_context,
+              thread_id,
+              occurred_at,
+              sent_messages
+            )
 
-          commitment = "Reply to #{person} on \"#{truncate(subject, 70)}\""
+          if suppress_cold_outreach?(triage) do
+            Logger.info("InboxCalendarAdvisor suppressed cold outreach reply candidate",
+              thread_id: thread_id,
+              from: from,
+              importance_hint: triage["importance_hint"],
+              outreach_indicators: triage["outreach_indicators"]
+            )
 
-          evidence =
             []
-            |> maybe_append("Incoming thread from #{from}.", present?(from))
-            |> maybe_append(
-              "Reply request terms: #{Enum.join(reply_matches, ", ")}.",
-              reply_matches != []
-            )
-            |> maybe_append(
-              "Deadline cues: #{Enum.join(deadline_matches, ", ")}.",
-              deadline_matches != []
-            )
-            |> maybe_append("No sent reply found after #{format_dt(occurred_at)}.", true)
-            |> Enum.take(@max_evidence_points)
+          else
+            person = primary_contact(from) || from
+            inferred_deadline = infer_deadline_from_text(body, occurred_at)
 
-          next_action =
-            "Reply now with owner, ETA, and the exact artifact or update you committed to."
+            due_at =
+              inferred_deadline || DateTime.add(occurred_at || DateTime.utc_now(), 8, :hour)
 
-          confidence =
-            0.66
-            |> maybe_add_float(0.14, reply_matches != [])
-            |> maybe_add_float(0.06, "IMPORTANT" in labels)
-            |> maybe_add_float(0.05, "UNREAD" in labels)
-            |> maybe_add_float(0.05, deadline_matches != [])
-            |> clamp(0.0, 1.0)
+            commitment = "Reply to #{person} on \"#{truncate(subject, 70)}\""
 
-          priority = urgency_priority(due_at, 82)
+            evidence =
+              []
+              |> maybe_append("Incoming thread from #{from}.", present?(from))
+              |> maybe_append(
+                "Reply request terms: #{Enum.join(reply_matches, ", ")}.",
+                reply_matches != []
+              )
+              |> maybe_append(
+                "Deadline cues: #{Enum.join(deadline_matches, ", ")}.",
+                deadline_matches != []
+              )
+              |> maybe_append("No sent reply found after #{format_dt(occurred_at)}.", true)
+              |> Enum.take(@max_evidence_points)
 
-          summary =
-            "You still owe #{person} a response #{deadline_phrase(due_at)}. No sent follow-up was detected."
+            next_action =
+              "Reply now with owner, ETA, and the exact artifact or update you committed to."
 
-          record =
-            commitment_record(
-              commitment,
-              person,
-              "gmail_thread:#{thread_id}",
-              due_at,
-              "unresolved",
-              evidence,
-              next_action
-            )
+            confidence =
+              0.66
+              |> maybe_add_float(0.14, reply_matches != [])
+              |> maybe_add_float(0.06, "IMPORTANT" in labels)
+              |> maybe_add_float(0.05, "UNREAD" in labels)
+              |> maybe_add_float(0.05, deadline_matches != [])
+              |> clamp(0.0, 1.0)
 
-          [
-            %{
-              source: "gmail",
-              source_id: message_id,
-              source_occurred_at: occurred_at,
-              category: "reply_urgent",
-              title: "Reply owed: #{truncate(subject, 90)}",
-              summary: summary,
-              recommended_action: next_action,
-              priority: priority,
-              confidence: confidence,
-              due_at: due_at,
-              dedupe_key: "gmail:thread:#{thread_id}:reply_owed",
-              metadata:
-                compact_map(%{
-                  "account" => state.google_account,
-                  "thread_id" => thread_id,
-                  "from" => from,
-                  "to" => to,
-                  "subject" => subject,
-                  "labels" => labels,
-                  "signals" => reply_matches,
-                  "context_brief" => "Incoming request from #{person}.",
-                  "record" => record
-                })
-            }
-            |> normalize_candidate(state)
-            |> ConversationContext.apply_to_candidate(conversation_context)
-          ]
+            priority = urgency_priority(due_at, 82)
+
+            summary =
+              "You still owe #{person} a response #{deadline_phrase(due_at)}. No sent follow-up was detected."
+
+            record =
+              commitment_record(
+                commitment,
+                person,
+                "gmail_thread:#{thread_id}",
+                due_at,
+                "unresolved",
+                evidence,
+                next_action
+              )
+
+            [
+              %{
+                source: "gmail",
+                source_id: message_id,
+                source_occurred_at: occurred_at,
+                category: "reply_urgent",
+                title: "Reply owed: #{truncate(subject, 90)}",
+                summary: summary,
+                recommended_action: next_action,
+                priority: priority,
+                confidence: confidence,
+                due_at: due_at,
+                dedupe_key: "gmail:thread:#{thread_id}:reply_owed",
+                metadata:
+                  compact_map(%{
+                    "account" => state.google_account,
+                    "thread_id" => thread_id,
+                    "from" => from,
+                    "to" => to,
+                    "subject" => subject,
+                    "labels" => labels,
+                    "signals" => reply_matches,
+                    "context_brief" => "Incoming request from #{person}.",
+                    "record" => record
+                  })
+                  |> Map.merge(triage)
+              }
+              |> normalize_candidate(state)
+              |> ConversationContext.apply_to_candidate(conversation_context)
+            ]
+          end
         end
     end
   end
@@ -911,6 +973,62 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
         follow_up_ideas = read_string_list(item, "follow_up_ideas", @max_follow_up_ideas)
         merged_record = resolve_record(item, base)
         base_metadata = read_map(base, "metadata")
+        reply_debt_candidate? = gmail_reply_candidate?(base)
+        thread_type = resolve_thread_type(item, base_metadata)
+
+        solicited =
+          resolve_boolean_flag(item, base_metadata, "solicited", "solicited_hint", false)
+
+        prior_user_engagement =
+          resolve_boolean_flag(
+            item,
+            base_metadata,
+            "prior_user_engagement",
+            "prior_user_engagement",
+            false
+          )
+
+        explicit_user_commitment =
+          resolve_boolean_flag(
+            item,
+            base_metadata,
+            "explicit_user_commitment",
+            "explicit_user_commitment",
+            false
+          )
+
+        reply_obligation =
+          resolve_boolean_flag(
+            item,
+            base_metadata,
+            "reply_obligation",
+            "reply_obligation_hint",
+            true
+          )
+
+        importance = resolve_importance(item, base_metadata)
+
+        evidence_for_reply_owed =
+          resolve_string_list_flag(
+            item,
+            base_metadata,
+            "evidence_for_reply_owed",
+            "evidence_for_reply_owed",
+            @max_evidence_points
+          )
+
+        evidence_against_reply_owed =
+          resolve_string_list_flag(
+            item,
+            base_metadata,
+            "evidence_against_reply_owed",
+            "evidence_against_reply_owed",
+            @max_evidence_points
+          )
+
+        decision_reason =
+          read_string(item, "decision_reason", nil) ||
+            read_string(base_metadata, "decision_reason", nil)
 
         conversation_context =
           base_metadata
@@ -944,6 +1062,27 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
             |> maybe_put("missing_followthrough_evidence", missing_followthrough)
             |> maybe_put("interrupt_now", interrupt_now)
             |> maybe_put("false_positive_risk", false_positive_risk)
+            |> maybe_put("thread_type", if(reply_debt_candidate?, do: thread_type))
+            |> maybe_put("solicited", if(reply_debt_candidate?, do: solicited))
+            |> maybe_put(
+              "prior_user_engagement",
+              if(reply_debt_candidate?, do: prior_user_engagement)
+            )
+            |> maybe_put(
+              "explicit_user_commitment",
+              if(reply_debt_candidate?, do: explicit_user_commitment)
+            )
+            |> maybe_put("reply_obligation", if(reply_debt_candidate?, do: reply_obligation))
+            |> maybe_put("importance", if(reply_debt_candidate?, do: importance))
+            |> maybe_put_list(
+              "evidence_for_reply_owed",
+              if(reply_debt_candidate?, do: evidence_for_reply_owed, else: [])
+            )
+            |> maybe_put_list(
+              "evidence_against_reply_owed",
+              if(reply_debt_candidate?, do: evidence_against_reply_owed, else: [])
+            )
+            |> maybe_put("decision_reason", if(reply_debt_candidate?, do: decision_reason))
             |> maybe_put_list("follow_up_ideas", follow_up_ideas)
             |> maybe_put_map("conversation_context", conversation_context)
             |> Map.put("record", merged_record)
@@ -965,18 +1104,63 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
   defp merge_llm_item(_item, _by_key, _min_confidence), do: nil
 
   defp actionable_llm_item?(item, base) when is_map(item) do
+    base_metadata = read_map(base, "metadata")
     actionability = read_string(item, "actionability", "") |> String.downcase()
     human_counterparty = read_boolean(item, "human_counterparty", false)
     missing_followthrough = read_boolean(item, "missing_followthrough_evidence", false)
     interrupt_now = read_boolean(item, "interrupt_now", false)
     notification_posture = resolve_notification_posture(item, base)
     false_positive_risk = read_float(item, "false_positive_risk", 1.0)
+    reply_debt_candidate? = gmail_reply_candidate?(base)
+
+    reply_obligation =
+      resolve_boolean_flag(item, base_metadata, "reply_obligation", "reply_obligation_hint", true)
+
+    importance = resolve_importance(item, base_metadata)
+
+    evidence_for_reply_owed =
+      resolve_string_list_flag(
+        item,
+        base_metadata,
+        "evidence_for_reply_owed",
+        "evidence_for_reply_owed",
+        @max_evidence_points
+      )
+
+    thread_type = resolve_thread_type(item, base_metadata)
+
+    prior_user_engagement =
+      resolve_boolean_flag(
+        item,
+        base_metadata,
+        "prior_user_engagement",
+        "prior_user_engagement",
+        false
+      )
+
+    explicit_user_commitment =
+      resolve_boolean_flag(
+        item,
+        base_metadata,
+        "explicit_user_commitment",
+        "explicit_user_commitment",
+        false
+      )
 
     actionability == "actionable" and
       human_counterparty and
       missing_followthrough and
       (interrupt_now or notification_posture == "heads_up") and
-      false_positive_risk <= 0.35
+      false_positive_risk <= 0.35 and
+      reply_debt_gate_passes?(
+        reply_debt_candidate?,
+        reply_obligation,
+        importance,
+        evidence_for_reply_owed,
+        thread_type,
+        prior_user_engagement,
+        explicit_user_commitment
+      )
   end
 
   defp resolve_notification_posture(item, base) do
@@ -1098,26 +1282,38 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
     #{candidates_json}
 
     Task:
+    - Your first job is disqualification, not escalation.
     - Keep only unresolved commitments that should interrupt a founder now.
-    - Prioritize explicit promises, missed replies, and post-meeting follow-ups.
+    - Prioritize explicit promises, missed replies, and post-meeting follow-ups after disqualifying weak candidates.
     - Apply a reasoning-first decision, not keyword heuristics:
       1. Is there a real human counterparty?
       2. Is there an explicit ask or explicit commitment?
-      3. Is completion evidence still missing?
-      4. Is interruption justified now?
-      5. What is the false positive risk?
+      3. Has the user actually engaged, or is this still unsolicited outreach?
+      4. Is completion evidence still missing?
+      5. Is interruption justified now?
+      6. What is the false positive risk?
     - Drop low-confidence or ambiguous items.
     - Strongly down-rank or exclude automated transactional receipts and notifications
       (payment confirmations, invoices, password resets, marketing/autonotifications)
       unless there is a clear human ask or explicit founder commitment that is still open.
+    - Strongly down-rank or exclude unsolicited sales outreach, recruiting pitches, and networking pitches.
+    - A real human sender does not imply a reply owed.
+    - If the only positive evidence is "a real person followed up", Gmail labels, or unread state, omit the item.
+    - Require both evidence_for_reply_owed and evidence_against_reply_owed in your reasoning.
+    - If evidence_against_reply_owed materially outweighs evidence_for_reply_owed, omit the item.
+    - If a candidate has importance_hint = "drop", omit it unless there is strong contrary thread evidence.
+    - If a candidate looks like cold outreach and the user has not engaged or committed, it is not actionable.
     - If an item is mostly informational/receipt-like, omit it from output instead of rewording it.
     - Respect the durable preference memory above. Explicit remembered preferences outrank generic priors.
+    - Treat content-filter topics such as sales_outreach and cold_outreach as suppression signals unless the user already engaged or made a commitment.
     - If the preferences imply after-hours Telegram suppression, reflect that in interrupt_now and telegram_fit_score.
     - If the preferences imply a topic or counterparty class should be urgent, bias toward surfacing it.
     - Examples to exclude:
       1. "Your payment was successful"
       2. "Your Tuesday afternoon order with Uber Eats"
       3. "Receipt / invoice / order confirmation" with no direct ask
+      4. "Saw your post, worth a quick call? Here's my Calendly."
+      5. "Following up on my outbound prospecting tool" when the user never replied
     - Every returned item must be truly actionable now.
     - Each candidate may include conversation_context.notification_posture.
     - If notification_posture is "heads_up", keep the softer "conversation is moving" framing.
@@ -1135,13 +1331,268 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
     telegram_fit_score, telegram_fit_reason, why_now, follow_up_ideas,
     commitment, person, source, deadline, status, evidence, next_action,
     actionability, obligation_type, human_counterparty, missing_followthrough_evidence,
-    interrupt_now, notification_posture, false_positive_risk, reasoning_summary
+    interrupt_now, notification_posture, false_positive_risk, reasoning_summary,
+    thread_type, solicited, prior_user_engagement, explicit_user_commitment,
+    reply_obligation, importance, evidence_for_reply_owed, evidence_against_reply_owed,
+    decision_reason
     - Set actionability to exactly "actionable" for every returned item.
     - Set human_counterparty and missing_followthrough_evidence to true for every returned item.
     - Set interrupt_now to true only when the conversation still clearly needs immediate founder interruption.
     - Keep notification_posture as "interrupt_now" or "heads_up".
+    - Set reply_obligation to true only when there is a real outstanding obligation.
+    - Set importance to "important" only for items that should persist as actionable insights now.
+    - Do not return items with importance "digest" or "drop"; omit them from the array instead.
     - Keep false_positive_risk <= 0.35 for every returned item.
     """
+  end
+
+  defp gmail_reply_triage(
+         body,
+         labels,
+         conversation_context,
+         thread_id,
+         occurred_at,
+         sent_messages
+       ) do
+    social_matches = matched_terms(body, @cold_outreach_social_terms)
+    meeting_matches = matched_terms(body, @cold_outreach_meeting_terms)
+    pitch_matches = matched_terms(body, @cold_outreach_pitch_terms)
+    sequence_term_matches = matched_terms(body, @cold_outreach_sequence_terms)
+    outreach_indicators = Enum.uniq(social_matches ++ meeting_matches ++ pitch_matches)
+    reply_matches = matched_terms(body, @reply_request_terms)
+    deadline_matches = matched_terms(body, @deadline_terms)
+    prior_user_engagement = read_boolean(conversation_context, "prior_user_participation", false)
+
+    explicit_user_commitment =
+      explicit_thread_commitment?(sent_messages, thread_id, occurred_at)
+
+    solicited_hint = prior_user_engagement or explicit_user_commitment
+
+    prior_other_message_count = read_integer(conversation_context, "prior_other_message_count", 0)
+
+    sequence_follow_up? =
+      prior_other_message_count >= 1 and not prior_user_engagement and sequence_term_matches != []
+
+    clear_cold_outreach? =
+      cold_outreach_thread?(
+        social_matches,
+        meeting_matches,
+        pitch_matches,
+        sequence_follow_up?,
+        solicited_hint,
+        explicit_user_commitment
+      )
+
+    thread_type_hint =
+      cond do
+        clear_cold_outreach? -> "cold_sales_outreach"
+        outreach_indicators != [] -> "unknown"
+        true -> "direct_human_request"
+      end
+
+    evidence_for_reply_owed =
+      []
+      |> maybe_append(
+        "Reply request terms: #{Enum.join(reply_matches, ", ")}.",
+        reply_matches != []
+      )
+      |> maybe_append(
+        "Deadline cues: #{Enum.join(deadline_matches, ", ")}.",
+        deadline_matches != []
+      )
+      |> maybe_append("Thread is unread in Gmail.", "UNREAD" in labels)
+      |> maybe_append("Thread was marked important in Gmail.", "IMPORTANT" in labels)
+      |> maybe_append(
+        "You previously made an explicit commitment in this thread.",
+        explicit_user_commitment
+      )
+      |> Enum.take(@max_evidence_points)
+
+    evidence_against_reply_owed =
+      []
+      |> maybe_append(
+        "No self-authored message appears earlier in the thread.",
+        not prior_user_engagement
+      )
+      |> maybe_append(
+        "Cold outreach indicators: #{Enum.join(outreach_indicators, ", ")}.",
+        outreach_indicators != []
+      )
+      |> maybe_append(
+        "Multiple inbound follow-ups arrived without a reply from you.",
+        sequence_follow_up?
+      )
+      |> maybe_append(
+        "No explicit user commitment was found for this thread.",
+        not explicit_user_commitment
+      )
+      |> Enum.take(@max_evidence_points)
+
+    importance_hint =
+      cond do
+        clear_cold_outreach? and not solicited_hint and not explicit_user_commitment ->
+          "drop"
+
+        outreach_indicators != [] and not solicited_hint and not explicit_user_commitment ->
+          "digest"
+
+        true ->
+          "important"
+      end
+
+    reply_obligation_hint =
+      cond do
+        importance_hint != "important" -> false
+        explicit_user_commitment -> true
+        reply_matches != [] -> true
+        "UNREAD" in labels or "IMPORTANT" in labels -> true
+        true -> false
+      end
+
+    compact_map(%{
+      "thread_type_hint" => thread_type_hint,
+      "solicited_hint" => solicited_hint,
+      "prior_user_engagement" => prior_user_engagement,
+      "explicit_user_commitment" => explicit_user_commitment,
+      "importance_hint" => importance_hint,
+      "reply_obligation_hint" => reply_obligation_hint,
+      "outreach_indicators" => Enum.take(outreach_indicators, @max_evidence_points),
+      "evidence_for_reply_owed" => evidence_for_reply_owed,
+      "evidence_against_reply_owed" => evidence_against_reply_owed
+    })
+  end
+
+  defp suppress_cold_outreach?(triage) when is_map(triage) do
+    read_string(triage, "importance_hint", nil) == "drop" and
+      read_string(triage, "thread_type_hint", nil) == "cold_sales_outreach"
+  end
+
+  defp suppress_cold_outreach?(_triage), do: false
+
+  defp cold_outreach_thread?(
+         social_matches,
+         meeting_matches,
+         pitch_matches,
+         sequence_follow_up?,
+         solicited_hint,
+         explicit_user_commitment
+       ) do
+    strong_signal_count = length(social_matches) + length(meeting_matches) + length(pitch_matches)
+
+    not solicited_hint and not explicit_user_commitment and
+      ((social_matches != [] and (meeting_matches != [] or pitch_matches != [])) or
+         (meeting_matches != [] and pitch_matches != []) or
+         (sequence_follow_up? and strong_signal_count >= 1))
+  end
+
+  defp explicit_thread_commitment?(sent_messages, thread_id, occurred_at)
+       when is_list(sent_messages) do
+    sent_messages
+    |> Enum.filter(fn message ->
+      read_string(message, "thread_id", nil) == thread_id and
+        sent_before_or_at?(message_timestamp(message), occurred_at)
+    end)
+    |> Enum.any?(fn message ->
+      sent_body = message_body(message)
+
+      matched_terms(sent_body, @promise_terms) != [] and
+        matched_terms(sent_body, @commitment_action_terms) != []
+    end)
+  end
+
+  defp explicit_thread_commitment?(_sent_messages, _thread_id, _occurred_at), do: false
+
+  defp gmail_reply_candidate?(candidate) when is_map(candidate) do
+    read_string(candidate, "source", nil) == "gmail" and
+      read_string(candidate, "category", nil) == "reply_urgent"
+  end
+
+  defp gmail_reply_candidate?(_candidate), do: false
+
+  defp sent_before_or_at?(%DateTime{} = message_at, %DateTime{} = occurred_at) do
+    DateTime.compare(message_at, occurred_at) in [:lt, :eq]
+  end
+
+  defp sent_before_or_at?(_, _), do: false
+
+  defp has_attr?(attrs, key) when is_map(attrs) and is_binary(key) do
+    case Map.fetch(attrs, key) do
+      {:ok, _value} ->
+        true
+
+      :error ->
+        Enum.any?(attrs, fn
+          {map_key, _value} when is_atom(map_key) -> Atom.to_string(map_key) == key
+          _ -> false
+        end)
+    end
+  end
+
+  defp has_attr?(_attrs, _key), do: false
+
+  defp resolve_thread_type(item, base_metadata) do
+    read_string(item, "thread_type", nil) ||
+      read_string(base_metadata, "thread_type", nil) ||
+      read_string(base_metadata, "thread_type_hint", "unknown")
+  end
+
+  defp resolve_importance(item, base_metadata) do
+    read_string(item, "importance", nil) ||
+      read_string(base_metadata, "importance", nil) ||
+      read_string(base_metadata, "importance_hint", "important")
+  end
+
+  defp resolve_boolean_flag(item, base_metadata, item_key, metadata_key, default) do
+    cond do
+      has_attr?(item, item_key) ->
+        read_boolean(item, item_key, default)
+
+      true ->
+        read_boolean(base_metadata, metadata_key, default)
+    end
+  end
+
+  defp resolve_string_list_flag(item, base_metadata, item_key, metadata_key, limit) do
+    case read_string_list(item, item_key, limit) do
+      [] -> read_string_list(base_metadata, metadata_key, limit)
+      values -> values
+    end
+  end
+
+  defp disqualified_outreach_thread?(thread_type, prior_user_engagement, explicit_user_commitment) do
+    thread_type == "cold_sales_outreach" and
+      not prior_user_engagement and
+      not explicit_user_commitment
+  end
+
+  defp reply_debt_gate_passes?(
+         false,
+         _reply_obligation,
+         _importance,
+         _evidence_for_reply_owed,
+         _thread_type,
+         _prior_user_engagement,
+         _explicit_user_commitment
+       ),
+       do: true
+
+  defp reply_debt_gate_passes?(
+         true,
+         reply_obligation,
+         importance,
+         evidence_for_reply_owed,
+         thread_type,
+         prior_user_engagement,
+         explicit_user_commitment
+       ) do
+    reply_obligation and
+      importance == "important" and
+      evidence_for_reply_owed != [] and
+      not disqualified_outreach_thread?(
+        thread_type,
+        prior_user_engagement,
+        explicit_user_commitment
+      )
   end
 
   defp find_sent_reply_for_thread(sent_messages, thread_id, occurred_at, sender, user_id) do

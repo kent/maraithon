@@ -71,6 +71,10 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisorTest do
       assert prompt =~ "automated transactional receipts"
       assert prompt =~ "Uber Eats"
       assert prompt =~ "false_positive_risk"
+      assert prompt =~ "A real human sender does not imply a reply owed"
+      assert prompt =~ "evidence_for_reply_owed"
+      assert prompt =~ "evidence_against_reply_owed"
+      assert prompt =~ "unsolicited sales outreach"
     end
 
     test "includes Telegram feedback context in the llm prompt", %{
@@ -301,6 +305,88 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisorTest do
       assert get_in(candidate, ["metadata", "detail", "conversation_summary"]) =~
                "Charlie has already responded"
     end
+
+    test "suppresses clear cold sales outreach before the llm call", %{
+      user_id: user_id,
+      context: context
+    } do
+      bypass = Bypass.open()
+
+      Application.put_env(:maraithon, :gmail,
+        api_base_url: "http://localhost:#{bypass.port}/gmail/v1"
+      )
+
+      {:ok, _token} =
+        OAuth.store_tokens(user_id, "google", %{
+          access_token: "google-access",
+          refresh_token: "google-refresh",
+          expires_in: 3600
+        })
+
+      Bypass.expect_once(bypass, "GET", "/gmail/v1/users/me/messages", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(200, Jason.encode!(%{"messages" => []}))
+      end)
+
+      first_touch_at = DateTime.utc_now() |> DateTime.add(-2, :day)
+      follow_up_at = DateTime.add(first_touch_at, 1, :day)
+
+      Bypass.expect_once(bypass, "GET", "/gmail/v1/users/me/threads/thread-cold-1", fn conn ->
+        assert conn.query_string == "format=metadata"
+
+        body = %{
+          "messages" => [
+            gmail_thread_message(
+              "msg-cold-1",
+              "thread-cold-1",
+              "Ayoub Rezala <ayoub@outly.com>",
+              user_id,
+              "shipping while Claude is thinking",
+              "Saw your post about shipping while Claude is thinking.",
+              first_touch_at
+            ),
+            gmail_thread_message(
+              "msg-cold-2",
+              "thread-cold-1",
+              "Ayoub Rezala <ayoub@outly.com>",
+              user_id,
+              "Re: shipping while Claude is thinking",
+              "Following up. Worth a quick call? Here's my Calendly and outbound sales on autopilot pitch.",
+              follow_up_at
+            )
+          ]
+        }
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(200, Jason.encode!(body))
+      end)
+
+      state = InboxCalendarAdvisor.init(%{"user_id" => user_id})
+
+      payload = %{
+        "source" => "gmail",
+        "data" => %{
+          "messages" => [
+            %{
+              "message_id" => "msg-cold-2",
+              "thread_id" => "thread-cold-1",
+              "subject" => "Re: shipping while Claude is thinking",
+              "snippet" =>
+                "Following up. Worth a quick call? Here's my Calendly and outbound sales on autopilot pitch.",
+              "from" => "Ayoub Rezala <ayoub@outly.com>",
+              "to" => user_id,
+              "labels" => ["INBOX", "UNREAD"],
+              "internal_date" => follow_up_at
+            }
+          ]
+        }
+      }
+
+      assert {:idle, %{pending_candidates: []}} =
+               InboxCalendarAdvisor.handle_wakeup(state, %{context | event: %{payload: payload}})
+    end
   end
 
   describe "handle_effect_result/3" do
@@ -343,6 +429,19 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisorTest do
               "human_counterparty" => true,
               "missing_followthrough_evidence" => true,
               "interrupt_now" => true,
+              "thread_type" => "customer_work",
+              "solicited" => false,
+              "prior_user_engagement" => false,
+              "explicit_user_commitment" => false,
+              "reply_obligation" => true,
+              "importance" => "important",
+              "evidence_for_reply_owed" => [
+                "Reply request terms: urgent, please respond today.",
+                "Thread is unread in Gmail."
+              ],
+              "evidence_against_reply_owed" => [],
+              "decision_reason" =>
+                "A direct human request remains unanswered and no outreach-style disqualifiers were found.",
               "false_positive_risk" => 0.12,
               "reasoning_summary" =>
                 "Human sender requested a same-day response and no reply evidence exists.",
@@ -382,6 +481,9 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisorTest do
       assert stored.metadata["interrupt_now"] == true
       assert stored.metadata["false_positive_risk"] == 0.12
       assert stored.metadata["reasoning_summary"] =~ "no reply evidence"
+      assert stored.metadata["thread_type"] == "customer_work"
+      assert stored.metadata["reply_obligation"] == true
+      assert stored.metadata["importance"] == "important"
       assert stored.metadata["record"]["status"] == "unresolved"
       assert is_binary(stored.metadata["record"]["commitment"])
       assert stored.metadata["record"]["next_action"] =~ "Reply"
@@ -495,6 +597,14 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisorTest do
             "confidence" => 0.86,
             "dedupe_key" => "heads-up-gmail-1",
             "metadata" => %{
+              "thread_type_hint" => "direct_human_request",
+              "solicited_hint" => false,
+              "prior_user_engagement" => false,
+              "explicit_user_commitment" => false,
+              "importance_hint" => "important",
+              "reply_obligation_hint" => true,
+              "evidence_for_reply_owed" => ["David asked for the update today."],
+              "evidence_against_reply_owed" => [],
               "conversation_context" => %{
                 "notification_posture" => "heads_up",
                 "latest_actor" => "Charlie"
@@ -543,6 +653,16 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisorTest do
               "missing_followthrough_evidence" => true,
               "interrupt_now" => false,
               "notification_posture" => "heads_up",
+              "thread_type" => "customer_work",
+              "solicited" => false,
+              "prior_user_engagement" => false,
+              "explicit_user_commitment" => false,
+              "reply_obligation" => true,
+              "importance" => "important",
+              "evidence_for_reply_owed" => ["David asked for the update today."],
+              "evidence_against_reply_owed" => ["Charlie already replied in the thread."],
+              "decision_reason" =>
+                "The thread still matters, but another participant already replied so it should stay heads_up only.",
               "false_positive_risk" => 0.14,
               "reasoning_summary" =>
                 "Another participant replied, so the thread is active even though the final close may still depend on you."
@@ -559,7 +679,89 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisorTest do
       [stored | _] = Insights.list_open_for_user(user_id)
       assert stored.metadata["conversation_context"]["notification_posture"] == "heads_up"
       assert stored.metadata["interrupt_now"] == false
+      assert stored.metadata["importance"] == "important"
       assert stored.summary =~ "conversation is moving"
+    end
+
+    test "rejects llm output that classifies a reply candidate as digest or non-obligatory", %{
+      user_id: user_id,
+      context: context
+    } do
+      state =
+        InboxCalendarAdvisor.init(%{"user_id" => user_id})
+        |> Map.put(:pending_candidates, [
+          %{
+            "source" => "gmail",
+            "category" => "reply_urgent",
+            "title" => "Reply owed: Quick follow-up",
+            "summary" => "This might be a reply debt, but the thread looks like outreach.",
+            "recommended_action" => "Review before replying.",
+            "priority" => 80,
+            "confidence" => 0.84,
+            "dedupe_key" => "cold-outreach-digest-1",
+            "metadata" => %{
+              "thread_type_hint" => "cold_sales_outreach",
+              "solicited_hint" => false,
+              "prior_user_engagement" => false,
+              "explicit_user_commitment" => false,
+              "importance_hint" => "digest",
+              "reply_obligation_hint" => false,
+              "evidence_for_reply_owed" => ["A real person followed up."],
+              "evidence_against_reply_owed" => [
+                "No self-authored message appears earlier in the thread.",
+                "Cold outreach indicators: calendly."
+              ],
+              "record" => %{
+                "commitment" => "Reply to seller@example.com on Quick follow-up",
+                "person" => "seller@example.com",
+                "source" => "gmail_thread:msg-cold-like",
+                "status" => "unresolved",
+                "evidence" => ["Cold outreach indicators: calendly."],
+                "next_action" => "Review before replying."
+              }
+            }
+          }
+        ])
+
+      llm_response = %{
+        content:
+          Jason.encode!([
+            %{
+              "dedupe_key" => "cold-outreach-digest-1",
+              "title" => "Possible follow-up",
+              "summary" => "This looks like outreach and should not interrupt.",
+              "recommended_action" => "No action needed.",
+              "priority" => 80,
+              "confidence" => 0.9,
+              "actionability" => "actionable",
+              "obligation_type" => "sales_outreach",
+              "human_counterparty" => true,
+              "missing_followthrough_evidence" => true,
+              "interrupt_now" => false,
+              "notification_posture" => "heads_up",
+              "thread_type" => "cold_sales_outreach",
+              "solicited" => false,
+              "prior_user_engagement" => false,
+              "explicit_user_commitment" => false,
+              "reply_obligation" => false,
+              "importance" => "digest",
+              "evidence_for_reply_owed" => ["A real person followed up."],
+              "evidence_against_reply_owed" => [
+                "No self-authored message appears earlier in the thread.",
+                "Cold outreach indicators: calendly."
+              ],
+              "decision_reason" => "This is cold outreach, not a real reply obligation.",
+              "false_positive_risk" => 0.2
+            }
+          ])
+      }
+
+      {:emit, {:insights_recorded, result}, final_state} =
+        InboxCalendarAdvisor.handle_effect_result({:llm_call, llm_response}, state, context)
+
+      assert result.count == 0
+      assert final_state.pending_candidates == []
+      assert Insights.list_open_for_user(user_id) == []
     end
   end
 

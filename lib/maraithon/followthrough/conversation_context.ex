@@ -156,7 +156,11 @@ defmodule Maraithon.Followthrough.ConversationContext do
   end
 
   defp classify(messages, trigger, default_owner) do
-    later_messages = later_messages(messages, trigger)
+    {prior_messages, later_messages} = partition_messages(messages, trigger)
+    self_messages = Enum.filter(messages, &(Map.get(&1, "actor_role") == "self"))
+    other_messages = Enum.filter(messages, &(Map.get(&1, "actor_role") == "other"))
+    prior_self = Enum.filter(prior_messages, &(Map.get(&1, "actor_role") == "self"))
+    prior_other = Enum.filter(prior_messages, &(Map.get(&1, "actor_role") == "other"))
     later_self = Enum.filter(later_messages, &(Map.get(&1, "actor_role") == "self"))
     later_other = Enum.filter(later_messages, &(Map.get(&1, "actor_role") == "other"))
     completion_evidence = completion_evidence(later_messages)
@@ -206,6 +210,11 @@ defmodule Maraithon.Followthrough.ConversationContext do
       "latest_activity_at" => to_iso8601(read_datetime(latest_message, "occurred_at")),
       "other_participant_replied" => later_other != [],
       "user_replied" => later_self != [],
+      "thread_message_count" => length(messages),
+      "self_message_count" => length(self_messages),
+      "other_message_count" => length(other_messages),
+      "prior_user_participation" => prior_self != [],
+      "prior_other_message_count" => length(prior_other),
       "owner_mentioned" => owner_mentioned,
       "eta_mentioned" => eta_mentioned,
       "completion_evidence" => completion_evidence,
@@ -402,25 +411,30 @@ defmodule Maraithon.Followthrough.ConversationContext do
 
   defp insufficient_context_reason(_posture, _messages, _trigger), do: nil
 
-  defp later_messages(messages, trigger) do
+  defp partition_messages(messages, trigger) do
     trigger_id = read_string(trigger, "id")
 
     case Enum.find_index(messages, &(read_string(&1, "id") == trigger_id)) do
       nil ->
         trigger_at = read_datetime(trigger, "occurred_at")
 
-        Enum.filter(messages, fn message ->
+        Enum.reduce(messages, {[], []}, fn message, {prior, later} ->
           case {read_datetime(message, "occurred_at"), trigger_at} do
             {%DateTime{} = message_at, %DateTime{} = trigger_at} ->
-              DateTime.compare(message_at, trigger_at) == :gt
+              case DateTime.compare(message_at, trigger_at) do
+                :lt -> {[message | prior], later}
+                :gt -> {prior, [message | later]}
+                :eq -> {prior, later}
+              end
 
             _ ->
-              false
+              {prior, later}
           end
         end)
+        |> then(fn {prior, later} -> {Enum.reverse(prior), Enum.reverse(later)} end)
 
       index ->
-        Enum.drop(messages, index + 1)
+        {Enum.take(messages, index), Enum.drop(messages, index + 1)}
     end
   end
 

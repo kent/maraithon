@@ -2,10 +2,35 @@ defmodule MaraithonWeb.AdminControllerTest do
   use MaraithonWeb.ConnCase, async: false
 
   alias Maraithon.Agents
+  alias Maraithon.Agents.Agent
   alias Maraithon.Effects.Effect
   alias Maraithon.Events
   alias Maraithon.OAuth
+  alias Maraithon.Repo
   alias Maraithon.Runtime.ScheduledJob
+
+  defmodule RefreshRuntimeStub do
+    def send_message(agent_id, "refresh_insights", metadata) do
+      send(self(), {:refresh_message, agent_id, metadata})
+      {:ok, %{message_id: "refresh-" <> String.slice(agent_id, 0, 8)}}
+    end
+  end
+
+  setup do
+    Repo.delete_all(Agent)
+
+    previous_refresh = Application.get_env(:maraithon, Maraithon.Insights.Refresh, [])
+
+    Application.put_env(:maraithon, Maraithon.Insights.Refresh,
+      runtime_module: RefreshRuntimeStub
+    )
+
+    on_exit(fn ->
+      Application.put_env(:maraithon, Maraithon.Insights.Refresh, previous_refresh)
+    end)
+
+    :ok
+  end
 
   describe "GET /api/v1/admin/dashboard" do
     test "returns fleet snapshot with spend and logs", %{conn: conn} do
@@ -353,6 +378,64 @@ defmodule MaraithonWeb.AdminControllerTest do
       assert response["status"] == "disconnected"
       assert response["provider"] == "github"
       assert OAuth.get_token("kent", "github") == nil
+    end
+  end
+
+  describe "POST /api/v1/admin/insights/refresh" do
+    test "queues refresh for running insight-producing agents for the requested user", %{
+      conn: conn
+    } do
+      {:ok, running_agent} =
+        Agents.create_agent(%{
+          user_id: "kent@runner.now",
+          behavior: "founder_followthrough_agent",
+          config: %{},
+          status: "running"
+        })
+
+      {:ok, stopped_agent} =
+        Agents.create_agent(%{
+          user_id: "kent@runner.now",
+          behavior: "slack_followthrough_agent",
+          config: %{},
+          status: "stopped"
+        })
+
+      {:ok, _other_agent} =
+        Agents.create_agent(%{
+          user_id: "kent@runner.now",
+          behavior: "prompt_agent",
+          config: %{},
+          status: "running"
+        })
+
+      conn =
+        post(conn, "/api/v1/admin/insights/refresh", %{
+          "user_id" => "kent@runner.now",
+          "reason" => "refresh_after_new_logic"
+        })
+
+      running_agent_id = running_agent.id
+
+      response = json_response(conn, 200)
+      assert response["user_id"] == "kent@runner.now"
+      assert response["eligible_count"] == 2
+      assert response["queued_count"] == 1
+
+      assert [%{"agent_id" => queued_agent_id, "behavior" => "founder_followthrough_agent"}] =
+               response["queued"]
+
+      assert queued_agent_id == running_agent.id
+
+      assert Enum.any?(response["skipped"], fn skipped ->
+               skipped["agent_id"] == stopped_agent.id and
+                 skipped["reason"] == "agent_not_running"
+             end)
+
+      assert_receive {:refresh_message, ^running_agent_id, metadata}
+      assert metadata["action"] == "refresh_insights"
+      assert metadata["reset_open_insights"] == true
+      assert metadata["reason"] == "refresh_after_new_logic"
     end
   end
 end
