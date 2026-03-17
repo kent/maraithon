@@ -17,6 +17,18 @@ defmodule Maraithon.Followthrough.ConversationContext do
     "resolved"
   ]
 
+  @acknowledgment_terms [
+    "thanks",
+    "thank you",
+    "appreciate it",
+    "sounds good",
+    "got it",
+    "received",
+    "awesome",
+    "perfect",
+    "great"
+  ]
+
   @other_owner_terms [
     "i'll handle",
     "i will handle",
@@ -38,6 +50,15 @@ defmodule Maraithon.Followthrough.ConversationContext do
     "tomorrow",
     "eod",
     "end of day"
+  ]
+
+  @ask_terms [
+    "can you",
+    "could you",
+    "please",
+    "need you",
+    "let me know",
+    "send me"
   ]
 
   @doc """
@@ -116,7 +137,10 @@ defmodule Maraithon.Followthrough.ConversationContext do
 
     case posture do
       "heads_up" ->
-        apply_heads_up_copy(candidate, context)
+        apply_monitor_copy(candidate, context)
+
+      "insufficient_context" ->
+        apply_insufficient_context_copy(candidate, context)
 
       _ ->
         candidate
@@ -127,13 +151,30 @@ defmodule Maraithon.Followthrough.ConversationContext do
     latest_actor = read_string(context, "latest_actor")
     owner_mentioned = read_string(context, "owner_mentioned")
     eta_mentioned = read_string(context, "eta_mentioned")
+    closure_state = read_string(context, "closure_state")
+    acknowledgment_actor = read_string(context, "acknowledgment_actor")
 
     case read_string(context, "notification_posture", "interrupt_now") do
       "resolved" ->
-        "Later conversation activity appears to close the loop."
+        cond do
+          closure_state == "acknowledged" and present?(acknowledgment_actor) ->
+            "#{acknowledgment_actor} acknowledged the thread and no fresh ask was found."
+
+          closure_state == "acknowledged" ->
+            "The recipient acknowledged the thread and no fresh ask was found."
+
+          true ->
+            "Later conversation activity appears to close the loop."
+        end
 
       "heads_up" ->
         cond do
+          closure_state == "handoff" and present?(owner_mentioned) and present?(eta_mentioned) ->
+            "#{owner_mentioned} acknowledged the thread and appears to own the next step with ETA #{eta_mentioned}."
+
+          closure_state == "handoff" and present?(owner_mentioned) ->
+            "#{owner_mentioned} acknowledged the thread and appears to own the next step."
+
           present?(owner_mentioned) and present?(eta_mentioned) ->
             "#{owner_mentioned} has already responded and appears to own the next step with ETA #{eta_mentioned}. The conversation is moving."
 
@@ -148,7 +189,7 @@ defmodule Maraithon.Followthrough.ConversationContext do
         end
 
       "insufficient_context" ->
-        "Conversation context could not be fully evaluated."
+        "Conversation context could not be fully evaluated, so this should be monitored instead of treated as direct debt."
 
       _ ->
         "No later reply or follow-through was found in the conversation."
@@ -164,18 +205,34 @@ defmodule Maraithon.Followthrough.ConversationContext do
     later_self = Enum.filter(later_messages, &(Map.get(&1, "actor_role") == "self"))
     later_other = Enum.filter(later_messages, &(Map.get(&1, "actor_role") == "other"))
     completion_evidence = completion_evidence(later_messages)
+    acknowledgment_evidence = acknowledgment_evidence(later_other)
+    acknowledgment_actor = acknowledgment_actor(later_other)
     owner_mentioned = owner_mentioned(later_messages)
     eta_mentioned = eta_mentioned(later_messages)
+    handoff_evidence = handoff_evidence(later_messages, owner_mentioned)
+    fresh_ask_after_acknowledgment = fresh_ask_after_acknowledgment?(later_messages)
+
+    closure_state =
+      cond do
+        completion_evidence != [] -> "resolved"
+        acknowledgment_evidence != [] and handoff_evidence != [] -> "handoff"
+        acknowledgment_evidence != [] and not fresh_ask_after_acknowledgment -> "acknowledged"
+        later_self != [] and later_other == [] -> "user_progress"
+        later_messages == [] -> "open"
+        later_other != [] -> "thread_active"
+        true -> "unknown"
+      end
 
     momentum_state =
       cond do
-        completion_evidence != [] -> "resolved"
+        closure_state in ["resolved", "acknowledged"] -> "resolved"
         later_messages == [] -> "stalled"
         true -> "active"
       end
 
     coverage_state =
       cond do
+        later_self != [] and later_other != [] -> "covered_by_both"
         later_self != [] -> "covered_by_user"
         later_other != [] -> "covered_by_other"
         later_messages == [] -> "uncovered"
@@ -184,18 +241,35 @@ defmodule Maraithon.Followthrough.ConversationContext do
 
     ownership_state =
       cond do
-        present?(owner_mentioned) and owner_mentioned != "you" -> "other_owner"
-        coverage_state == "covered_by_other" -> "shared_owner"
-        true -> default_owner || "unknown"
+        handoff_evidence != [] and present?(owner_mentioned) and owner_mentioned != "you" ->
+          "other_owner"
+
+        present?(owner_mentioned) and owner_mentioned != "you" ->
+          "other_owner"
+
+        coverage_state in ["covered_by_other", "covered_by_both"] ->
+          "shared_owner"
+
+        true ->
+          default_owner || "unknown"
       end
 
     notification_posture =
       cond do
-        momentum_state == "resolved" -> "resolved"
-        coverage_state == "covered_by_user" -> "resolved"
-        coverage_state == "covered_by_other" -> "heads_up"
-        later_messages == [] -> "interrupt_now"
-        true -> "insufficient_context"
+        closure_state in ["resolved", "acknowledged"] ->
+          "resolved"
+
+        closure_state == "handoff" ->
+          "heads_up"
+
+        coverage_state in ["covered_by_other", "covered_by_both", "covered_by_user"] ->
+          "heads_up"
+
+        later_messages == [] ->
+          "interrupt_now"
+
+        true ->
+          "insufficient_context"
       end
 
     latest_message = List.last(later_messages)
@@ -208,6 +282,7 @@ defmodule Maraithon.Followthrough.ConversationContext do
       "latest_actor" => read_string(latest_message, "actor"),
       "latest_actor_role" => read_string(latest_message, "actor_role", "unknown"),
       "latest_activity_at" => to_iso8601(read_datetime(latest_message, "occurred_at")),
+      "closure_state" => closure_state,
       "other_participant_replied" => later_other != [],
       "user_replied" => later_self != [],
       "thread_message_count" => length(messages),
@@ -217,15 +292,27 @@ defmodule Maraithon.Followthrough.ConversationContext do
       "prior_other_message_count" => length(prior_other),
       "owner_mentioned" => owner_mentioned,
       "eta_mentioned" => eta_mentioned,
+      "acknowledgment_actor" => acknowledgment_actor,
       "completion_evidence" => completion_evidence,
+      "acknowledgment_evidence" => acknowledgment_evidence,
+      "handoff_evidence" => handoff_evidence,
+      "fresh_ask_after_acknowledgment" => fresh_ask_after_acknowledgment,
       "coverage_evidence" =>
-        coverage_evidence(later_messages, later_other, owner_mentioned, eta_mentioned),
+        coverage_evidence(
+          later_messages,
+          later_other,
+          owner_mentioned,
+          eta_mentioned,
+          acknowledgment_actor,
+          acknowledgment_evidence,
+          handoff_evidence
+        ),
       "insufficient_context_reason" =>
         insufficient_context_reason(notification_posture, messages, trigger)
     }
   end
 
-  defp apply_heads_up_copy(candidate, context) do
+  defp apply_monitor_copy(candidate, context) do
     actor = read_string(context, "latest_actor", "Someone")
     source = read_string(candidate, "source", "conversation")
     category = read_string(candidate, "category", "general")
@@ -245,16 +332,16 @@ defmodule Maraithon.Followthrough.ConversationContext do
 
     recommended_action =
       if read_string(context, "ownership_state") == "other_owner" do
-        "Monitor the thread and step in only if the current owner slips or the final artifact still depends on you."
+        "Monitor the thread. No immediate action is required from you unless the current owner slips, a blocker appears, or the next step routes back to you."
       else
-        "Monitor the thread and close the final loop if the owner, artifact, or ETA is still yours."
+        "Monitor the thread. No immediate action is required unless the conversation stalls, a blocker appears, or the next step routes back to you."
       end
 
     metadata = read_map(candidate, "metadata")
 
     candidate
     |> Map.put("title", truncate(title, 180))
-    |> Map.put("summary", "#{summary} You may still need to close the final loop.")
+    |> Map.put("summary", "#{summary} No immediate action is required from you right now.")
     |> Map.put("recommended_action", recommended_action)
     |> Map.update("priority", 78, &max(&1 - 6, 70))
     |> Map.update("confidence", 0.78, &clamp_float(&1 - 0.05))
@@ -263,11 +350,30 @@ defmodule Maraithon.Followthrough.ConversationContext do
       metadata
       |> Map.put(
         "why_now",
-        "#{summary} The thread is active, but the final follow-through may still be yours."
+        "#{summary} Keep watching for a blocker, a direct ask back to you, or a stall in progress."
       )
       |> Map.put("context_brief", summary)
       |> maybe_adjust_telegram_fit_score()
     )
+  end
+
+  defp apply_insufficient_context_copy(candidate, context) do
+    summary = conversation_summary(context)
+
+    candidate
+    |> Map.put("summary", summary)
+    |> Map.put(
+      "recommended_action",
+      "Monitor the thread. Full context could not be confirmed, so avoid treating this as direct founder debt until the thread updates."
+    )
+    |> Map.update("priority", 74, &max(&1 - 10, 64))
+    |> Map.update("confidence", 0.72, &clamp_float(&1 - 0.08))
+    |> Map.update("metadata", %{}, fn metadata ->
+      metadata
+      |> Map.put("why_now", summary)
+      |> Map.put("context_brief", summary)
+      |> maybe_adjust_telegram_fit_score()
+    end)
   end
 
   defp maybe_adjust_telegram_fit_score(metadata) when is_map(metadata) do
@@ -333,7 +439,15 @@ defmodule Maraithon.Followthrough.ConversationContext do
     end)
   end
 
-  defp coverage_evidence(later_messages, later_other, owner_mentioned, eta_mentioned) do
+  defp coverage_evidence(
+         later_messages,
+         later_other,
+         owner_mentioned,
+         eta_mentioned,
+         acknowledgment_actor,
+         acknowledgment_evidence,
+         handoff_evidence
+       ) do
     latest_other = List.last(later_other)
 
     []
@@ -344,6 +458,14 @@ defmodule Maraithon.Followthrough.ConversationContext do
     |> maybe_append(
       "#{owner_mentioned} appears to own the next step.",
       present?(owner_mentioned) and owner_mentioned != "you"
+    )
+    |> maybe_append(
+      "#{acknowledgment_actor || "Another participant"} acknowledged the thread.",
+      acknowledgment_evidence != []
+    )
+    |> maybe_append(
+      "Later messages indicate the next step was handed off to another participant.",
+      handoff_evidence != []
     )
     |> maybe_append("A later message included ETA #{eta_mentioned}.", present?(eta_mentioned))
     |> maybe_append(
@@ -364,6 +486,53 @@ defmodule Maraithon.Followthrough.ConversationContext do
     |> Enum.uniq()
     |> Enum.take(3)
   end
+
+  defp acknowledgment_evidence(messages) do
+    messages
+    |> Enum.filter(fn message ->
+      contains_any?(read_string(message, "text", ""), @acknowledgment_terms) and
+        not fresh_ask_message?(message)
+    end)
+    |> Enum.map(fn message ->
+      "#{read_string(message, "actor", "Someone")} acknowledged the thread without a new ask."
+    end)
+    |> Enum.uniq()
+    |> Enum.take(3)
+  end
+
+  defp acknowledgment_actor(messages) do
+    Enum.find_value(messages, fn message ->
+      if contains_any?(read_string(message, "text", ""), @acknowledgment_terms) and
+           not fresh_ask_message?(message) do
+        read_string(message, "actor")
+      end
+    end)
+  end
+
+  defp handoff_evidence(messages, owner_mentioned) do
+    []
+    |> maybe_append(
+      "#{owner_mentioned} appears to own the next step.",
+      present?(owner_mentioned) and owner_mentioned != "you"
+    )
+    |> maybe_append(
+      "Later thread activity included handoff or owner language.",
+      Enum.any?(messages, fn message ->
+        contains_any?(read_string(message, "text", ""), @other_owner_terms)
+      end)
+    )
+  end
+
+  defp fresh_ask_after_acknowledgment?(messages) do
+    Enum.any?(messages, &fresh_ask_message?/1)
+  end
+
+  defp fresh_ask_message?(message) when is_map(message) do
+    text = read_string(message, "text", "")
+    String.contains?(text, "?") or contains_any?(text, @ask_terms)
+  end
+
+  defp fresh_ask_message?(_message), do: false
 
   defp owner_mentioned(messages) do
     Enum.find_value(messages, fn message ->

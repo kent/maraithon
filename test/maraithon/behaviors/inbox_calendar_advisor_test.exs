@@ -307,10 +307,11 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisorTest do
       assert get_in(candidate, ["metadata", "conversation_context", "notification_posture"]) ==
                "heads_up"
 
+      assert candidate["attention_mode"] == "monitor"
       assert candidate["summary"] =~ "Charlie has already responded"
       assert candidate["summary"] =~ "conversation is moving"
       assert candidate["recommended_action"] =~ "Monitor the thread"
-      assert candidate["metadata"]["why_now"] =~ "final follow-through may still be yours"
+      assert candidate["metadata"]["why_now"] =~ "Keep watching for a blocker"
 
       assert get_in(candidate, ["metadata", "detail", "conversation_summary"]) =~
                "Charlie has already responded"

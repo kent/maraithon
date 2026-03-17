@@ -89,6 +89,7 @@ defmodule Maraithon.InsightNotifications.Actions do
     action_state = action_state(delivery)
     why_now = read_string(metadata, "why_now")
     follow_up_ideas = read_string_list(metadata, "follow_up_ideas")
+    change_summary = metadata |> read_map("attention") |> read_string("change_summary")
 
     due_text =
       case insight.due_at do
@@ -122,14 +123,22 @@ defmodule Maraithon.InsightNotifications.Actions do
       end
 
     action_state_text = render_action_state(action_state)
+    header = if monitor_insight?(insight), do: "Maraithon Watching", else: "Maraithon Insight"
+    action_label = if monitor_insight?(insight), do: "Watch", else: "Action"
+
+    change_summary_text =
+      case change_summary do
+        nil -> ""
+        value -> "\n\n<b>Change:</b> #{safe(value)}"
+      end
 
     """
-    <b>Maraithon Insight</b>
+    <b>#{header}</b>
     <b>#{safe(insight.title)}</b>
 
     #{safe(insight.summary)}
 
-    <b>Action:</b> #{safe(insight.recommended_action)}#{due_text}#{source_line}#{why_now_text}#{ideas_text}#{action_state_text}
+    <b>#{action_label}:</b> #{safe(insight.recommended_action)}#{due_text}#{source_line}#{why_now_text}#{change_summary_text}#{ideas_text}#{action_state_text}
 
     score=#{Float.round(delivery.score || 0.0, 2)} threshold=#{Float.round(delivery.threshold || 0.0, 2)}
     """
@@ -176,30 +185,34 @@ defmodule Maraithon.InsightNotifications.Actions do
         []
 
       _ ->
-        completion_button =
-          if ackable_insight?(delivery.insight) do
-            %{"text" => "Ack", "callback_data" => callback_data(delivery.id, "ack")}
-          else
-            %{"text" => "Mark Done", "callback_data" => callback_data(delivery.id, "done")}
-          end
-
         base_rows =
-          case primary_action(delivery.insight) do
-            nil ->
-              [
-                [completion_button]
-              ]
+          if monitor_insight?(delivery.insight) do
+            []
+          else
+            completion_button =
+              if ackable_insight?(delivery.insight) do
+                %{"text" => "Ack", "callback_data" => callback_data(delivery.id, "ack")}
+              else
+                %{"text" => "Mark Done", "callback_data" => callback_data(delivery.id, "done")}
+              end
 
-            %{label: label, callback_action: callback_action} ->
-              [
+            case primary_action(delivery.insight) do
+              nil ->
                 [
-                  %{
-                    "text" => label,
-                    "callback_data" => callback_data(delivery.id, callback_action)
-                  },
-                  completion_button
+                  [completion_button]
                 ]
-              ]
+
+              %{label: label, callback_action: callback_action} ->
+                [
+                  [
+                    %{
+                      "text" => label,
+                      "callback_data" => callback_data(delivery.id, callback_action)
+                    },
+                    completion_button
+                  ]
+                ]
+            end
           end
 
         base_rows ++
@@ -583,7 +596,7 @@ defmodule Maraithon.InsightNotifications.Actions do
   end
 
   defp primary_action(%Insight{} = insight) do
-    if ackable_insight?(insight) do
+    if ackable_insight?(insight) or monitor_insight?(insight) do
       nil
     else
       case insight.source do
@@ -598,6 +611,8 @@ defmodule Maraithon.InsightNotifications.Actions do
     insight.category == "important_fyi" or
       read_boolean(insight.metadata || %{}, "ackable", false)
   end
+
+  defp monitor_insight?(%Insight{} = insight), do: insight.attention_mode == "monitor"
 
   defp parse_callback(value) when is_binary(value) do
     case Regex.run(~r/^#{@callback_prefix}:([0-9a-f\-]{36}):([a-z_]+)$/i, value,

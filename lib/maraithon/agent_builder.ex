@@ -274,10 +274,10 @@ defmodule Maraithon.AgentBuilder do
     },
     %{
       id: "inbox_calendar_advisor",
-      label: "Founder Followthrough Agent",
+      label: "Chief of Staff Agent",
       category: "Workflow",
       summary:
-        "Tracks commitments across Gmail, Calendar, and Slack, verifies whether follow-through happened, escalates high-confidence unresolved items, and sends recurring chief-of-staff briefs.",
+        "Runs the focused Chief of Staff stack for Gmail, Calendar, and Slack follow-through, then sends recurring chief-of-staff briefs from the same agent.",
       inputs: [
         "Gmail threads where you promised something, agreed on deadlines, or owe a reply",
         "Calendar meetings likely to create follow-up work, especially customer, investor, hiring, and planning meetings",
@@ -358,6 +358,7 @@ defmodule Maraithon.AgentBuilder do
         }
       ],
       suggestions: [
+        "Use this when you want the Chief of Staff operating layer for follow-through and recurring briefs without the travel skill pack.",
         "Keep scan limits focused so the agent escalates only the strongest unresolved commitments.",
         "Set `team_id` when multiple Slack workspaces are connected and you want one workspace per founder agent.",
         "Use `prep_window_hours` as a meeting follow-up window for how far back to inspect unresolved actions.",

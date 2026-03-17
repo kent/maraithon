@@ -48,7 +48,7 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
 
       html = render(view)
 
-      assert html =~ "Founder Followthrough Agent"
+      assert html =~ "Chief of Staff Agent"
       assert html =~ "Google Gmail"
       assert html =~ "Google Calendar"
       assert html =~ "Slack Channels"

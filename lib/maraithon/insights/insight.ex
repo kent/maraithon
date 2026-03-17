@@ -10,6 +10,7 @@ defmodule Maraithon.Insights.Insight do
   @foreign_key_type :binary_id
 
   @statuses ["new", "acknowledged", "dismissed", "snoozed"]
+  @attention_modes ["act_now", "monitor"]
   @categories [
     "reply_urgent",
     "tone_risk",
@@ -33,11 +34,13 @@ defmodule Maraithon.Insights.Insight do
     field :priority, :integer, default: 50
     field :confidence, :float, default: 0.5
     field :status, :string, default: "new"
+    field :attention_mode, :string, default: "act_now"
     field :snoozed_until, :utc_datetime_usec
     field :due_at, :utc_datetime_usec
     field :source_id, :string
     field :source_occurred_at, :utc_datetime_usec
     field :dedupe_key, :string
+    field :tracking_key, :string
     field :metadata, :map, default: %{}
 
     timestamps(type: :utc_datetime_usec)
@@ -51,13 +54,15 @@ defmodule Maraithon.Insights.Insight do
     :title,
     :summary,
     :recommended_action,
-    :dedupe_key
+    :dedupe_key,
+    :tracking_key
   ]
 
   @optional_fields [
     :priority,
     :confidence,
     :status,
+    :attention_mode,
     :snoozed_until,
     :due_at,
     :source_id,
@@ -70,6 +75,7 @@ defmodule Maraithon.Insights.Insight do
     |> cast(attrs, @required_fields ++ @optional_fields)
     |> validate_required(@required_fields)
     |> validate_inclusion(:status, @statuses)
+    |> validate_inclusion(:attention_mode, @attention_modes)
     |> validate_inclusion(:category, @categories)
     |> validate_number(:priority, greater_than_or_equal_to: 0, less_than_or_equal_to: 100)
     |> validate_number(:confidence, greater_than_or_equal_to: 0.0, less_than_or_equal_to: 1.0)
@@ -77,6 +83,7 @@ defmodule Maraithon.Insights.Insight do
     |> validate_length(:summary, min: 8, max: 1000)
     |> validate_length(:recommended_action, min: 4, max: 500)
     |> validate_length(:dedupe_key, min: 4, max: 255)
+    |> validate_length(:tracking_key, min: 4, max: 255)
     |> unique_constraint(:dedupe_key, name: :insights_user_id_dedupe_key_index)
     |> foreign_key_constraint(:agent_id)
   end

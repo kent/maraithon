@@ -60,6 +60,52 @@ defmodule Maraithon.InsightsTest do
       assert updated.priority == 92
       assert updated.title == "Reply to contract email now"
     end
+
+    test "dismisses prior open revisions that share a tracking key", %{
+      user_id: user_id,
+      agent: agent
+    } do
+      {:ok, [first]} =
+        Insights.record_many(user_id, agent.id, [
+          %{
+            "source" => "gmail",
+            "category" => "reply_urgent",
+            "title" => "Monitoring investor thread",
+            "summary" => "Keep watching the investor thread for movement.",
+            "recommended_action" => "Watch for a blocker or a direct ask back to you.",
+            "priority" => 75,
+            "confidence" => 0.82,
+            "attention_mode" => "monitor",
+            "dedupe_key" => "thread-1:rev-1",
+            "tracking_key" => "thread-1"
+          }
+        ])
+
+      {:ok, [second]} =
+        Insights.record_many(user_id, agent.id, [
+          %{
+            "source" => "gmail",
+            "category" => "reply_urgent",
+            "title" => "Monitoring investor thread again",
+            "summary" => "The thread changed and still needs monitoring.",
+            "recommended_action" => "Keep watching for a blocker or a handoff.",
+            "priority" => 81,
+            "confidence" => 0.87,
+            "attention_mode" => "monitor",
+            "dedupe_key" => "thread-1:rev-2",
+            "tracking_key" => "thread-1"
+          }
+        ])
+
+      first = Repo.get!(Maraithon.Insights.Insight, first.id)
+      second = Repo.get!(Maraithon.Insights.Insight, second.id)
+
+      assert first.status == "dismissed"
+      assert second.status == "new"
+      assert second.attention_mode == "monitor"
+      assert second.tracking_key == "thread-1"
+      assert Enum.map(Insights.list_open_monitor_for_user(user_id), & &1.id) == [second.id]
+    end
   end
 
   describe "list_open_for_user/2" do
@@ -95,6 +141,37 @@ defmodule Maraithon.InsightsTest do
 
       refute snoozed.id in open_ids
       assert length(open_ids) == 1
+    end
+
+    test "filters act-now and monitor insights separately", %{user_id: user_id, agent: agent} do
+      {:ok, [act_now]} =
+        Insights.record_many(user_id, agent.id, [
+          %{
+            "source" => "gmail",
+            "category" => "reply_urgent",
+            "title" => "Reply to legal",
+            "summary" => "Legal requested an immediate reply.",
+            "recommended_action" => "Reply now with owner and ETA.",
+            "dedupe_key" => "mode:act-now"
+          }
+        ])
+
+      {:ok, [monitor]} =
+        Insights.record_many(user_id, agent.id, [
+          %{
+            "source" => "gmail",
+            "category" => "reply_urgent",
+            "title" => "Monitor investor thread",
+            "summary" => "The investor thread is active, but no direct action is required now.",
+            "recommended_action" => "Watch for a blocker or a direct ask back to you.",
+            "attention_mode" => "monitor",
+            "dedupe_key" => "mode:monitor",
+            "tracking_key" => "mode:monitor"
+          }
+        ])
+
+      assert Enum.map(Insights.list_open_act_now_for_user(user_id), & &1.id) == [act_now.id]
+      assert Enum.map(Insights.list_open_monitor_for_user(user_id), & &1.id) == [monitor.id]
     end
   end
 

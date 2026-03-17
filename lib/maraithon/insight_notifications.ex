@@ -131,6 +131,7 @@ defmodule Maraithon.InsightNotifications do
         score = insight_score(insight)
 
         if score >= profile.score_threshold and
+             telegram_delivery_eligible?(insight) and
              PreferenceMemory.allow_telegram_interrupt?(account.user_id, insight, now) and
              not delivery_exists?(insight.id, destination) do
           attrs = %{
@@ -483,6 +484,15 @@ defmodule Maraithon.InsightNotifications do
     end
   end
 
+  defp telegram_delivery_eligible?(%Insight{} = insight) do
+    attention = read_map(insight.metadata || %{}, "attention")
+
+    case insight.attention_mode do
+      "monitor" -> read_boolean(attention, "re_notify_eligible", false)
+      _ -> true
+    end
+  end
+
   defp maybe_answer_callback(nil, _text), do: :ok
 
   defp maybe_answer_callback(callback_id, text) do
@@ -577,6 +587,23 @@ defmodule Maraithon.InsightNotifications do
     case fetch(map, key) do
       value when is_map(value) -> value
       _ -> %{}
+    end
+  end
+
+  defp read_boolean(map, key, default) when is_map(map) and is_binary(key) do
+    case fetch(map, key) do
+      value when is_boolean(value) ->
+        value
+
+      value when is_binary(value) ->
+        case String.downcase(String.trim(value)) do
+          "true" -> true
+          "false" -> false
+          _ -> default
+        end
+
+      _ ->
+        default
     end
   end
 

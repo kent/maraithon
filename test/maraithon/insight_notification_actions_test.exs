@@ -438,6 +438,55 @@ defmodule Maraithon.InsightNotificationActionsTest do
     assert sent.text =~ "Monitor the thread"
   end
 
+  test "renders monitor insights in Telegram without execution buttons", %{
+    agent: agent,
+    user_id: user_id
+  } do
+    {:ok, [_insight]} =
+      Insights.record_many(user_id, agent.id, [
+        %{
+          "source" => "gmail",
+          "category" => "reply_urgent",
+          "title" => "Monitoring investor handoff",
+          "summary" => "Breck acknowledged the thread and is checking his side.",
+          "recommended_action" =>
+            "Watch for a blocker, a direct ask back to you, or a stall in progress.",
+          "priority" => 87,
+          "confidence" => 0.9,
+          "attention_mode" => "monitor",
+          "dedupe_key" => "telegram-actions:monitor:1",
+          "tracking_key" => "telegram-actions:monitor:1",
+          "metadata" => %{
+            "why_now" => "The thread still matters, but the next step is not on you right now.",
+            "attention" => %{
+              "change_summary" => "Ownership moved to Breck after acknowledgment.",
+              "re_notify_eligible" => true
+            },
+            "record" => %{
+              "person" => "Breck",
+              "commitment" => "Monitor investor handoff",
+              "evidence" => ["Breck replied and took ownership of the next step."],
+              "next_action" =>
+                "Watch for a blocker, a direct ask back to you, or a stall in progress."
+            }
+          }
+        }
+      ])
+
+    result = InsightNotifications.dispatch_telegram_batch(batch_size: 10)
+    assert result.sent == 1
+
+    sent = last_telegram_message(:send)
+
+    assert sent.text =~ "Maraithon Watching"
+    assert sent.text =~ "<b>Watch:</b>"
+    assert sent.text =~ "<b>Change:</b> Ownership moved to Breck after acknowledgment."
+
+    refute button_labels(sent.opts) |> Enum.member?("Draft Email")
+    refute button_labels(sent.opts) |> Enum.member?("Mark Done")
+    refute button_labels(sent.opts) |> Enum.member?("Ack")
+  end
+
   defp last_telegram_message(type) do
     :capturing_telegram_recorder
     |> Agent.get(&Enum.reverse/1)

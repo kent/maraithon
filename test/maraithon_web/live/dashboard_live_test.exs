@@ -71,6 +71,51 @@ defmodule MaraithonWeb.DashboardLiveTest do
     assert html =~ "Write down the two risks you need covered on the call."
   end
 
+  test "separates act-now and monitor insight cards", %{conn: conn} do
+    {:ok, agent} =
+      create_agent(%{
+        behavior: "inbox_calendar_advisor",
+        config: %{},
+        status: "running",
+        started_at: DateTime.utc_now()
+      })
+
+    {:ok, _insights} =
+      Insights.record_many(@user_email, agent.id, [
+        %{
+          "source" => "gmail",
+          "category" => "reply_urgent",
+          "title" => "Reply to the customer escalation",
+          "summary" => "A same-day customer update is still owed.",
+          "recommended_action" => "Reply now with owner and ETA.",
+          "priority" => 94,
+          "confidence" => 0.92,
+          "dedupe_key" => "dashboard:act-now:1"
+        },
+        %{
+          "source" => "gmail",
+          "category" => "reply_urgent",
+          "title" => "Monitoring investor thread",
+          "summary" => "The investor thread is moving and does not need action from you now.",
+          "recommended_action" => "Watch for a blocker or a direct ask back to you.",
+          "priority" => 84,
+          "confidence" => 0.86,
+          "attention_mode" => "monitor",
+          "dedupe_key" => "dashboard:monitor:1",
+          "tracking_key" => "dashboard:monitor:1"
+        }
+      ])
+
+    {:ok, _view, html} = live(conn, "/dashboard")
+
+    assert html =~ "Needs Action"
+    assert html =~ "Watching"
+    assert html =~ "Reply to the customer escalation"
+    assert html =~ "Monitoring investor thread"
+    assert html =~ "Action:"
+    assert html =~ "Watch:"
+  end
+
   test "shows dashboard metrics when agents exist", %{conn: conn} do
     {:ok, _running} =
       create_agent(%{

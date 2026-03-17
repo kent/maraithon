@@ -647,6 +647,133 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
     read_string(context, "notification_posture", nil) == "resolved"
   end
 
+  defp gmail_tracking_key("reply_urgent", thread_id) when is_binary(thread_id) do
+    "gmail:thread:#{thread_id}:reply_owed"
+  end
+
+  defp gmail_tracking_key("commitment_unresolved", thread_id) when is_binary(thread_id) do
+    "gmail:commitment:#{thread_id}"
+  end
+
+  defp gmail_tracking_key(_category, thread_id) when is_binary(thread_id) do
+    "gmail:thread:#{thread_id}"
+  end
+
+  defp apply_gmail_attention_fields(candidate, context, tracking_key)
+       when is_map(candidate) and is_map(context) and is_binary(tracking_key) do
+    attention_mode = attention_mode_for_context(context)
+
+    source_occurred_at =
+      read_datetime(candidate, "source_occurred_at") || read_datetime(candidate, "due_at")
+
+    change_summary = change_summary_for_context(context)
+    material_change_kind = material_change_kind_for_context(context, attention_mode)
+    ownership_state = read_string(context, "ownership_state", "unknown")
+    importance_band = importance_band_for_candidate(candidate)
+
+    revision_key =
+      revision_key_for_candidate(
+        tracking_key,
+        attention_mode,
+        ownership_state,
+        read_string(context, "latest_activity_at", to_iso8601(source_occurred_at)),
+        material_change_kind,
+        read_string(candidate, "source_id", nil),
+        to_iso8601(read_datetime(candidate, "due_at"))
+      )
+
+    metadata =
+      candidate
+      |> read_map("metadata")
+      |> Map.put(
+        "attention",
+        %{
+          "mode" => attention_mode,
+          "importance_band" => importance_band,
+          "founder_action_required" => attention_mode == "act_now",
+          "ownership_state" => ownership_state,
+          "material_change_kind" => material_change_kind,
+          "change_summary" => change_summary,
+          "revision_key" => revision_key,
+          "re_notify_eligible" => true
+        }
+      )
+
+    candidate
+    |> Map.put("attention_mode", attention_mode)
+    |> Map.put("tracking_key", tracking_key)
+    |> Map.put("dedupe_key", "#{tracking_key}:#{revision_key}")
+    |> Map.put("metadata", metadata)
+  end
+
+  defp apply_gmail_attention_fields(candidate, _context, _tracking_key), do: candidate
+
+  defp attention_mode_for_context(context) when is_map(context) do
+    case read_string(context, "notification_posture", nil) do
+      "heads_up" -> "monitor"
+      "insufficient_context" -> "monitor"
+      _ -> "act_now"
+    end
+  end
+
+  defp material_change_kind_for_context(context, "monitor") when is_map(context) do
+    cond do
+      read_string(context, "closure_state", nil) == "handoff" ->
+        "ownership_shift"
+
+      read_string(context, "notification_posture", nil) == "insufficient_context" ->
+        "initial_detection"
+
+      true ->
+        "initial_detection"
+    end
+  end
+
+  defp material_change_kind_for_context(context, "act_now") when is_map(context) do
+    cond do
+      read_boolean(context, "fresh_ask_after_acknowledgment", false) -> "new_direct_ask"
+      true -> "initial_detection"
+    end
+  end
+
+  defp material_change_kind_for_context(_context, _mode), do: "initial_detection"
+
+  defp change_summary_for_context(context) when is_map(context) do
+    ConversationContext.conversation_summary(context)
+  end
+
+  defp importance_band_for_candidate(candidate) when is_map(candidate) do
+    case candidate |> read_map("metadata") |> read_string("importance_hint", nil) do
+      "drop" -> "low"
+      "digest" -> "medium"
+      _ -> "high"
+    end
+  end
+
+  defp revision_key_for_candidate(
+         tracking_key,
+         attention_mode,
+         ownership_state,
+         latest_activity_at,
+         material_change_kind,
+         source_id,
+         due_at
+       ) do
+    %{
+      tracking_key: tracking_key,
+      attention_mode: attention_mode,
+      ownership_state: ownership_state,
+      latest_activity_at: latest_activity_at,
+      material_change_kind: material_change_kind,
+      source_id: source_id,
+      due_at: due_at
+    }
+    |> Jason.encode!()
+    |> then(fn payload -> :crypto.hash(:sha256, payload) end)
+    |> Base.encode16(case: :lower)
+    |> binary_part(0, 16)
+  end
+
   defp gmail_watch_rules(user_id) when is_binary(user_id) do
     user_id
     |> PreferenceMemory.active_rules()
@@ -1113,7 +1240,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
 
     reply_matches = matched_terms(body, @reply_request_terms)
     deadline_matches = matched_terms(body, @deadline_terms)
-    needs_reply? = reply_matches != [] or "UNREAD" in labels or "IMPORTANT" in labels
+    needs_reply? = reply_matches != [] or deadline_matches != []
 
     sender_is_user? = string_contains?(from, state.user_id)
 
@@ -1158,85 +1285,100 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
 
             []
           else
-            person = primary_contact(from) || from
-            inferred_deadline = infer_deadline_from_text(body, occurred_at)
+            if suppress_low_signal_reply_candidate?(triage) do
+              Logger.info("InboxCalendarAdvisor suppressed low-signal reply candidate",
+                thread_id: thread_id,
+                from: from,
+                importance_hint: triage["importance_hint"],
+                reply_obligation_hint: triage["reply_obligation_hint"]
+              )
 
-            due_at =
-              inferred_deadline || DateTime.add(occurred_at || DateTime.utc_now(), 8, :hour)
-
-            commitment = "Reply to #{person} on \"#{truncate(subject, 70)}\""
-
-            evidence =
               []
-              |> maybe_append("Incoming thread from #{from}.", present?(from))
-              |> maybe_append(
-                "Reply request terms: #{Enum.join(reply_matches, ", ")}.",
-                reply_matches != []
-              )
-              |> maybe_append(
-                "Deadline cues: #{Enum.join(deadline_matches, ", ")}.",
-                deadline_matches != []
-              )
-              |> maybe_append("No sent reply found after #{format_dt(occurred_at)}.", true)
-              |> Enum.take(@max_evidence_points)
+            else
+              person = primary_contact(from) || from
+              inferred_deadline = infer_deadline_from_text(body, occurred_at)
 
-            next_action =
-              "Reply now with owner, ETA, and the exact artifact or update you committed to."
+              due_at =
+                inferred_deadline || DateTime.add(occurred_at || DateTime.utc_now(), 8, :hour)
 
-            confidence =
-              0.66
-              |> maybe_add_float(0.14, reply_matches != [])
-              |> maybe_add_float(0.06, "IMPORTANT" in labels)
-              |> maybe_add_float(0.05, "UNREAD" in labels)
-              |> maybe_add_float(0.05, deadline_matches != [])
-              |> clamp(0.0, 1.0)
+              commitment = "Reply to #{person} on \"#{truncate(subject, 70)}\""
 
-            priority = urgency_priority(due_at, 82)
+              evidence =
+                []
+                |> maybe_append("Incoming thread from #{from}.", present?(from))
+                |> maybe_append(
+                  "Reply request terms: #{Enum.join(reply_matches, ", ")}.",
+                  reply_matches != []
+                )
+                |> maybe_append(
+                  "Deadline cues: #{Enum.join(deadline_matches, ", ")}.",
+                  deadline_matches != []
+                )
+                |> maybe_append("No sent reply found after #{format_dt(occurred_at)}.", true)
+                |> Enum.take(@max_evidence_points)
 
-            summary =
-              "You still owe #{person} a response #{deadline_phrase(due_at)}. No sent follow-up was detected."
+              next_action =
+                "Reply now with owner, ETA, and the exact artifact or update you committed to."
 
-            record =
-              commitment_record(
-                commitment,
-                person,
-                "gmail_thread:#{thread_id}",
-                due_at,
-                "unresolved",
-                evidence,
-                next_action
-              )
+              confidence =
+                0.66
+                |> maybe_add_float(0.14, reply_matches != [])
+                |> maybe_add_float(0.06, "IMPORTANT" in labels)
+                |> maybe_add_float(0.05, "UNREAD" in labels)
+                |> maybe_add_float(0.05, deadline_matches != [])
+                |> clamp(0.0, 1.0)
 
-            [
-              %{
-                source: "gmail",
-                source_id: message_id,
-                source_occurred_at: occurred_at,
-                category: "reply_urgent",
-                title: "Reply owed: #{truncate(subject, 90)}",
-                summary: summary,
-                recommended_action: next_action,
-                priority: priority,
-                confidence: confidence,
-                due_at: due_at,
-                dedupe_key: "gmail:thread:#{thread_id}:reply_owed",
-                metadata:
-                  compact_map(%{
-                    "account" => read_string(email, "account", state.google_account),
-                    "thread_id" => thread_id,
-                    "from" => from,
-                    "to" => to,
-                    "subject" => subject,
-                    "labels" => labels,
-                    "signals" => reply_matches,
-                    "context_brief" => "Incoming request from #{person}.",
-                    "record" => record
-                  })
-                  |> Map.merge(triage)
-              }
-              |> normalize_candidate(state)
-              |> ConversationContext.apply_to_candidate(conversation_context)
-            ]
+              priority = urgency_priority(due_at, 82)
+
+              summary =
+                "You still owe #{person} a response #{deadline_phrase(due_at)}. No sent follow-up was detected."
+
+              record =
+                commitment_record(
+                  commitment,
+                  person,
+                  "gmail_thread:#{thread_id}",
+                  due_at,
+                  "unresolved",
+                  evidence,
+                  next_action
+                )
+
+              [
+                %{
+                  source: "gmail",
+                  source_id: message_id,
+                  source_occurred_at: occurred_at,
+                  category: "reply_urgent",
+                  title: "Reply owed: #{truncate(subject, 90)}",
+                  summary: summary,
+                  recommended_action: next_action,
+                  priority: priority,
+                  confidence: confidence,
+                  due_at: due_at,
+                  tracking_key: gmail_tracking_key("reply_urgent", thread_id),
+                  metadata:
+                    compact_map(%{
+                      "account" => read_string(email, "account", state.google_account),
+                      "thread_id" => thread_id,
+                      "from" => from,
+                      "to" => to,
+                      "subject" => subject,
+                      "labels" => labels,
+                      "signals" => reply_matches,
+                      "context_brief" => "Incoming request from #{person}.",
+                      "record" => record
+                    })
+                    |> Map.merge(triage)
+                }
+                |> normalize_candidate(state)
+                |> ConversationContext.apply_to_candidate(conversation_context)
+                |> apply_gmail_attention_fields(
+                  conversation_context,
+                  gmail_tracking_key("reply_urgent", thread_id)
+                )
+              ]
+            end
           end
         end
     end
@@ -1350,7 +1492,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
               priority: priority,
               confidence: confidence,
               due_at: due_at,
-              dedupe_key: "gmail:commitment:#{thread_id}",
+              tracking_key: gmail_tracking_key("commitment_unresolved", thread_id),
               metadata:
                 compact_map(%{
                   "account" => read_string(sent_email, "account", state.google_account),
@@ -1365,6 +1507,10 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
             }
             |> normalize_candidate(state)
             |> ConversationContext.apply_to_candidate(conversation_context)
+            |> apply_gmail_attention_fields(
+              conversation_context,
+              gmail_tracking_key("commitment_unresolved", thread_id)
+            )
           ]
         end
     end
@@ -1608,9 +1754,10 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
         human_counterparty = read_boolean(item, "human_counterparty", false)
         missing_followthrough = read_boolean(item, "missing_followthrough_evidence", false)
         notification_posture = resolve_notification_posture(item, base)
+        attention_mode = resolve_attention_mode(item, base, notification_posture)
 
         interrupt_now =
-          read_boolean(item, "interrupt_now", notification_posture == "interrupt_now")
+          read_boolean(item, "interrupt_now", attention_mode == "act_now")
 
         false_positive_risk = clamp(read_float(item, "false_positive_risk", 1.0), 0.0, 1.0)
         telegram_fit_score = clamp(read_float(item, "telegram_fit_score", confidence), 0.0, 1.0)
@@ -1696,6 +1843,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
             clamp(read_integer(item, "priority", read_integer(base, "priority", 50)), 0, 100)
           )
           |> Map.put("confidence", confidence)
+          |> Map.put("attention_mode", attention_mode)
           |> Map.update("metadata", %{}, fn metadata ->
             metadata
             |> stringify_keys()
@@ -1731,6 +1879,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
             |> maybe_put("decision_reason", if(reply_debt_candidate?, do: decision_reason))
             |> maybe_put_list("follow_up_ideas", follow_up_ideas)
             |> maybe_put_map("conversation_context", conversation_context)
+            |> sync_attention_metadata(attention_mode, conversation_context, why_now, base)
             |> Map.put("record", merged_record)
             |> Map.put("commitment", merged_record["commitment"])
             |> Map.put("person", merged_record["person"])
@@ -1754,8 +1903,8 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
     actionability = read_string(item, "actionability", "") |> String.downcase()
     human_counterparty = read_boolean(item, "human_counterparty", false)
     missing_followthrough = read_boolean(item, "missing_followthrough_evidence", false)
-    interrupt_now = read_boolean(item, "interrupt_now", false)
     notification_posture = resolve_notification_posture(item, base)
+    attention_mode = resolve_attention_mode(item, base, notification_posture)
     false_positive_risk = read_float(item, "false_positive_risk", 1.0)
     reply_debt_candidate? = gmail_reply_candidate?(base)
 
@@ -1796,7 +1945,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
     actionability == "actionable" and
       human_counterparty and
       missing_followthrough and
-      (interrupt_now or notification_posture == "heads_up") and
+      attention_mode in ["act_now", "monitor"] and
       false_positive_risk <= 0.35 and
       reply_debt_gate_passes?(
         reply_debt_candidate?,
@@ -1813,7 +1962,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
     item_posture = read_string(item, "notification_posture", nil)
 
     cond do
-      item_posture in ["interrupt_now", "heads_up"] ->
+      item_posture in ["interrupt_now", "heads_up", "insufficient_context"] ->
         item_posture
 
       read_boolean(item, "interrupt_now", false) ->
@@ -1825,6 +1974,74 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
         |> read_map("conversation_context")
         |> read_string("notification_posture", nil)
     end
+  end
+
+  defp resolve_attention_mode(item, base, notification_posture) do
+    case read_string(item, "attention_mode", nil) do
+      "act_now" ->
+        "act_now"
+
+      "monitor" ->
+        "monitor"
+
+      _ ->
+        case read_string(base, "attention_mode", nil) do
+          mode when mode in ["act_now", "monitor"] ->
+            mode
+
+          _ ->
+            if notification_posture in ["heads_up", "insufficient_context"],
+              do: "monitor",
+              else: "act_now"
+        end
+    end
+  end
+
+  defp sync_attention_metadata(metadata, attention_mode, conversation_context, why_now, base)
+       when is_map(metadata) and is_map(base) do
+    attention = read_map(metadata, "attention")
+    base_attention = base |> read_map("metadata") |> read_map("attention")
+
+    Map.put(metadata, "attention", %{
+      "mode" => attention_mode,
+      "importance_band" =>
+        read_string(
+          attention,
+          "importance_band",
+          read_string(base_attention, "importance_band", "high")
+        ),
+      "founder_action_required" => attention_mode == "act_now",
+      "ownership_state" =>
+        read_string(
+          attention,
+          "ownership_state",
+          read_string(
+            conversation_context,
+            "ownership_state",
+            read_string(base_attention, "ownership_state", "unknown")
+          )
+        ),
+      "material_change_kind" =>
+        read_string(
+          attention,
+          "material_change_kind",
+          read_string(base_attention, "material_change_kind", "initial_detection")
+        ),
+      "change_summary" =>
+        read_string(
+          attention,
+          "change_summary",
+          why_now || read_string(base_attention, "change_summary", nil)
+        ),
+      "revision_key" =>
+        read_string(attention, "revision_key", read_string(base_attention, "revision_key", nil)),
+      "re_notify_eligible" =>
+        read_boolean(
+          attention,
+          "re_notify_eligible",
+          read_boolean(base_attention, "re_notify_eligible", true)
+        )
+    })
   end
 
   defp resolve_record(item, base) do
@@ -1929,7 +2146,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
 
     Task:
     - Your first job is disqualification, not escalation.
-    - Keep only unresolved commitments that should interrupt a founder now.
+    - Keep only unresolved commitments that either need direct founder action now or should stay monitored as a high-signal tracked thread.
     - Prioritize explicit promises, missed replies, and post-meeting follow-ups after disqualifying weak candidates.
     - Apply a reasoning-first decision, not keyword heuristics:
       1. Is there a real human counterparty?
@@ -1960,10 +2177,11 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
       3. "Receipt / invoice / order confirmation" with no direct ask
       4. "Saw your post, worth a quick call? Here's my Calendly."
       5. "Following up on my outbound prospecting tool" when the user never replied
-    - Every returned item must be truly actionable now.
+    - Every returned item must be high-signal and worth keeping open.
     - Each candidate may include conversation_context.notification_posture.
+    - If notification_posture is "heads_up" or "insufficient_context", prefer attention_mode = "monitor".
     - If notification_posture is "heads_up", keep the softer "conversation is moving" framing.
-    - Only use unattended-thread language when notification_posture is "interrupt_now".
+    - Only use unattended-thread language when attention_mode is "act_now" and notification_posture is "interrupt_now".
     - Keep `category` and `dedupe_key` unchanged.
     - Keep confidence between 0 and 1.
     - Estimate telegram_fit_score between 0 and 1, where 1 means "send to Telegram now".
@@ -1977,16 +2195,17 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
     telegram_fit_score, telegram_fit_reason, why_now, follow_up_ideas,
     commitment, person, source, deadline, status, evidence, next_action,
     actionability, obligation_type, human_counterparty, missing_followthrough_evidence,
-    interrupt_now, notification_posture, false_positive_risk, reasoning_summary,
+    interrupt_now, attention_mode, notification_posture, false_positive_risk, reasoning_summary,
     thread_type, solicited, prior_user_engagement, explicit_user_commitment,
     reply_obligation, importance, evidence_for_reply_owed, evidence_against_reply_owed,
     decision_reason
     - Set actionability to exactly "actionable" for every returned item.
     - Set human_counterparty and missing_followthrough_evidence to true for every returned item.
-    - Set interrupt_now to true only when the conversation still clearly needs immediate founder interruption.
-    - Keep notification_posture as "interrupt_now" or "heads_up".
+    - Set attention_mode to exactly "act_now" or "monitor".
+    - Set interrupt_now to true only when attention_mode is "act_now" and the conversation still clearly needs immediate founder interruption.
+    - Keep notification_posture as "interrupt_now", "heads_up", or "insufficient_context".
     - Set reply_obligation to true only when there is a real outstanding obligation.
-    - Set importance to "important" only for items that should persist as actionable insights now.
+    - Set importance to "important" only for items that should persist as open insights.
     - Do not return items with importance "digest" or "drop"; omit them from the array instead.
     - Keep false_positive_risk <= 0.35 for every returned item.
     """
@@ -2013,6 +2232,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
       explicit_thread_commitment?(sent_messages, thread_id, occurred_at)
 
     solicited_hint = prior_user_engagement or explicit_user_commitment
+    founder_signal? = solicited_hint or reply_matches != []
 
     prior_other_message_count = read_integer(conversation_context, "prior_other_message_count", 0)
 
@@ -2033,6 +2253,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
       cond do
         clear_cold_outreach? -> "cold_sales_outreach"
         outreach_indicators != [] -> "unknown"
+        deadline_matches != [] and not founder_signal? -> "passive_update"
         true -> "direct_human_request"
       end
 
@@ -2072,6 +2293,10 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
         "No explicit user commitment was found for this thread.",
         not explicit_user_commitment
       )
+      |> maybe_append(
+        "Only generic deadline cues were found without a direct ask or prior founder involvement.",
+        deadline_matches != [] and not founder_signal?
+      )
       |> Enum.take(@max_evidence_points)
 
     importance_hint =
@@ -2080,6 +2305,9 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
           "drop"
 
         outreach_indicators != [] and not solicited_hint and not explicit_user_commitment ->
+          "digest"
+
+        deadline_matches != [] and not founder_signal? ->
           "digest"
 
         true ->
@@ -2091,7 +2319,6 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
         importance_hint != "important" -> false
         explicit_user_commitment -> true
         reply_matches != [] -> true
-        "UNREAD" in labels or "IMPORTANT" in labels -> true
         true -> false
       end
 
@@ -2114,6 +2341,13 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
   end
 
   defp suppress_cold_outreach?(_triage), do: false
+
+  defp suppress_low_signal_reply_candidate?(triage) when is_map(triage) do
+    read_string(triage, "importance_hint", nil) == "digest" and
+      not read_boolean(triage, "reply_obligation_hint", false)
+  end
+
+  defp suppress_low_signal_reply_candidate?(_triage), do: false
 
   defp cold_outreach_thread?(
          social_matches,

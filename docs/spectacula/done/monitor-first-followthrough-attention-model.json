@@ -1,0 +1,75 @@
+{
+  "spec_id": "monitor-first-followthrough-attention-model",
+  "slug": "monitor-first-followthrough-attention-model",
+  "title": "Monitor-First Attention Model For Follow-Through Insights",
+  "stage": "done",
+  "spec_path": "../specs/monitor-first-followthrough-attention-model.md",
+  "created_at": "2026-03-16T23:38:02Z",
+  "started_at": "2026-03-16T23:52:53Z",
+  "updated_at": "2026-03-17T00:12:05Z",
+  "summary": "Implemented the monitor-first attention model across insight storage, Gmail classification, dashboard/brief rendering, and Telegram delivery. Open threads now persist `attention_mode` and `tracking_key`, monitor items are revisioned separately from act-now debt, and high-signal watch threads no longer surface as direct founder debt.",
+  "next_action": "Observe real user traffic to tune monitor re-notify thresholds and any remaining Gmail false-positive patterns.",
+  "blockers": [],
+  "reference_examples": [
+    "docs/spectacula/specs/conversation-context-aware-followthrough-insights.md",
+    "docs/spectacula/specs/cold-outreach-disqualification-followthrough-insights.md",
+    "docs/spectacula/specs/evidence-first-insight-detail.md"
+  ],
+  "verification": {
+    "format": "passed",
+    "lint": "passed",
+    "typecheck": "passed",
+    "build": "passed",
+    "tests": "passed",
+    "spec_review": "passed",
+    "notes": "Validated with targeted regression suites, `MIX_ENV=test mix compile --force` to refresh stale test beams, and a final `mix precommit` run with 937 tests passing."
+  },
+  "resume_context": {
+    "last_completed_step": "Completed the end-to-end implementation, verification, and Spectacula closeout for the monitor-first attention model.",
+    "pending_steps": [],
+    "open_questions": [
+      "Whether production monitor re-notify behavior needs tighter gating around material-change detection or time-based resurfacing."
+    ],
+    "last_reviewed_sections": [
+      "4. UX / Interaction Model",
+      "5. Functional Requirements",
+      "6. Data and Domain Model",
+      "7. Backend / Service / Context Changes",
+      "8. Delivery / Notification Model",
+      "12. Test Plan and Validation Matrix"
+    ],
+    "artifacts": [
+      "docs/spectacula/specs/monitor-first-followthrough-attention-model.md",
+      "priv/repo/migrations/20260316235259_add_attention_mode_and_tracking_key_to_insights.exs",
+      "lib/maraithon/insights.ex",
+      "lib/maraithon/behaviors/inbox_calendar_advisor.ex",
+      "lib/maraithon/behaviors/chief_of_staff_brief_agent.ex",
+      "lib/maraithon_web/live/dashboard_live.ex",
+      "lib/maraithon/insight_notifications/actions.ex"
+    ],
+    "notes": "A stale `_build/test` issue reappeared during verification; forcing a fresh `MIX_ENV=test` compile resolved it before the final green precommit run."
+  },
+  "history": [
+    {
+      "at": "2026-03-16T23:38:02Z",
+      "event": "spec_created",
+      "from_stage": null,
+      "to_stage": "specs",
+      "note": "Initial draft created from observed Gmail false positives, desired monitor-mode behavior, and current repository context."
+    },
+    {
+      "at": "2026-03-16T23:52:53Z",
+      "event": "implementation_started",
+      "from_stage": "specs",
+      "to_stage": "inprogress",
+      "note": "Implementation began with the schema/storage slice for persisted attention modes and tracking-key-based insight revisioning."
+    },
+    {
+      "at": "2026-03-17T00:12:05Z",
+      "event": "implementation_completed",
+      "from_stage": "inprogress",
+      "to_stage": "done",
+      "note": "Attention-mode persistence, tracking-key revisioning, monitor-aware Gmail triage, and the dashboard/brief/Telegram surface split shipped and passed precommit."
+    }
+  ]
+}

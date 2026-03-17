@@ -96,33 +96,44 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
   end
 
   defp build_briefs(user_id, agent_id, state, due, now) do
-    open_insights = Insights.list_open_for_user(user_id, limit: 30)
+    act_now_insights = Insights.list_open_act_now_for_user(user_id, limit: 30)
+    monitor_insights = Insights.list_open_monitor_for_user(user_id, limit: 30)
     recent_insights = Insights.list_recent_for_user(user_id, limit: 60)
 
     due
-    |> Enum.map(&build_brief_attrs(&1, state, open_insights, recent_insights, now))
+    |> Enum.map(
+      &build_brief_attrs(&1, state, act_now_insights, monitor_insights, recent_insights, now)
+    )
     |> then(&Briefs.record_many(user_id, agent_id, &1))
   end
 
   defp build_brief_attrs(
          %{cadence: "morning"} = plan,
          state,
-         open_insights,
+         act_now_insights,
+         monitor_insights,
          _recent_insights,
          now
        ) do
-    due_today = Enum.filter(open_insights, &due_today?(&1, state.timezone_offset_hours, now))
-    top_items = Enum.take(open_insights, state.max_items)
+    due_today = Enum.filter(act_now_insights, &due_today?(&1, state.timezone_offset_hours, now))
+    top_items = Enum.take(act_now_insights, state.max_items)
+    watching_items = recent_monitor_items(monitor_insights, now, state.max_items)
 
     {title, summary} =
-      case length(top_items) do
-        0 ->
+      cond do
+        top_items == [] and watching_items == [] ->
           {"Morning brief: clean slate",
            "No urgent open items are surfacing right now across Gmail, Calendar, or Slack."}
 
-        count ->
+        top_items == [] ->
+          {"Morning brief: clear action list",
+           "#{length(watching_items)} important threads are being watched, with no direct actions due right now."}
+
+        true ->
+          count = length(top_items)
+
           {"Morning brief: #{count} items worth watching",
-           "#{length(due_today)} due today, #{overdue_count(open_insights, state.timezone_offset_hours, now)} overdue, and #{count_by_source(open_insights, "slack")} from Slack."}
+           "#{length(due_today)} due today, #{overdue_count(act_now_insights, state.timezone_offset_hours, now)} overdue, #{length(monitor_insights)} in watching, and #{count_by_source(act_now_insights, "slack")} from Slack."}
       end
 
     %{
@@ -131,33 +142,51 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
       "dedupe_key" => dedupe_key("morning", plan.period_key),
       "title" => title,
       "summary" => summary,
-      "body" => morning_body(top_items, open_insights, state.timezone_offset_hours, now),
-      "metadata" => metadata_for(plan, state.assistant_behavior, open_insights)
+      "body" =>
+        morning_body(
+          top_items,
+          watching_items,
+          act_now_insights,
+          monitor_insights,
+          state.timezone_offset_hours,
+          now
+        ),
+      "metadata" =>
+        metadata_for(plan, state.assistant_behavior, act_now_insights ++ watching_items)
     }
   end
 
   defp build_brief_attrs(
          %{cadence: "end_of_day"} = plan,
          state,
-         open_insights,
+         act_now_insights,
+         monitor_insights,
          _recent_insights,
          _now
        ) do
     debt_items =
-      open_insights
+      act_now_insights
       |> Enum.filter(
         &(due_today?(&1, state.timezone_offset_hours, plan.scheduled_for) or
             overdue?(&1, state.timezone_offset_hours, plan.scheduled_for))
       )
       |> Enum.take(state.max_items)
 
+    watching_items = recent_monitor_items(monitor_insights, plan.scheduled_for, state.max_items)
+
     {title, summary} =
-      case length(debt_items) do
-        0 ->
+      cond do
+        debt_items == [] and watching_items == [] ->
           {"End-of-day debt: all clear",
            "Nothing high-confidence still looks open at the end of the day."}
 
-        count ->
+        debt_items == [] ->
+          {"End-of-day debt: action list clear",
+           "#{length(watching_items)} important threads are still being watched, with no direct founder debt tonight."}
+
+        true ->
+          count = length(debt_items)
+
           {"End-of-day debt: #{count} items still open",
            "#{overdue_count(debt_items, state.timezone_offset_hours, plan.scheduled_for)} overdue and #{due_today_count(debt_items, state.timezone_offset_hours, plan.scheduled_for)} still due today."}
       end
@@ -171,18 +200,21 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
       "body" =>
         end_of_day_body(
           debt_items,
-          open_insights,
+          watching_items,
+          act_now_insights,
+          monitor_insights,
           state.timezone_offset_hours,
           plan.scheduled_for
         ),
-      "metadata" => metadata_for(plan, state.assistant_behavior, debt_items)
+      "metadata" => metadata_for(plan, state.assistant_behavior, debt_items ++ watching_items)
     }
   end
 
   defp build_brief_attrs(
          %{cadence: "weekly_review"} = plan,
          state,
-         open_insights,
+         act_now_insights,
+         monitor_insights,
          recent_insights,
          _now
        ) do
@@ -194,8 +226,8 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
         DateTime.compare(insight.inserted_at, week_cutoff) in [:eq, :gt]
       end)
 
-    top_open = Enum.take(open_insights, state.max_items)
-    open_count = Enum.count(open_insights)
+    top_open = Enum.take(act_now_insights ++ monitor_insights, state.max_items)
+    open_count = Enum.count(act_now_insights) + Enum.count(monitor_insights)
     closed_count = Enum.count(weekly_items, &(&1.status in ["acknowledged", "dismissed"]))
 
     %{
@@ -311,27 +343,47 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
     shift_utc(target_local, offset_hours)
   end
 
-  defp morning_body(top_items, open_insights, offset_hours, now) do
+  defp morning_body(
+         top_items,
+         watching_items,
+         act_now_insights,
+         monitor_insights,
+         offset_hours,
+         now
+       ) do
     """
     Focus today:
-    #{format_items(top_items, offset_hours, now)}
+    #{format_items(top_items, offset_hours, now, "1. Nothing needs direct action right now.")}
+
+    #{watching_section(watching_items, offset_hours, now)}
 
     Snapshot:
-    - #{length(open_insights)} open items across Gmail, Calendar, and Slack
-    - #{overdue_count(open_insights, offset_hours, now)} already overdue
-    - #{due_today_count(open_insights, offset_hours, now)} due today
+    - #{length(act_now_insights)} items need direct action across Gmail, Calendar, and Slack
+    - #{length(monitor_insights)} important threads are in Watching
+    - #{overdue_count(act_now_insights, offset_hours, now)} already overdue
+    - #{due_today_count(act_now_insights, offset_hours, now)} due today
     """
     |> String.trim()
   end
 
-  defp end_of_day_body(debt_items, open_insights, offset_hours, now) do
+  defp end_of_day_body(
+         debt_items,
+         watching_items,
+         act_now_insights,
+         monitor_insights,
+         offset_hours,
+         now
+       ) do
     """
     Tonight's top actions:
-    #{format_items(debt_items, offset_hours, now)}
+    #{format_items(debt_items, offset_hours, now, "1. Nothing needs direct action tonight.")}
+
+    #{watching_section(watching_items, offset_hours, now)}
 
     Why it matters:
-    - #{overdue_count(open_insights, offset_hours, now)} items are already overdue
-    - #{due_today_count(open_insights, offset_hours, now)} were due today and still unresolved
+    - #{overdue_count(act_now_insights, offset_hours, now)} items are already overdue
+    - #{due_today_count(act_now_insights, offset_hours, now)} were due today and still unresolved
+    - #{length(monitor_insights)} important threads are being watched
     """
     |> String.trim()
   end
@@ -349,15 +401,32 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
     |> String.trim()
   end
 
-  defp format_items([], _offset_hours, _reference_at), do: "1. Nothing high-signal is open."
+  defp format_items(
+         items,
+         offset_hours,
+         reference_at,
+         empty_text \\ "1. Nothing high-signal is open."
+       )
 
-  defp format_items(items, offset_hours, reference_at) do
+  defp format_items([], _offset_hours, _reference_at, empty_text), do: empty_text
+
+  defp format_items(items, offset_hours, reference_at, _empty_text) do
     items
     |> Enum.with_index(1)
     |> Enum.map(fn insight ->
       format_item_block(insight, offset_hours, reference_at)
     end)
     |> Enum.join("\n")
+  end
+
+  defp watching_section([], _offset_hours, _reference_at), do: ""
+
+  defp watching_section(items, offset_hours, reference_at) do
+    """
+    Watching:
+    #{format_items(items, offset_hours, reference_at, "1. Nothing newly changed is being watched.")}
+    """
+    |> String.trim()
   end
 
   defp format_item_block({insight, index}, offset_hours, reference_at) do
@@ -437,6 +506,16 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
 
   defp count_by_source(insights, source) do
     Enum.count(insights, fn insight -> normalize_source(insight.source) == source end)
+  end
+
+  defp recent_monitor_items(insights, reference_at, limit) do
+    cutoff = DateTime.add(reference_at, -36, :hour)
+
+    insights
+    |> Enum.filter(fn insight ->
+      DateTime.compare(insight.updated_at || insight.inserted_at, cutoff) in [:eq, :gt]
+    end)
+    |> Enum.take(limit)
   end
 
   defp due_today?(insight, offset_hours, reference_at) do

@@ -62,12 +62,33 @@ defmodule Maraithon.Behaviors.FounderFollowthroughAgentTest do
     {:emit, {:insights_recorded, recorded}, _state} =
       FounderFollowthroughAgent.handle_wakeup(state, %{context | event: %{payload: payload}})
 
-    assert recorded.count == 1
-    assert recorded.user_id == user_id
+    assert (recorded[:count] || recorded["count"]) == 1
+    assert (recorded[:user_id] || recorded["user_id"]) == user_id
 
     [stored | _] = Insights.list_open_for_user(user_id)
     assert stored.source == "slack"
     assert stored.metadata["record"]["status"] == "unresolved"
     assert stored.metadata["record"]["person"] == "U12345"
+  end
+
+  test "initializes the chief-of-staff skill stack without travel", %{user_id: user_id} do
+    state =
+      FounderFollowthroughAgent.init(%{
+        "user_id" => user_id,
+        "email_scan_limit" => "21",
+        "channel_scan_limit" => "45",
+        "timezone_offset_hours" => "-5",
+        "morning_brief_hour_local" => "9"
+      })
+
+    assert state.enabled_skill_ids == ["followthrough", "briefing"]
+    assert Map.has_key?(state.skill_states, "followthrough")
+    assert Map.has_key?(state.skill_states, "briefing")
+    refute Map.has_key?(state.skill_states, "travel_logistics")
+    assert get_in(state, [:skill_configs, "followthrough", "email_scan_limit"]) == 21
+    assert get_in(state, [:skill_configs, "followthrough", "channel_scan_limit"]) == 45
+
+    assert get_in(state, [:skill_configs, "briefing", "assistant_behavior"]) ==
+             "ai_chief_of_staff"
   end
 end

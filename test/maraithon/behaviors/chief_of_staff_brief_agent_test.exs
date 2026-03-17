@@ -138,4 +138,76 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgentTest do
     assert brief.body =~ "Next: Open the notice now"
     assert brief.body =~ "Why now: Overdue since"
   end
+
+  test "keeps monitor items out of top actions and includes them in Watching", %{
+    user_id: user_id,
+    agent: agent
+  } do
+    scheduled_at = ~U[2026-03-11 23:05:00Z]
+
+    {:ok, _insights} =
+      Insights.record_many(user_id, agent.id, [
+        %{
+          "source" => "gmail",
+          "category" => "commitment_unresolved",
+          "title" => "Send the investor deck",
+          "summary" => "You still owe the investor deck today.",
+          "recommended_action" => "Reply in the same thread with the deck or a firm ETA.",
+          "priority" => 94,
+          "confidence" => 0.91,
+          "dedupe_key" => "brief-test:act-now",
+          "due_at" => DateTime.add(scheduled_at, -2, :hour),
+          "metadata" => %{"why_now" => "Overdue since the promised send time."}
+        },
+        %{
+          "source" => "gmail",
+          "category" => "reply_urgent",
+          "title" => "Monitoring: Meta Ad Account thread",
+          "summary" => "The thread is active and being handled, but it still matters.",
+          "recommended_action" =>
+            "Watch for a blocker, a direct ask back to you, or a stall in progress.",
+          "priority" => 88,
+          "confidence" => 0.87,
+          "attention_mode" => "monitor",
+          "dedupe_key" => "brief-test:monitor",
+          "tracking_key" => "brief-test:monitor",
+          "due_at" => DateTime.add(scheduled_at, -1, :hour),
+          "metadata" => %{
+            "why_now" => "Breck acknowledged the thread and is checking his side."
+          }
+        }
+      ])
+
+    state =
+      ChiefOfStaffBriefAgent.init(%{
+        "user_id" => user_id,
+        "timezone_offset_hours" => "-5",
+        "morning_brief_hour_local" => "8",
+        "end_of_day_brief_hour_local" => "18",
+        "weekly_review_day_local" => "5",
+        "weekly_review_hour_local" => "16",
+        "brief_max_items" => "3"
+      })
+
+    context = %{
+      agent_id: agent.id,
+      user_id: user_id,
+      timestamp: scheduled_at,
+      budget: %{llm_calls: 10, tool_calls: 10},
+      recent_events: [],
+      last_message: nil,
+      event: nil
+    }
+
+    assert {:emit, {:briefs_recorded, _payload}, _next_state} =
+             ChiefOfStaffBriefAgent.handle_wakeup(state, context)
+
+    [brief] = Briefs.list_recent_for_user(user_id, limit: 1)
+
+    assert brief.body =~ "Tonight's top actions:"
+    assert brief.body =~ "[Gmail] Send the investor deck"
+    assert brief.body =~ "Watching:"
+    assert brief.body =~ "[Gmail] Monitoring: Meta Ad Account thread"
+    assert brief.body =~ "important threads are being watched"
+  end
 end

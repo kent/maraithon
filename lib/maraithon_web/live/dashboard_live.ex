@@ -63,6 +63,8 @@ defmodule MaraithonWeb.DashboardLive do
         dashboard_errors: [],
         inspection_errors: [],
         insights: [],
+        act_now_insights: [],
+        monitor_insights: [],
         expanded_insight_ids: MapSet.new(),
         detail_opened_insight_ids: MapSet.new(),
         onboarding_preview: empty_onboarding_preview(),
@@ -660,7 +662,7 @@ defmodule MaraithonWeb.DashboardLive do
             <div>
               <h2 class="text-lg font-medium text-gray-900">Actionable Insights</h2>
               <p class="mt-1 text-sm text-gray-500">
-                Open-loop recommendations from long-running Gmail, Calendar, and Slack advisors.
+                Open-loop recommendations from long-running Gmail, Calendar, and Slack advisors, split between threads that need you now and threads Maraithon is watching.
               </p>
             </div>
             <span class="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700">
@@ -669,207 +671,23 @@ defmodule MaraithonWeb.DashboardLive do
           </div>
         </div>
 
-        <div class="divide-y divide-slate-200">
-          <%= for card <- @insights do %>
-            <% insight = card.insight %>
-            <% detail = card.detail %>
-            <% expanded? = MapSet.member?(@expanded_insight_ids, insight.id) %>
-            <div class="px-4 py-4 sm:px-6">
-              <div class="flex flex-wrap items-start justify-between gap-3">
-                <div class="min-w-0 flex-1">
-                  <div class="flex flex-wrap items-center gap-2">
-                    <span class={insight_category_class(insight.category)}>
-                      <%= insight_category_label(insight.category) %>
-                    </span>
-                    <span class={insight_priority_class(insight.priority)}>
-                      P<%= insight.priority %>
-                    </span>
-                    <span class="text-xs text-slate-500">
-                      confidence <%= format_confidence(insight.confidence) %>
-                    </span>
-                    <span :if={insight.due_at} class="text-xs text-amber-700">
-                      due <%= format_datetime(insight.due_at) %>
-                    </span>
-                  </div>
-                  <p class="mt-2 text-sm font-semibold text-slate-900"><%= insight.title %></p>
-                  <p class="mt-1 text-xs text-slate-500">
-                    from <%= insight_source_label(insight.source) %> · account <%= insight_account_label(insight) %>
-                  </p>
-                  <p class="mt-1 text-sm text-slate-600"><%= insight.summary %></p>
-                  <p class="mt-2 text-sm text-indigo-700">
-                    <span class="font-medium">Action:</span> <%= insight.recommended_action %>
-                  </p>
-                  <% why_now = insight_why_now(insight) %>
-                  <%= if why_now do %>
-                    <p class="mt-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
-                      Why now
-                    </p>
-                    <p class="mt-1 text-sm text-slate-600"><%= why_now %></p>
-                  <% end %>
-                  <% ideas = insight_follow_up_ideas(insight) %>
-                  <%= if ideas != [] do %>
-                    <p class="mt-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
-                      Ideas
-                    </p>
-                    <ul class="mt-1 space-y-1 text-sm text-slate-600">
-                      <%= for idea <- ideas do %>
-                        <li>- <%= idea %></li>
-                      <% end %>
-                    </ul>
-                  <% end %>
-                  <button
-                    type="button"
-                    phx-click="toggle_insight_detail"
-                    phx-value-id={insight.id}
-                    aria-expanded={to_string(expanded?)}
-                    aria-controls={"insight-detail-#{insight.id}"}
-                    class="mt-3 inline-flex items-center rounded-md border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100"
-                  >
-                    <%= if expanded?, do: "Hide evidence", else: "Show evidence" %>
-                  </button>
-
-                  <%= if expanded? do %>
-                    <div
-                      id={"insight-detail-#{insight.id}"}
-                      class="mt-4 space-y-4 rounded-xl border border-slate-200 bg-slate-50/80 p-4"
-                    >
-                      <.insight_detail_section
-                        title="Exact promise"
-                        value={detail_text(detail.promise_text) || "Exact promise not captured for this insight."}
-                        origin={detail_origin_label(detail.promise_text)}
-                      />
-                      <.insight_detail_section
-                        title="Who asked"
-                        value={detail_text(detail.requested_by) || "Requester not captured for this insight."}
-                        origin={detail_origin_label(detail.requested_by)}
-                      />
-                      <div class="space-y-2">
-                        <div class="flex items-center gap-2">
-                          <p class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
-                            Evidence checked
-                          </p>
-                        </div>
-                        <%= if detail.evidence_checked == [] do %>
-                          <p class="text-sm text-slate-600">
-                            No persisted evidence bullets were captured for this insight.
-                          </p>
-                        <% else %>
-                          <ul class="space-y-2 text-sm text-slate-700">
-                            <%= for item <- detail.evidence_checked do %>
-                              <li class="rounded-lg border border-slate-200 bg-white px-3 py-2">
-                                <p class="font-medium text-slate-900"><%= item.label %></p>
-                                <p :if={item.detail} class="mt-1 text-slate-600"><%= item.detail %></p>
-                                <p class="mt-1 text-xs text-slate-500">
-                                  <%= evidence_metadata(item) %>
-                                </p>
-                              </li>
-                            <% end %>
-                          </ul>
-                        <% end %>
-                      </div>
-                      <div class="space-y-2">
-                        <div class="flex items-center gap-2">
-                          <p class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
-                            Delivery evidence checked
-                          </p>
-                        </div>
-                        <%= if detail.delivery_evidence == [] do %>
-                          <p class="text-sm text-slate-600">No delivery attempts recorded.</p>
-                        <% else %>
-                          <ul class="space-y-2 text-sm text-slate-700">
-                            <%= for delivery <- detail.delivery_evidence do %>
-                              <li class="rounded-lg border border-slate-200 bg-white px-3 py-2">
-                                <div class="flex flex-wrap items-center gap-2">
-                                  <span class="font-medium text-slate-900">
-                                    <%= humanize_text_token(delivery.channel) %>
-                                  </span>
-                                  <span class="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700">
-                                    <%= humanize_text_token(delivery.status) %>
-                                  </span>
-                                </div>
-                                <p class="mt-1 text-slate-600"><%= delivery.destination_label %></p>
-                                <p class="mt-1 text-xs text-slate-500">
-                                  <%= delivery_metadata(delivery) %>
-                                </p>
-                              </li>
-                            <% end %>
-                          </ul>
-                        <% end %>
-                      </div>
-                      <div class="space-y-2">
-                        <div class="flex items-center gap-2">
-                          <p class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
-                            Why Maraithon still thinks this is open
-                          </p>
-                          <span
-                            :if={detail.open_loop_reason}
-                            class="rounded-full bg-white px-2 py-0.5 text-[11px] font-medium text-slate-600 ring-1 ring-slate-200"
-                          >
-                            <%= reason_origin_label(detail.open_loop_reason) %>
-                          </span>
-                        </div>
-                        <%= if detail.open_loop_reason do %>
-                          <p class="text-sm text-slate-700"><%= detail.open_loop_reason.text %></p>
-                          <ul
-                            :if={detail.open_loop_reason.origin == :derived and detail.open_loop_reason.factors != []}
-                            class="space-y-1 text-sm text-slate-600"
-                          >
-                            <%= for factor <- detail.open_loop_reason.factors do %>
-                              <li>- <%= factor %></li>
-                            <% end %>
-                          </ul>
-                        <% else %>
-                          <p class="text-sm text-slate-600">
-                            Open-loop reason could not be reconstructed from persisted data.
-                          </p>
-                        <% end %>
-                      </div>
-                      <div :if={detail.data_gaps != []} class="space-y-2">
-                        <p class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
-                          Data gaps
-                        </p>
-                        <ul class="space-y-1 text-sm text-slate-600">
-                          <%= for gap <- detail.data_gaps do %>
-                            <li>- <%= gap %></li>
-                          <% end %>
-                        </ul>
-                      </div>
-                    </div>
-                  <% end %>
-                </div>
-                <div class="flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    phx-click="ack_insight"
-                    phx-value-id={insight.id}
-                    class="inline-flex items-center rounded-md border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-xs font-medium text-emerald-800 hover:bg-emerald-100"
-                  >
-                    Acknowledge
-                  </button>
-                  <button
-                    type="button"
-                    phx-click="snooze_insight"
-                    phx-value-id={insight.id}
-                    class="inline-flex items-center rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-xs font-medium text-amber-800 hover:bg-amber-100"
-                  >
-                    Snooze 4h
-                  </button>
-                  <button
-                    type="button"
-                    phx-click="dismiss_insight"
-                    phx-value-id={insight.id}
-                    class="inline-flex items-center rounded-md border border-rose-200 bg-rose-50 px-2.5 py-1.5 text-xs font-medium text-rose-700 hover:bg-rose-100"
-                  >
-                    Dismiss
-                  </button>
-                </div>
-              </div>
-            </div>
-          <% end %>
+        <div class="space-y-6 px-4 py-4 sm:px-6">
+          <.insight_group
+            title="Needs Action"
+            subtitle="Threads that currently look like direct founder debt."
+            cards={@act_now_insights}
+            expanded_insight_ids={@expanded_insight_ids}
+          />
+          <.insight_group
+            title="Watching"
+            subtitle="Important threads Maraithon is tracking without asking you to act right now."
+            cards={@monitor_insights}
+            expanded_insight_ids={@expanded_insight_ids}
+          />
 
           <%= if @insights == [] do %>
-            <div class="px-4 py-10 text-center text-sm text-slate-500 sm:px-6">
-              No actionable insights yet. Start a <span class="font-medium">founder_followthrough_agent</span>, <span class="font-medium">inbox_calendar_advisor</span>, or <span class="font-medium">slack_followthrough_agent</span> and connect the required services.
+            <div class="py-10 text-center text-sm text-slate-500">
+              No actionable insights yet. Start a <span class="font-medium">ai_chief_of_staff</span>, <span class="font-medium">inbox_calendar_advisor</span>, or <span class="font-medium">slack_followthrough_agent</span> and connect the required services.
             </div>
           <% end %>
         </div>
@@ -1279,13 +1097,21 @@ defmodule MaraithonWeb.DashboardLive do
   end
 
   defp refresh_insights(socket) do
-    cards = Insights.list_open_with_details_for_user(current_user_id(socket), limit: 20)
+    act_now_cards =
+      Insights.list_open_act_now_with_details_for_user(current_user_id(socket), limit: 20)
+
+    monitor_cards =
+      Insights.list_open_monitor_with_details_for_user(current_user_id(socket), limit: 20)
+
+    cards = act_now_cards ++ monitor_cards
     visible_ids = MapSet.new(Enum.map(cards, & &1.insight.id))
 
     emit_insight_detail_coverage_telemetry(cards)
 
     assign(socket,
       insights: cards,
+      act_now_insights: act_now_cards,
+      monitor_insights: monitor_cards,
       expanded_insight_ids: MapSet.intersection(socket.assigns.expanded_insight_ids, visible_ids),
       detail_opened_insight_ids:
         MapSet.intersection(socket.assigns.detail_opened_insight_ids, visible_ids)
@@ -1663,8 +1489,8 @@ defmodule MaraithonWeb.DashboardLive do
     do:
       "rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700 ring-1 ring-inset ring-slate-200"
 
-  defp onboarding_behavior_label("founder_followthrough_agent"), do: "Founder Followthrough"
-  defp onboarding_behavior_label("inbox_calendar_advisor"), do: "Inbox + Calendar Advisor"
+  defp onboarding_behavior_label("founder_followthrough_agent"), do: "Chief of Staff"
+  defp onboarding_behavior_label("inbox_calendar_advisor"), do: "Chief of Staff"
   defp onboarding_behavior_label("slack_followthrough_agent"), do: "Slack Followthrough"
   defp onboarding_behavior_label(other), do: other
 
@@ -1685,6 +1511,15 @@ defmodule MaraithonWeb.DashboardLive do
   defp insight_source_label("telegram"), do: "Telegram"
   defp insight_source_label(source) when is_binary(source) and source != "", do: source
   defp insight_source_label(_), do: "system"
+
+  defp attention_mode_label("monitor"), do: "Watching"
+  defp attention_mode_label(_), do: "Needs Action"
+
+  defp attention_mode_class("monitor"),
+    do: "rounded-full bg-sky-100 px-2 py-0.5 text-xs font-medium text-sky-800"
+
+  defp attention_mode_class(_),
+    do: "rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800"
 
   defp insight_category_class("reply_urgent"),
     do: "rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800"
@@ -1863,6 +1698,234 @@ defmodule MaraithonWeb.DashboardLive do
   defp blank_metadata?(""), do: true
   defp blank_metadata?("N/A"), do: true
   defp blank_metadata?(_value), do: false
+
+  attr :title, :string, required: true
+  attr :subtitle, :string, default: nil
+  attr :cards, :list, required: true
+  attr :expanded_insight_ids, :any, required: true
+
+  defp insight_group(assigns) do
+    ~H"""
+    <section :if={@cards != []} class="overflow-hidden rounded-xl border border-slate-200">
+      <div class="border-b border-slate-200 bg-slate-50/70 px-4 py-4">
+        <div class="flex items-center justify-between gap-3">
+          <div>
+            <h3 class="text-sm font-semibold text-slate-900"><%= @title %></h3>
+            <p :if={@subtitle} class="mt-1 text-sm text-slate-600"><%= @subtitle %></p>
+          </div>
+          <span class="rounded-full bg-white px-2.5 py-1 text-xs font-medium text-slate-700 ring-1 ring-slate-200">
+            <%= length(@cards) %>
+          </span>
+        </div>
+      </div>
+
+      <div class="divide-y divide-slate-200">
+        <%= for card <- @cards do %>
+          <% insight = card.insight %>
+          <% detail = card.detail %>
+          <% expanded? = MapSet.member?(@expanded_insight_ids, insight.id) %>
+          <div class="px-4 py-4">
+            <div class="flex flex-wrap items-start justify-between gap-3">
+              <div class="min-w-0 flex-1">
+                <div class="flex flex-wrap items-center gap-2">
+                  <span class={attention_mode_class(insight.attention_mode)}>
+                    <%= attention_mode_label(insight.attention_mode) %>
+                  </span>
+                  <span class={insight_category_class(insight.category)}>
+                    <%= insight_category_label(insight.category) %>
+                  </span>
+                  <span class={insight_priority_class(insight.priority)}>
+                    P<%= insight.priority %>
+                  </span>
+                  <span class="text-xs text-slate-500">
+                    confidence <%= format_confidence(insight.confidence) %>
+                  </span>
+                  <span :if={insight.due_at} class="text-xs text-amber-700">
+                    due <%= format_datetime(insight.due_at) %>
+                  </span>
+                </div>
+                <p class="mt-2 text-sm font-semibold text-slate-900"><%= insight.title %></p>
+                <p class="mt-1 text-xs text-slate-500">
+                  from <%= insight_source_label(insight.source) %> · account <%= insight_account_label(insight) %>
+                </p>
+                <p class="mt-1 text-sm text-slate-600"><%= insight.summary %></p>
+                <p class="mt-2 text-sm text-indigo-700">
+                  <span class="font-medium">
+                    <%= if insight.attention_mode == "monitor", do: "Watch:", else: "Action:" %>
+                  </span>
+                  <%= insight.recommended_action %>
+                </p>
+                <% why_now = insight_why_now(insight) %>
+                <%= if why_now do %>
+                  <p class="mt-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                    Why now
+                  </p>
+                  <p class="mt-1 text-sm text-slate-600"><%= why_now %></p>
+                <% end %>
+                <% ideas = insight_follow_up_ideas(insight) %>
+                <%= if ideas != [] do %>
+                  <p class="mt-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                    Ideas
+                  </p>
+                  <ul class="mt-1 space-y-1 text-sm text-slate-600">
+                    <%= for idea <- ideas do %>
+                      <li>- <%= idea %></li>
+                    <% end %>
+                  </ul>
+                <% end %>
+                <button
+                  type="button"
+                  phx-click="toggle_insight_detail"
+                  phx-value-id={insight.id}
+                  aria-expanded={to_string(expanded?)}
+                  aria-controls={"insight-detail-#{insight.id}"}
+                  class="mt-3 inline-flex items-center rounded-md border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100"
+                >
+                  <%= if expanded?, do: "Hide evidence", else: "Show evidence" %>
+                </button>
+
+                <%= if expanded? do %>
+                  <div
+                    id={"insight-detail-#{insight.id}"}
+                    class="mt-4 space-y-4 rounded-xl border border-slate-200 bg-slate-50/80 p-4"
+                  >
+                    <.insight_detail_section
+                      title="Exact promise"
+                      value={detail_text(detail.promise_text) || "Exact promise not captured for this insight."}
+                      origin={detail_origin_label(detail.promise_text)}
+                    />
+                    <.insight_detail_section
+                      title="Who asked"
+                      value={detail_text(detail.requested_by) || "Requester not captured for this insight."}
+                      origin={detail_origin_label(detail.requested_by)}
+                    />
+                    <div class="space-y-2">
+                      <div class="flex items-center gap-2">
+                        <p class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                          Evidence checked
+                        </p>
+                      </div>
+                      <%= if detail.evidence_checked == [] do %>
+                        <p class="text-sm text-slate-600">
+                          No persisted evidence bullets were captured for this insight.
+                        </p>
+                      <% else %>
+                        <ul class="space-y-2 text-sm text-slate-700">
+                          <%= for item <- detail.evidence_checked do %>
+                            <li class="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                              <p class="font-medium text-slate-900"><%= item.label %></p>
+                              <p :if={item.detail} class="mt-1 text-slate-600"><%= item.detail %></p>
+                              <p class="mt-1 text-xs text-slate-500">
+                                <%= evidence_metadata(item) %>
+                              </p>
+                            </li>
+                          <% end %>
+                        </ul>
+                      <% end %>
+                    </div>
+                    <div class="space-y-2">
+                      <div class="flex items-center gap-2">
+                        <p class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                          Delivery evidence checked
+                        </p>
+                      </div>
+                      <%= if detail.delivery_evidence == [] do %>
+                        <p class="text-sm text-slate-600">No delivery attempts recorded.</p>
+                      <% else %>
+                        <ul class="space-y-2 text-sm text-slate-700">
+                          <%= for delivery <- detail.delivery_evidence do %>
+                            <li class="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                              <div class="flex flex-wrap items-center gap-2">
+                                <span class="font-medium text-slate-900">
+                                  <%= humanize_text_token(delivery.channel) %>
+                                </span>
+                                <span class="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700">
+                                  <%= humanize_text_token(delivery.status) %>
+                                </span>
+                              </div>
+                              <p class="mt-1 text-slate-600"><%= delivery.destination_label %></p>
+                              <p class="mt-1 text-xs text-slate-500">
+                                <%= delivery_metadata(delivery) %>
+                              </p>
+                            </li>
+                          <% end %>
+                        </ul>
+                      <% end %>
+                    </div>
+                    <div class="space-y-2">
+                      <div class="flex items-center gap-2">
+                        <p class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                          Why Maraithon still thinks this is open
+                        </p>
+                        <span
+                          :if={detail.open_loop_reason}
+                          class="rounded-full bg-white px-2 py-0.5 text-[11px] font-medium text-slate-600 ring-1 ring-slate-200"
+                        >
+                          <%= reason_origin_label(detail.open_loop_reason) %>
+                        </span>
+                      </div>
+                      <%= if detail.open_loop_reason do %>
+                        <p class="text-sm text-slate-700"><%= detail.open_loop_reason.text %></p>
+                        <ul
+                          :if={detail.open_loop_reason.origin == :derived and detail.open_loop_reason.factors != []}
+                          class="space-y-1 text-sm text-slate-600"
+                        >
+                          <%= for factor <- detail.open_loop_reason.factors do %>
+                            <li>- <%= factor %></li>
+                          <% end %>
+                        </ul>
+                      <% else %>
+                        <p class="text-sm text-slate-600">
+                          Open-loop reason could not be reconstructed from persisted data.
+                        </p>
+                      <% end %>
+                    </div>
+                    <div :if={detail.data_gaps != []} class="space-y-2">
+                      <p class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                        Data gaps
+                      </p>
+                      <ul class="space-y-1 text-sm text-slate-600">
+                        <%= for gap <- detail.data_gaps do %>
+                          <li>- <%= gap %></li>
+                        <% end %>
+                      </ul>
+                    </div>
+                  </div>
+                <% end %>
+              </div>
+              <div class="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  phx-click="ack_insight"
+                  phx-value-id={insight.id}
+                  class="inline-flex items-center rounded-md border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-xs font-medium text-emerald-800 hover:bg-emerald-100"
+                >
+                  Acknowledge
+                </button>
+                <button
+                  type="button"
+                  phx-click="snooze_insight"
+                  phx-value-id={insight.id}
+                  class="inline-flex items-center rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-xs font-medium text-amber-800 hover:bg-amber-100"
+                >
+                  Snooze 4h
+                </button>
+                <button
+                  type="button"
+                  phx-click="dismiss_insight"
+                  phx-value-id={insight.id}
+                  class="inline-flex items-center rounded-md border border-rose-200 bg-rose-50 px-2.5 py-1.5 text-xs font-medium text-rose-700 hover:bg-rose-100"
+                >
+                  Dismiss
+                </button>
+              </div>
+            </div>
+          </div>
+        <% end %>
+      </div>
+    </section>
+    """
+  end
 
   attr :title, :string, required: true
   attr :value, :string, default: nil
