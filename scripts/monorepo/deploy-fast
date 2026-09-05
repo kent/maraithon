@@ -163,6 +163,112 @@ if [[ "${current_role}" != "combined" && "${runtime_service_json}" != "{}" ]]; t
   fi
 fi
 
+# Subsequent fast deploys replace the combined web/runtime revision. Drain its
+# exact-runtime authority first and wait for the database-backed handoff proof
+# so Cloud Run cannot retire it while leased work is still running.
+source_revision="$(
+  jq -r '
+    [.status.traffic[]? | select((.percent // 0) > 0) | .revisionName][0] //
+    .status.latestReadyRevisionName //
+    ""
+  ' <<<"${service_json}"
+)"
+source_service_url="$(jq -r '.status.url // ""' <<<"${service_json}")"
+source_drain_requested=false
+
+restore_drained_source_on_exit() {
+  local exit_status=$?
+  local current_service_json
+  local current_serving_revision
+
+  trap - EXIT
+
+  if [[ "${exit_status}" -ne 0 && "${source_drain_requested}" == "true" ]]; then
+    current_service_json="$(
+      gcloud run services describe "${service}" \
+        --project "${project}" \
+        --region "${region}" \
+        --format=json 2>/dev/null || printf '{}'
+    )"
+    current_serving_revision="$(
+      jq -r '
+        [.status.traffic[]? | select((.percent // 0) > 0) | .revisionName][0] //
+        .status.latestReadyRevisionName //
+        ""
+      ' <<<"${current_service_json}"
+    )"
+
+    if [[ "${current_serving_revision}" == "${source_revision}" ]]; then
+      echo "Replacement failed; asking the drained serving revision to rejoin" >&2
+      curl --silent --show-error --fail --max-time 15 \
+        --request POST \
+        --header "Authorization: Bearer ${fast_api_token}" \
+        "${source_service_url}/api/v1/runtime/rejoin" >/dev/null ||
+        echo "WARNING: the drained serving revision could not be asked to rejoin" >&2
+    else
+      echo "WARNING: replacement failed after serving traffic moved; refusing to rejoin the retired source revision" >&2
+    fi
+  fi
+
+  exit "${exit_status}"
+}
+
+if [[ "${current_role}" == "combined" && -n "${source_revision}" && -n "${source_service_url}" ]]; then
+  if ! fast_api_token="$(
+    gcloud secrets versions access latest \
+      --secret maraithon-api-bearer-token \
+      --project "${project}" 2>/dev/null
+  )" || [[ -z "${fast_api_token}" ]]; then
+    echo "Unable to read the API bearer token required for the runtime drain" >&2
+    exit 1
+  fi
+
+  trap restore_drained_source_on_exit EXIT
+
+  if ! curl --silent --show-error --fail --max-time 15 \
+    --request POST \
+    --header "Authorization: Bearer ${fast_api_token}" \
+    "${source_service_url}/api/v1/runtime/drain" >/dev/null; then
+    echo "Runtime drain request failed; refusing to replace the serving revision" >&2
+    exit 1
+  fi
+
+  source_drain_requested=true
+  echo "Draining combined revision ${source_revision} before replacement"
+  runtime_drained=false
+
+  for _attempt in $(seq 1 48); do
+    status_json="$(
+      curl --silent --show-error --fail --max-time 15 \
+        --header "Authorization: Bearer ${fast_api_token}" \
+        "${source_service_url}/api/v1/runtime/status" 2>/dev/null || true
+    )"
+
+    if jq -e '
+      type == "object" and
+      .phase == "draining" and
+      .node_fenced == true and
+      .admitting_nodes == 0 and
+      .admitting_partitions == 0 and
+      .open_tasks == 0 and
+      .unproven_tasks == 0 and
+      .local_agent_leases == 0 and
+      .agent_leases == 0
+    ' >/dev/null 2>&1 <<<"${status_json}"; then
+      runtime_drained=true
+      break
+    fi
+
+    sleep 5
+  done
+
+  if [[ "${runtime_drained}" != "true" ]]; then
+    echo "Combined runtime did not reach a strong drain boundary" >&2
+    echo "Last runtime status: ${status_json:-unknown}" >&2
+    exit 1
+  fi
+fi
+
 echo "Deploying one combined web/runtime instance"
 gcloud run deploy "${service}" \
   --project "${project}" \
@@ -183,6 +289,9 @@ gcloud run deploy "${service}" \
   --session-affinity \
   --startup-probe 'httpGet.path=/health,initialDelaySeconds=5,timeoutSeconds=5,periodSeconds=5,failureThreshold=24' \
   --quiet
+
+source_drain_requested=false
+trap - EXIT
 
 # Split-runtime deployments pin traffic to a named revision. Restore the
 # normal floating assignment so this revision and future fast deploys go live.
