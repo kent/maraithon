@@ -160,10 +160,7 @@ defmodule Maraithon.Todos.Brief do
       {:error, reason} = error ->
         _ = release_lease(user_id, todo_id)
 
-        Logger.warning("todo brief generation failed",
-          target_reference: Maraithon.Redaction.fingerprint(todo_id),
-          failure_code: Maraithon.Redaction.error_class(reason)
-        )
+        log_generation_failure(todo_id, reason)
 
         error
 
@@ -173,6 +170,25 @@ defmodule Maraithon.Todos.Brief do
   end
 
   def generate_and_store(_user_id, _todo_id, _opts), do: {:error, :not_found}
+
+  defp log_generation_failure(todo_id, reason) do
+    metadata = [
+      target_reference: Maraithon.Redaction.fingerprint(todo_id),
+      failure_code: Maraithon.Redaction.error_class(reason)
+    ]
+
+    if model_capacity_deferral?(reason) do
+      Logger.info("todo brief generation deferred for model capacity", metadata)
+    else
+      Logger.warning("todo brief generation failed", metadata)
+    end
+  end
+
+  defp model_capacity_deferral?(:llm_busy), do: true
+  defp model_capacity_deferral?({:llm_busy, _retry_after}), do: true
+  defp model_capacity_deferral?({:rate_limited, _retry_after}), do: true
+  defp model_capacity_deferral?({:rate_limited, _retry_after, _detail}), do: true
+  defp model_capacity_deferral?(_reason), do: false
 
   @doc """
   Generates a brief without storing it. Returns `{:ok, brief, model}`.

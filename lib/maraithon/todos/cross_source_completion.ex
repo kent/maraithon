@@ -1127,9 +1127,11 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
       %{checked: length(todos), completed: completed}
     else
       {:error, reason} ->
-        Logger.warning("Cross-source completion pass failed",
-          user_fingerprint: Maraithon.Redaction.fingerprint(user_id),
-          failure_code: Maraithon.Redaction.error_class(reason)
+        log_evaluation_failure(
+          "Cross-source completion pass failed",
+          "Cross-source completion deferred for model capacity",
+          user_id,
+          reason
         )
 
         {:error, reason}
@@ -1181,9 +1183,11 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
         summary
 
       {:error, reason} = error ->
-        Logger.warning("Cross-source exact completion pass failed",
-          user_fingerprint: Maraithon.Redaction.fingerprint(user_id),
-          failure_code: Maraithon.Redaction.error_class(reason)
+        log_evaluation_failure(
+          "Cross-source exact completion pass failed",
+          "Cross-source exact completion deferred for model capacity",
+          user_id,
+          reason
         )
 
         error
@@ -1205,6 +1209,25 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
       {:error, _reason} = error -> error
     end
   end
+
+  defp log_evaluation_failure(failure_message, deferred_message, user_id, reason) do
+    metadata = [
+      user_fingerprint: Maraithon.Redaction.fingerprint(user_id),
+      failure_code: Maraithon.Redaction.error_class(reason)
+    ]
+
+    if model_capacity_deferral?(reason) do
+      Logger.info(deferred_message, metadata)
+    else
+      Logger.warning(failure_message, metadata)
+    end
+  end
+
+  defp model_capacity_deferral?(:llm_busy), do: true
+  defp model_capacity_deferral?({:llm_busy, _retry_after}), do: true
+  defp model_capacity_deferral?({:rate_limited, _retry_after}), do: true
+  defp model_capacity_deferral?({:rate_limited, _retry_after, _detail}), do: true
+  defp model_capacity_deferral?(_reason), do: false
 
   defp aggregate_exact_resolutions(todos, evaluations) do
     resolutions =
