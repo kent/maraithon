@@ -83,6 +83,42 @@ defmodule Maraithon.Crm.IngestTest do
       assert Repo.aggregate(Observation, :count, :id) == 1
     end
 
+    test "concurrent distinct observations share one open source window", %{
+      user_id: user_id
+    } do
+      sandbox_owner = self()
+
+      results =
+        1..4
+        |> Task.async_stream(
+          fn index ->
+            Ecto.Adapters.SQL.Sandbox.allow(Repo, sandbox_owner, self())
+
+            Ingest.observe(
+              user_id,
+              sample_changeset(
+                user_id,
+                "window-race-#{index}",
+                "window-race-#{index}@example.com",
+                "Window Race #{index}"
+              )
+            )
+          end,
+          max_concurrency: 4,
+          ordered: false,
+          timeout: :infinity
+        )
+        |> Enum.map(fn {:ok, result} -> result end)
+
+      assert Enum.all?(results, &match?({:ok, :buffered, _id}, &1))
+
+      assert [%Window{observation_count: 4}] =
+               Repo.all(
+                 from w in Window,
+                   where: w.user_id == ^user_id and w.source == "gmail" and w.status == "open"
+               )
+    end
+
     test "size threshold flushes the window and enqueues exactly one job",
          %{user_id: user_id} do
       threshold = WindowPolicy.max_observations()

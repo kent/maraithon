@@ -37,6 +37,7 @@ defmodule Maraithon.Crm.Ingest do
   require Logger
 
   @stale_window_minutes 30
+  @open_window_conflict_target "(user_id, source) WHERE status = 'open'"
 
   @type observe_result ::
           {:ok, :duplicate}
@@ -297,7 +298,7 @@ defmodule Maraithon.Crm.Ingest do
   end
 
   defp ensure_open_window(user_id, source) do
-    case open_window(user_id, source) do
+    case open_window_for_update(user_id, source) do
       %Window{} = existing ->
         {:ok, existing}
 
@@ -312,19 +313,36 @@ defmodule Maraithon.Crm.Ingest do
           "opened_at" => now,
           "observation_count" => 0
         })
-        |> Repo.insert()
+        |> Repo.insert(
+          on_conflict: :nothing,
+          conflict_target: {:unsafe_fragment, @open_window_conflict_target}
+        )
         |> case do
-          {:ok, %Window{} = window} ->
-            {:ok, window}
-
-          {:error, _changeset} ->
-            # Lost the race; another transaction created the open window.
-            case open_window(user_id, source) do
+          {:ok, %Window{}} ->
+            # `ON CONFLICT DO NOTHING` keeps the surrounding Ecto.Multi
+            # transaction usable when another observation creates the same
+            # partial-index row first. Always re-read the authoritative row:
+            # on conflict Ecto may return the proposed struct even though that
+            # id was not inserted.
+            case open_window_for_update(user_id, source) do
               %Window{} = window -> {:ok, window}
               nil -> {:error, :open_window_missing}
             end
+
+          {:error, %Ecto.Changeset{} = changeset} ->
+            {:error, changeset}
         end
     end
+  end
+
+  defp open_window_for_update(user_id, source) do
+    Repo.one(
+      from(w in Window,
+        where: w.user_id == ^user_id and w.source == ^source and w.status == "open",
+        lock: "FOR UPDATE",
+        limit: 1
+      )
+    )
   end
 
   defp open_window(user_id, source) do
