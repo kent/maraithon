@@ -18,7 +18,7 @@ enum BriefingGroups {
         now: Date = Date(),
         calendar: Calendar = .current
     ) -> [Group] {
-        let open = todos.filter { !$0.isCompleted }
+        let open = TodoFiltering.filter(todos, by: .needsAction, now: now, calendar: calendar)
         let today = TodoFiltering.filter(open, by: .today, now: now, calendar: calendar)
         let overdue = TodoFiltering.filter(open, by: .overdue, now: now, calendar: calendar)
         let todayIDs = Set(today.map(\.id))
@@ -26,14 +26,14 @@ enum BriefingGroups {
         let current = open.filter { !todayIDs.contains($0.id) && !overdueIDs.contains($0.id) }
         let recent = TodoFiltering.filter(
             current,
-            by: .open,
+            by: .needsAction,
             now: now,
             calendar: calendar
         )
 
         let definitions: [(key: String, title: String, todos: [TodoItem])] = [
             ("today", "Today", today),
-            ("recent", "Recently updated", recent),
+            ("recent", "Needs action", recent),
             ("overdue", "Past due", overdue)
         ]
 

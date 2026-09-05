@@ -25,10 +25,13 @@ struct TodoFilterStrip: View {
         switch filter {
         case .all: .accentColor
         case .open: .blue
+        case .needsAction: .blue
+        case .watching: .teal
         case .decisions: .purple
         case .today: .blue
         case .overdue: .orange
         case .upcoming: .indigo
+        case .snoozed: .orange
         case .completed: .green
         }
     }

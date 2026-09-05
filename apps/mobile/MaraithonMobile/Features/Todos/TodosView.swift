@@ -6,7 +6,7 @@ struct TodosView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(SessionStore.self) private var sessionStore
     @Query(sort: \TodoItem.updatedAt, order: .reverse) private var todos: [TodoItem]
-    @State private var filter: TodoFilter = .open
+    @State private var filter: TodoFilter = .needsAction
     @State private var searchText = ""
     @State private var isAddingTodo = false
     @State private var editingTodo: TodoItem?
@@ -81,6 +81,15 @@ struct TodosView: View {
                                     )
                                 }
                                 .tint(todo.isCompleted ? .orange : .green)
+
+                                if todo.attentionMode == .monitor, todo.isActive {
+                                    Button {
+                                        markNeedsAction(todo)
+                                    } label: {
+                                        Label("Act now", systemImage: "exclamationmark.circle")
+                                    }
+                                    .tint(.blue)
+                                }
                             }
                             .swipeActions(edge: .trailing) {
                                 Button(role: .destructive) {
@@ -95,6 +104,15 @@ struct TodosView: View {
                                     Label("Edit", systemImage: "pencil")
                                 }
                                 .tint(.blue)
+
+                                if todo.status == .open {
+                                    Button {
+                                        snooze(todo)
+                                    } label: {
+                                        Label("Snooze", systemImage: "clock")
+                                    }
+                                    .tint(.orange)
+                                }
                             }
                         }
                         .onDelete(perform: deleteTodos)
@@ -184,11 +202,19 @@ struct TodosView: View {
         guard let sessionToken = sessionStore.user?.sessionToken else { return }
         Task { @MainActor in
             do {
-                let remote = try await MobileAPIClient().updateTodo(
-                    sessionToken: sessionToken,
-                    id: todo.id,
-                    payload: ["status": .string(completed ? "done" : "open")]
-                )
+                let remote = if completed {
+                    try await MobileAPIClient().performTodoAction(
+                        sessionToken: sessionToken,
+                        id: todo.id,
+                        action: "done"
+                    )
+                } else {
+                    try await MobileAPIClient().updateTodo(
+                        sessionToken: sessionToken,
+                        id: todo.id,
+                        payload: ["status": .string("open")]
+                    )
+                }
                 ProductionDataSync.apply(remote, to: todo)
                 _ = saveLocalWorkChange(failureMessage: TodosViewCopy.remoteUpdateSaveFailedMessage)
             } catch {
@@ -219,7 +245,11 @@ struct TodosView: View {
 
         Task { @MainActor in
             do {
-                _ = try await MobileAPIClient().deleteTodo(sessionToken: sessionToken, id: todo.id)
+                _ = try await MobileAPIClient().performTodoAction(
+                    sessionToken: sessionToken,
+                    id: todo.id,
+                    action: "dismiss"
+                )
                 modelContext.delete(todo)
                 _ = saveLocalWorkChange(failureMessage: TodosViewCopy.remoteDeleteSaveFailedMessage)
             } catch let error as MobileAPIError where error.isNotFound {
@@ -227,6 +257,45 @@ struct TodosView: View {
                 _ = saveLocalWorkChange(failureMessage: TodosViewCopy.remoteDeleteSaveFailedMessage)
             } catch {
                 actionErrorMessage = todoActionMessage(TodosViewCopy.remoteDismissFailedPrefix, error: error)
+            }
+        }
+    }
+
+    private func snooze(_ todo: TodoItem) {
+        actionErrorMessage = nil
+        guard let sessionToken = sessionStore.user?.sessionToken else { return }
+
+        Task { @MainActor in
+            do {
+                let remote = try await MobileAPIClient().performTodoAction(
+                    sessionToken: sessionToken,
+                    id: todo.id,
+                    action: "snooze",
+                    snoozedUntil: Calendar.current.date(byAdding: .day, value: 1, to: Date())
+                )
+                ProductionDataSync.apply(remote, to: todo)
+                _ = saveLocalWorkChange(failureMessage: TodosViewCopy.remoteUpdateSaveFailedMessage)
+            } catch {
+                actionErrorMessage = todoActionMessage(TodosViewCopy.remoteSnoozeFailedPrefix, error: error)
+            }
+        }
+    }
+
+    private func markNeedsAction(_ todo: TodoItem) {
+        actionErrorMessage = nil
+        guard let sessionToken = sessionStore.user?.sessionToken else { return }
+
+        Task { @MainActor in
+            do {
+                let remote = try await MobileAPIClient().performTodoAction(
+                    sessionToken: sessionToken,
+                    id: todo.id,
+                    action: "important"
+                )
+                ProductionDataSync.apply(remote, to: todo)
+                _ = saveLocalWorkChange(failureMessage: TodosViewCopy.remoteUpdateSaveFailedMessage)
+            } catch {
+                actionErrorMessage = todoActionMessage(TodosViewCopy.remoteImportanceFailedPrefix, error: error)
             }
         }
     }
@@ -273,6 +342,8 @@ enum TodosViewCopy {
     static let localUpdateFailedMessage = "Could not update the work item on this device. Your work list stayed unchanged."
     static let localDeleteFailedMessage = "Could not dismiss the work item on this device. Your work list stayed unchanged."
     static let remoteDismissFailedPrefix = "Could not dismiss work item."
+    static let remoteSnoozeFailedPrefix = "Could not snooze work item."
+    static let remoteImportanceFailedPrefix = "Could not move work item to needs action."
     static let remoteUpdateSaveFailedMessage = "Maraithon updated the work item. Refresh work to show the latest state on this device."
     static let remoteDeleteSaveFailedMessage = "Maraithon dismissed the work item. Refresh work to remove it from this device."
     static let restoreFailedMessage = "Could not restore the work item after the update failed. Refresh work to show the latest state."
@@ -285,6 +356,8 @@ enum TodosViewCopy {
             localUpdateFailedMessage,
             localDeleteFailedMessage,
             remoteDismissFailedPrefix,
+            remoteSnoozeFailedPrefix,
+            remoteImportanceFailedPrefix,
             remoteUpdateSaveFailedMessage,
             remoteDeleteSaveFailedMessage,
             restoreFailedMessage

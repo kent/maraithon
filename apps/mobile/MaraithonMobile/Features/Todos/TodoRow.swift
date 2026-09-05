@@ -52,11 +52,19 @@ struct TodoRow: View {
                 }
 
                 HStack(spacing: 8) {
+                    if todo.status == .snoozed {
+                        StatusPill(title: TodoStatus.snoozed.title, tint: .orange)
+                    } else if todo.attentionMode == .monitor, todo.isActive {
+                        StatusPill(title: TodoAttentionMode.monitor.title, tint: .teal)
+                    }
+
                     if let signal = TodoDecisionSignals.signalPillTitle(for: todo) {
                         StatusPill(title: signal, tint: .purple)
                     }
 
-                    StatusPill(title: todo.priority.title, tint: todo.priority.tint)
+                    if todo.priority == .critical || todo.priority == .high {
+                        StatusPill(title: todo.priority.title, tint: todo.priority.tint)
+                    }
 
                     if let dueDate = todo.dueDate {
                         Label(dueText(for: dueDate), systemImage: dueSystemImage(for: dueDate))
@@ -72,6 +80,13 @@ struct TodoRow: View {
                             .lineLimit(1)
                     }
                 }
+
+                if let sourceLabel = sourceLabel {
+                    Label(sourceLabel, systemImage: "tray.full")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                }
             }
         }
         .padding(.vertical, 6)
@@ -79,6 +94,12 @@ struct TodoRow: View {
 
     private func dueText(for dueDate: Date) -> String {
         TodoRowCopy.dueText(for: todo, dueDate: dueDate)
+    }
+
+    private var sourceLabel: String? {
+        let label = todo.sourceProviderLabel ?? todo.sourceSystem
+        let trimmed = label?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed.replacingOccurrences(of: "_", with: " ").capitalized
     }
 
     private func dueSystemImage(for dueDate: Date) -> String {
@@ -124,11 +145,12 @@ struct TodoDecisionContext: Equatable {
     let evidence: String?
 
     init(todo: TodoItem) {
+        let brief = todo.todoBrief
         let title = Self.cleanedText(todo.title)
         let notes = Self.cleanedText(todo.notes)
         let nextAction = Self.cleanedText(todo.displayNextAction)
         let contextSummary = Self.uniqueText(
-            todo.decisionContextSummary,
+            brief?.situation ?? todo.decisionContextSummary,
             excludingCleaned: [title, notes, nextAction]
         )
         let decisionPrompt = Self.uniqueText(
@@ -136,7 +158,7 @@ struct TodoDecisionContext: Equatable {
             excludingCleaned: [title, notes, nextAction, contextSummary]
         )
         let preparedMove = Self.uniqueText(
-            todo.nextBestAction,
+            brief?.recommendation ?? todo.nextBestAction,
             excludingCleaned: [title, notes, nextAction, contextSummary, decisionPrompt]
         )
 
@@ -146,7 +168,7 @@ struct TodoDecisionContext: Equatable {
             notes,
             excludingCleaned: [title, nextAction, contextSummary, decisionPrompt]
         )
-        self.whyNow = Self.cleanedText(todo.whyNow)
+        self.whyNow = Self.cleanedText(brief?.whyItMatters ?? todo.whyNow)
         self.sourceContext = Self.cleanedText(todo.sourceContext)
         self.preparedMove = preparedMove
         self.draftPreview = Self.uniqueText(
@@ -215,6 +237,10 @@ enum TodoRowCopy {
     ) -> String {
         guard !todo.isCompleted else {
             return dueDate.formatted(AppFormatters.shortDate)
+        }
+
+        if todo.status == .snoozed, let snoozedUntil = todo.snoozedUntil {
+            return "Snoozed until \(snoozedUntil.formatted(AppFormatters.shortDate))"
         }
 
         // Stale keep/close cards should not scream "Past due" urgency — the

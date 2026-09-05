@@ -2,6 +2,7 @@ import SwiftData
 import SwiftUI
 
 struct TodoDetailView: View {
+    @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
     @Environment(SessionStore.self) private var sessionStore
     let todo: TodoItem
@@ -10,6 +11,8 @@ struct TodoDetailView: View {
     @State private var isLoadingThread = false
     @State private var loadErrorMessage: String?
     @State private var isEditingTodo = false
+    @State private var isPerformingAction = false
+    @State private var actionErrorMessage: String?
 
     private let chatSyncService = ChatSyncService()
 
@@ -30,7 +33,56 @@ struct TodoDetailView: View {
         .navigationTitle(TodoDetailCopy.navigationTitle)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                Menu {
+                    if todo.status == .done {
+                        Button {
+                            Task { await reopenTodo() }
+                        } label: {
+                            Label("Reopen", systemImage: "arrow.uturn.backward")
+                        }
+                    } else {
+                        Button {
+                            Task { await performAction("done") }
+                        } label: {
+                            Label("Mark done", systemImage: "checkmark.circle")
+                        }
+                    }
+
+                    if todo.status == .open {
+                        Button {
+                            Task {
+                                await performAction(
+                                    "snooze",
+                                    snoozedUntil: Calendar.current.date(byAdding: .day, value: 1, to: Date())
+                                )
+                            }
+                        } label: {
+                            Label("Snooze for a day", systemImage: "clock")
+                        }
+                    }
+
+                    if todo.attentionMode == .monitor, todo.isActive {
+                        Button {
+                            Task { await performAction("important") }
+                        } label: {
+                            Label("Move to needs action", systemImage: "exclamationmark.circle")
+                        }
+                    }
+
+                    if todo.isActive {
+                        Divider()
+                        Button(role: .destructive) {
+                            Task { await dismissTodo() }
+                        } label: {
+                            Label("Dismiss", systemImage: "archivebox")
+                        }
+                    }
+                } label: {
+                    Label("Work item actions", systemImage: "ellipsis.circle")
+                }
+                .disabled(isPerformingAction)
+
                 Button {
                     isEditingTodo = true
                 } label: {
@@ -40,6 +92,14 @@ struct TodoDetailView: View {
         }
         .sheet(isPresented: $isEditingTodo) {
             TodoEditorView(todo: todo)
+        }
+        .alert("Could not update work item", isPresented: Binding(
+            get: { actionErrorMessage != nil },
+            set: { if !$0 { actionErrorMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(actionErrorMessage ?? "Try again.")
         }
         .task(id: todo.id) {
             async let opened: Void = markTodoOpened()
@@ -114,11 +174,22 @@ struct TodoDetailView: View {
         let context = TodoDecisionContext(todo: todo)
         var items: [ChatContextHeader.Item] = []
 
-        appendItem("context", "Context", context.contextSummary ?? context.notesContext, "text.alignleft", to: &items)
-        appendItem("decision", "Decision", context.decisionPrompt, "target", to: &items)
-        appendItem("why-now", "Why now", context.whyNow, "clock.badge.exclamationmark", to: &items)
+        if let brief = todo.todoBrief {
+            appendItem("why-it-matters", "Why it matters", brief.whyItMatters, "exclamationmark.bubble", to: &items)
+            appendItem("situation", "Situation", brief.situation, "text.alignleft", to: &items)
+            appendItem("recommendation", "Recommended move", brief.recommendation, "arrow.turn.down.right", to: &items)
+            appendItem("steps", "Plan", numbered(brief.steps), "list.number", to: &items)
+            appendItem("questions", "Open questions", bulleted(brief.openQuestions), "questionmark.bubble", to: &items)
+        }
+
+        if todo.todoBrief == nil {
+            appendItem("context", "Context", context.contextSummary ?? context.notesContext, "text.alignleft", to: &items)
+            appendItem("decision", "Decision", context.decisionPrompt, "target", to: &items)
+            appendItem("why-now", "Why now", context.whyNow, "clock.badge.exclamationmark", to: &items)
+            appendItem("next", "Next move", context.rowMove, "arrow.turn.down.right", to: &items)
+        }
+
         appendItem("source", "Source", context.sourceContext, "tray.full", to: &items)
-        appendItem("next", "Next move", context.rowMove, "arrow.turn.down.right", to: &items)
 
         // The interactive source action card owns the draft when present.
         if todo.sourceAction?.hasDraft != true {
@@ -131,16 +202,17 @@ struct TodoDetailView: View {
             title: todo.title,
             subtitle: todoSubtitle,
             systemImage: todo.isCompleted ? "checkmark.circle.fill" : "circle.dotted",
-            status: ChatContextHeader.Status(
-                title: todo.isCompleted ? "Done" : "Open",
-                tint: todo.isCompleted ? .green : .blue
-            ),
+            status: ChatContextHeader.Status(title: todo.status.title, tint: statusTint),
             items: items
         )
     }
 
     private var todoSubtitle: String? {
-        var parts = [todo.priority.title]
+        var parts = [todo.attentionMode.title, todo.priority.title]
+
+        if let effort = todo.todoBrief?.effortLabel ?? cleanedText(todo.estimatedEffort) {
+            parts.append(effort)
+        }
 
         if let dueDate = todo.dueDate {
             parts.append(dueDate.formatted(AppFormatters.shortDate))
@@ -151,6 +223,15 @@ struct TodoDetailView: View {
         }
 
         return parts.joined(separator: " - ")
+    }
+
+    private var statusTint: Color {
+        switch todo.status {
+        case .open: todo.attentionMode == .monitor ? .teal : .blue
+        case .snoozed: .orange
+        case .done: .green
+        case .dismissed: .secondary
+        }
     }
 
     private var todoQuickPrompts: [ChiefOfStaffPrompt] {
@@ -214,6 +295,79 @@ struct TodoDetailView: View {
         try? modelContext.save()
     }
 
+    private func performAction(_ action: String, snoozedUntil: Date? = nil) async {
+        guard !isPerformingAction,
+              let sessionToken = sessionStore.user?.sessionToken else {
+            return
+        }
+
+        isPerformingAction = true
+        defer { isPerformingAction = false }
+
+        do {
+            let remote = try await MobileAPIClient().performTodoAction(
+                sessionToken: sessionToken,
+                id: todo.id,
+                action: action,
+                snoozedUntil: snoozedUntil
+            )
+            ProductionDataSync.apply(remote, to: todo)
+            try modelContext.save()
+            actionErrorMessage = nil
+        } catch {
+            modelContext.rollback()
+            actionErrorMessage = MobileErrorCopy.message(for: error)
+        }
+    }
+
+    private func reopenTodo() async {
+        guard !isPerformingAction,
+              let sessionToken = sessionStore.user?.sessionToken else {
+            return
+        }
+
+        isPerformingAction = true
+        defer { isPerformingAction = false }
+
+        do {
+            let remote = try await MobileAPIClient().updateTodo(
+                sessionToken: sessionToken,
+                id: todo.id,
+                payload: ["status": .string("open")]
+            )
+            ProductionDataSync.apply(remote, to: todo)
+            try modelContext.save()
+            actionErrorMessage = nil
+        } catch {
+            modelContext.rollback()
+            actionErrorMessage = MobileErrorCopy.message(for: error)
+        }
+    }
+
+    private func dismissTodo() async {
+        guard !isPerformingAction,
+              let sessionToken = sessionStore.user?.sessionToken else {
+            return
+        }
+
+        isPerformingAction = true
+        defer { isPerformingAction = false }
+
+        do {
+            _ = try await MobileAPIClient().performTodoAction(
+                sessionToken: sessionToken,
+                id: todo.id,
+                action: "dismiss"
+            )
+            modelContext.delete(todo)
+            try modelContext.save()
+            dismiss()
+        } catch {
+            modelContext.rollback()
+            actionErrorMessage = MobileErrorCopy.message(for: error)
+        }
+    }
+
     private func loadThreadIfNeeded() async {
         guard chatThread == nil else { return }
         await loadThread()
@@ -250,6 +404,18 @@ struct TodoDetailView: View {
     private func cleanedText(_ value: String?) -> String? {
         let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private func numbered(_ values: [String]) -> String? {
+        let values = values.compactMap(cleanedText)
+        guard !values.isEmpty else { return nil }
+        return values.enumerated().map { "\($0.offset + 1). \($0.element)" }.joined(separator: "\n")
+    }
+
+    private func bulleted(_ values: [String]) -> String? {
+        let values = values.compactMap(cleanedText)
+        guard !values.isEmpty else { return nil }
+        return values.map { "• \($0)" }.joined(separator: "\n")
     }
 }
 

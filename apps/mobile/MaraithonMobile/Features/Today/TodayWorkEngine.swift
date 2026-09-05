@@ -53,7 +53,7 @@ enum TodayWorkEngine {
         calendar: Calendar = .current
     ) -> TodayMetrics {
         TodayMetrics(
-            openTodos: todos.filter { !$0.isCompleted }.count,
+            openTodos: TodoFiltering.filter(todos, by: .needsAction, now: now, calendar: calendar).count,
             decisionTodos: TodoFiltering.filter(todos, by: .decisions, now: now, calendar: calendar).count,
             dueTodayTodos: TodoFiltering.filter(todos, by: .today, now: now, calendar: calendar).count,
             overdueTodos: TodoFiltering.overdueCount(in: todos, now: now, calendar: calendar)
@@ -68,7 +68,7 @@ enum TodayWorkEngine {
         let metrics = metrics(todos: todos, now: now, calendar: calendar)
         let overdueTodos = TodoFiltering.filter(todos, by: .overdue, now: now, calendar: calendar)
         let dueTodayTodos = TodoFiltering.filter(todos, by: .today, now: now, calendar: calendar)
-        let openTodos = TodoFiltering.filter(todos, by: .open, now: now, calendar: calendar)
+        let openTodos = TodoFiltering.filter(todos, by: .needsAction, now: now, calendar: calendar)
         let overdueIDs = Set(overdueTodos.map(\.id))
         let currentOpenTodos = openTodos.filter { !overdueIDs.contains($0.id) }
 
@@ -92,9 +92,9 @@ enum TodayWorkEngine {
                     count: currentOpenTodos.count,
                     lead: topTodo(currentOpenTodos)
                 ),
-                actionTitle: "Review open work",
+                actionTitle: "Review work needing action",
                 systemImage: "tray.full",
-                destination: .todos(.open)
+                destination: .todos(.needsAction)
             )
         }
 
@@ -126,7 +126,7 @@ enum TodayWorkEngine {
         calendar: Calendar = .current
     ) -> [TodayFocusItem] {
         let todoItems = todos.compactMap { todo -> TodayFocusCandidate? in
-            guard !todo.isCompleted else { return nil }
+            guard todo.needsActionNow else { return nil }
 
             let dueToday = todo.dueDate.map { calendar.isDate($0, inSameDayAs: now) } ?? false
             let overdue = todo.dueDate.map {

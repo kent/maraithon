@@ -103,7 +103,7 @@ struct TodayView: View {
                             systemImage: "circle",
                             tint: .blue
                         ) {
-                            appNavigation.showTodos(.open)
+                            appNavigation.showTodos(.needsAction)
                         }
                         Divider().padding(.leading, 48)
                         CommandRow(
@@ -334,10 +334,10 @@ struct TodayView: View {
         guard let sessionToken = sessionStore.user?.sessionToken else { return }
         Task { @MainActor in
             do {
-                let remote = try await MobileAPIClient().updateTodo(
+                let remote = try await MobileAPIClient().performTodoAction(
                     sessionToken: sessionToken,
                     id: todo.id,
-                    payload: ["status": .string("done")]
+                    action: "done"
                 )
                 ProductionDataSync.apply(remote, to: todo)
                 _ = saveLocalFocusChange(failureMessage: TodayViewCopy.remoteCompleteSaveFailedMessage)
@@ -364,7 +364,11 @@ struct TodayView: View {
 
         Task { @MainActor in
             do {
-                _ = try await MobileAPIClient().deleteTodo(sessionToken: sessionToken, id: todo.id)
+                _ = try await MobileAPIClient().performTodoAction(
+                    sessionToken: sessionToken,
+                    id: todo.id,
+                    action: "dismiss"
+                )
                 modelContext.delete(todo)
                 _ = saveLocalFocusChange(failureMessage: TodayViewCopy.remoteDismissSaveFailedMessage)
             } catch let error as MobileAPIError where error.isNotFound {
@@ -452,8 +456,8 @@ enum TodayViewCopy {
     static let askMaraithonSubtitle = "Plan, draft, or prioritize"
     static let decisionsTitle = "Decisions"
     static let decisionsSubtitle = "Calls waiting on you"
-    static let openWorkTitle = "Open work"
-    static let openWorkSubtitle = "Unfinished items"
+    static let openWorkTitle = "Needs action"
+    static let openWorkSubtitle = "Ranked work waiting on you"
     static let overdueTitle = "Past due"
     static let overdueSubtitle = "Needs action"
     static let dueTodayTitle = "Due today"
