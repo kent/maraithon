@@ -319,6 +319,52 @@ defmodule Maraithon.Runtime.NudgeSweepTest do
     assert candidates_for(user_id) == []
   end
 
+  test "a transient decision failure retries before any nudge state is applied", %{
+    user_id: user_id
+  } do
+    todo = owed_to_me_todo(user_id, "llm-transient", next_nudge_at: hours_ago(1))
+
+    state =
+      start_supervised!(
+        {Agent,
+         fn ->
+           [
+             {:error, {:provider_error, :redacted}},
+             {:ok,
+              %{
+                content:
+                  Jason.encode!(%{
+                    "decisions" => [
+                      %{
+                        "todo_id" => todo.id,
+                        "surface" => true,
+                        "title" => "Follow up now",
+                        "body" => "The scheduled follow-up is due.",
+                        "urgency" => 0.6
+                      }
+                    ]
+                  })
+              }}
+           ]
+         end}
+      )
+
+    complete = fn _prompt ->
+      Agent.get_and_update(state, fn [response | rest] -> {response, rest} end)
+    end
+
+    assert %{errors: 0, proposed: 1} =
+             NudgeSweep.run_once(user_ids: [user_id], llm_complete: complete)
+
+    assert Agent.get(state, & &1) == []
+    assert [candidate] = candidates_for(user_id)
+    assert candidate.source_id == todo.id
+
+    refreshed = Todos.get_for_user(user_id, todo.id)
+    assert refreshed.nudge_count == 0
+    assert refreshed.last_nudged_at == nil
+  end
+
   test "the default decision request budgets enough output for a full tenant page" do
     assert %{"max_tokens" => 4_096} = NudgeSweep.decision_request_params("bounded prompt")
 

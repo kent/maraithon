@@ -55,6 +55,10 @@ defmodule Maraithon.Runtime.NudgeSweep do
   @max_decisions 20
   @max_draft_text_bytes 2_000
   @max_next_nudge_at_bytes 100
+  @max_decision_attempts 2
+  @decision_retry_reserve_ms 15_000
+  @minimum_decision_retry_ms 1_000
+  @task_shutdown_margin_ms 250
 
   @open_statuses ~w(open snoozed)
 
@@ -325,7 +329,6 @@ defmodule Maraithon.Runtime.NudgeSweep do
 
   defp decide(_user_id, todos, reasons, now, timezone_context, opts) do
     prompt = build_prompt(todos, reasons, now, timezone_context)
-    llm_complete = Keyword.get(opts, :llm_complete) || (&default_llm_complete(&1, opts))
 
     configured_timeout =
       opts
@@ -339,38 +342,93 @@ defmodule Maraithon.Runtime.NudgeSweep do
         _other -> System.monotonic_time(:millisecond) + @max_cycle_ms
       end
 
-    timeout_ms = min(configured_timeout, max(deadline - System.monotonic_time(:millisecond), 0))
+    decision_deadline =
+      min(deadline, System.monotonic_time(:millisecond) + configured_timeout)
+
     allowed_ids = MapSet.new(todos, & &1.id)
 
     cond do
-      timeout_ms <= 0 ->
+      decision_deadline <= System.monotonic_time(:millisecond) ->
         {:error, :nudge_sweep_deadline}
 
       prompt_message_bytes(prompt) > @max_prompt_bytes ->
         {:error, :nudge_sweep_prompt_too_large}
 
       true ->
-        task =
-          Task.Supervisor.async_nolink(Maraithon.Runtime.ToolCallSupervisor, fn ->
-            try do
-              {:ok, llm_complete.(prompt)}
-            rescue
-              exception -> {:error, Maraithon.Redaction.error_class(exception)}
-            catch
-              kind, _reason -> {:error, to_string(kind)}
-            end
-          end)
-
-        case Task.yield(task, timeout_ms) || Task.shutdown(task, :brutal_kill) do
-          {:ok, {:ok, {:ok, response}}} -> decode_response(response, allowed_ids)
-          {:ok, {:ok, {:error, reason}}} -> {:error, closed_llm_failure(reason)}
-          {:ok, {:ok, _other}} -> {:error, :unexpected_llm_result}
-          {:ok, {:error, failure_code}} -> {:error, {:llm_task_failed, failure_code}}
-          {:exit, _reason} -> {:error, :llm_task_exit}
-          nil -> {:error, {:llm_timeout, timeout_ms}}
-        end
+        decide_with_retry(prompt, allowed_ids, opts, decision_deadline, 1)
     end
   end
+
+  defp decide_with_retry(prompt, allowed_ids, opts, deadline, attempt) do
+    remaining_ms = max(deadline - System.monotonic_time(:millisecond), 0)
+    timeout_ms = decision_attempt_timeout(remaining_ms, attempt)
+
+    result = decision_attempt(prompt, allowed_ids, opts, timeout_ms)
+
+    if retry_decision?(result, attempt, deadline) do
+      {:error, reason} = result
+
+      Logger.info("Retrying nudge sweep decision pass",
+        attempt: attempt,
+        failure_code: Maraithon.Redaction.error_class(reason)
+      )
+
+      decide_with_retry(prompt, allowed_ids, opts, deadline, attempt + 1)
+    else
+      result
+    end
+  end
+
+  defp decision_attempt(prompt, allowed_ids, opts, timeout_ms) when timeout_ms > 0 do
+    provider_timeout_ms = max(timeout_ms - @task_shutdown_margin_ms, 1)
+
+    task =
+      Task.Supervisor.async_nolink(Maraithon.Runtime.ToolCallSupervisor, fn ->
+        try do
+          {:ok, complete_decision(prompt, opts, provider_timeout_ms)}
+        rescue
+          exception -> {:error, Maraithon.Redaction.error_class(exception)}
+        catch
+          kind, _reason -> {:error, to_string(kind)}
+        end
+      end)
+
+    case Task.yield(task, timeout_ms) || Task.shutdown(task, :brutal_kill) do
+      {:ok, {:ok, {:ok, response}}} -> decode_response(response, allowed_ids)
+      {:ok, {:ok, {:error, reason}}} -> {:error, closed_llm_failure(reason)}
+      {:ok, {:ok, _other}} -> {:error, :unexpected_llm_result}
+      {:ok, {:error, failure_code}} -> {:error, {:llm_task_failed, failure_code}}
+      {:exit, _reason} -> {:error, :llm_task_exit}
+      nil -> {:error, {:llm_timeout, timeout_ms}}
+    end
+  end
+
+  defp decision_attempt(_prompt, _allowed_ids, _opts, _timeout_ms),
+    do: {:error, :nudge_sweep_deadline}
+
+  defp complete_decision(prompt, opts, timeout_ms) do
+    case Keyword.get(opts, :llm_complete) do
+      complete when is_function(complete, 1) -> complete.(prompt)
+      _other -> default_llm_complete(prompt, Keyword.put(opts, :llm_timeout_ms, timeout_ms))
+    end
+  end
+
+  defp retry_decision?({:error, reason}, attempt, deadline) do
+    attempt < @max_decision_attempts and
+      deadline - System.monotonic_time(:millisecond) >= @minimum_decision_retry_ms and
+      retryable_decision_failure?(reason)
+  end
+
+  defp retry_decision?(_result, _attempt, _deadline), do: false
+
+  defp retryable_decision_failure?(:nudge_sweep_invalid_response), do: true
+  defp retryable_decision_failure?(reason), do: LLM.transient_failure?(reason)
+
+  defp decision_attempt_timeout(remaining_ms, 1)
+       when remaining_ms >= @decision_retry_reserve_ms + @minimum_decision_retry_ms,
+       do: remaining_ms - @decision_retry_reserve_ms
+
+  defp decision_attempt_timeout(remaining_ms, _attempt), do: remaining_ms
 
   # Keep local/provider backpressure typed so PeriodicJobs can durably defer it
   # without spending the job's retry budget. Collapse every other provider
@@ -399,6 +457,9 @@ defmodule Maraithon.Runtime.NudgeSweep do
               :provider_refusal
             ],
        do: kind
+
+  defp closed_llm_failure({:api_error, status, _detail}) when status in 500..599,
+    do: {:api_error, status}
 
   defp closed_llm_failure({:api_error, _status, _detail}), do: :api_error
   defp closed_llm_failure(:timeout), do: :llm_timeout
