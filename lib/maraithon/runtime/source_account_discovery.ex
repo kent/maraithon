@@ -17,6 +17,7 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
   alias Maraithon.BoundedJSON
   alias Maraithon.ChiefOfStaff.{Acquisition, SourceBundle, SourceScope}
   alias Maraithon.ChiefOfStaff.Skills.Followthrough
+  alias Maraithon.Connectors.Gmail.BodyText
   alias Maraithon.Connectors.SourceCursors
   alias Maraithon.DurablePayload
   alias Maraithon.PromptBudget
@@ -639,9 +640,7 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
   end
 
   defp candidate_source_record(%{source: :gmail, item: item}) do
-    body =
-      read_string(item, "body_text") || read_string(item, "text_body") ||
-        read_string(item, "body") || read_string(item, "html_body")
+    body = BodyText.from_message(item)
 
     thread_context = gmail_thread_context(item)
 
@@ -652,6 +651,7 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
       )
       |> put_candidate_size("body", body)
       |> Map.put("body", body)
+      |> Map.put("body_format", "readable_text")
       |> Map.put("thread_context", thread_context)
 
     lossless_candidate_record(evidence)
@@ -819,10 +819,7 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
     |> Map.get("thread_context", [])
     |> Enum.filter(&is_map/1)
     |> Enum.map(fn message ->
-      body =
-        read_string(message, "body_text") || read_string(message, "text_body") ||
-          read_string(message, "body") || read_string(message, "snippet") ||
-          read_string(message, "html_body")
+      body = BodyText.from_message(message) || read_string(message, "snippet")
 
       %{
         "message_id" => read_string(message, "message_id") || read_string(message, "id"),

@@ -4830,13 +4830,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
   end
 
   defp put_gmail_body_text(message) do
-    body =
-      [
-        Map.get(message, "body_text"),
-        Map.get(message, "text_body"),
-        Map.get(message, "html_body")
-      ]
-      |> Enum.find(&present_string?/1)
+    body = Maraithon.Connectors.Gmail.BodyText.from_message(message)
 
     maybe_put(message, "body_text", body)
   end
