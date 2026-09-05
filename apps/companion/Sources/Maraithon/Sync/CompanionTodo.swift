@@ -55,6 +55,7 @@ struct CompanionTodo: Codable, Identifiable, Hashable, Sendable {
 
     var canMarkDone: Bool { status == "open" || status == "snoozed" }
     var canReopen: Bool { status == "done" }
+    var canDismiss: Bool { status == "open" || status == "snoozed" }
 
     private static func nonblank(_ value: String?) -> String? {
         guard let value else { return nil }
@@ -118,6 +119,7 @@ struct CompanionTodoPagination: Codable, Sendable {
 
 enum CompanionTodoAction: String, Sendable {
     case done
+    case dismiss
     case reopen
 }
 

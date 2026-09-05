@@ -61,6 +61,7 @@ struct MaraithonApp: App {
                     .keyboardShortcut("r", modifiers: .command)
                     .disabled(!environment.canSyncNow)
             }
+            TodoCommands()
             UpdateCommands(updates: environment.updates)
             DiagnosticExportCommands(env: environment)
         }

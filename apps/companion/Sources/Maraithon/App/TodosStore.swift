@@ -89,8 +89,6 @@ final class TodosStore {
     }
 
     func performPrimaryAction(on todo: CompanionTodo) async {
-        guard !pendingActionIDs.contains(todo.id) else { return }
-
         let action: CompanionTodoAction
         if todo.canMarkDone {
             action = .done
@@ -99,6 +97,12 @@ final class TodosStore {
         } else {
             return
         }
+
+        await perform(action, on: todo)
+    }
+
+    func perform(_ action: CompanionTodoAction, on todo: CompanionTodo) async {
+        guard !pendingActionIDs.contains(todo.id) else { return }
 
         pendingActionIDs.insert(todo.id)
         defer { pendingActionIDs.remove(todo.id) }

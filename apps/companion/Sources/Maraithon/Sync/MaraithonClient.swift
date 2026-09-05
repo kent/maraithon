@@ -170,8 +170,8 @@ struct MaraithonClient: Sendable {
         return try JSONDecoder().decode(CompanionTodosResponse.self, from: data)
     }
 
-    /// Marks a Todo done or reopens it. Those are the only Todo mutations
-    /// available to a companion device token.
+    /// Completes, dismisses, or reopens a Todo through the paired-device
+    /// least-privilege action surface.
     func updateTodo(id: String, action: CompanionTodoAction) async throws -> CompanionTodoActionResponse {
         let request = try await makeRequest(
             method: "POST",

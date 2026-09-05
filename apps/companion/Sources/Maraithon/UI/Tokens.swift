@@ -26,6 +26,11 @@ enum Tokens {
 
     enum Layout {
         static let onboardingMaxWidth: CGFloat = 480
+        static let todoInspectorMinWidth: CGFloat = 280
+        static let todoInspectorIdealWidth: CGFloat = 360
+        static let todoInspectorMaxWidth: CGFloat = 480
+        static let shortcutHelpMinWidth: CGFloat = 420
+        static let shortcutHelpMinHeight: CGFloat = 360
     }
 }
 

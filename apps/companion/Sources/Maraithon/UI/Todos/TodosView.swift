@@ -1,55 +1,62 @@
 import SwiftUI
 
-/// Account-backed work list for the paired Mac. The layout follows the web
-/// Todos surface: Todo and next move first, then source, due date, and one
-/// quiet completion action per row.
+/// Account-backed work list for the paired Mac. It mirrors the web Todo
+/// surface's Gmail-style keyboard workflow while keeping all account data in
+/// the main-actor store.
 struct TodosView: View {
     @Environment(AppEnvironment.self) private var env
+
+    @State private var activeTodoID: String?
+    @State private var markedTodoIDs: Set<String> = []
+    @State private var inspectorShown = false
+    @State private var shortcutHelpShown = false
+    @FocusState private var searchFocused: Bool
 
     var body: some View {
         @Bindable var store = env.todos
 
         VStack(alignment: .leading, spacing: 0) {
-            header(store: store)
+            TodosHeaderView(
+                store: store,
+                showShortcuts: { shortcutHelpShown = true }
+            )
             Divider()
             controls(store: store)
             Divider()
             content(store: store)
         }
         .navigationTitle("Todos")
+        .focusedSceneValue(\.todoShortcutActions, focusedShortcutActions(store: store))
+        .inspector(isPresented: $inspectorShown) {
+            TodoDetailView(
+                todo: activeTodo,
+                isWorking: activeTodo.map { store.pendingActionIDs.contains($0.id) } ?? false,
+                primaryAction: { performPrimaryAction(store: store) },
+                dismissAction: { perform(.dismiss, store: store) }
+            )
+            .inspectorColumnWidth(
+                min: Tokens.Layout.todoInspectorMinWidth,
+                ideal: Tokens.Layout.todoInspectorIdealWidth,
+                max: Tokens.Layout.todoInspectorMaxWidth
+            )
+        }
+        .sheet(isPresented: $shortcutHelpShown) {
+            TodoShortcutHelpView()
+        }
         .task {
             if store.phase == .idle {
                 await store.load()
             }
+            reconcileSelection(store.todos)
+        }
+        .onChange(of: store.todos.map(\.id)) { _, _ in
+            reconcileSelection(store.todos)
         }
     }
 
-    private func header(store: TodosStore) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: Tokens.Spacing.medium) {
-            VStack(alignment: .leading, spacing: Tokens.Spacing.xsmall) {
-                Text("Todos")
-                    .font(.title2.weight(.semibold))
-                Text(TodosCopy.resultCount(store.todos.count, filter: store.filter))
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-            }
-            Spacer()
-            if store.isLoading {
-                ProgressView()
-                    .controlSize(.small)
-                    .accessibilityLabel("Refreshing Todos")
-            }
-            Button {
-                Task { await store.load() }
-            } label: {
-                Label("Refresh", systemImage: "arrow.clockwise")
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-            .disabled(store.isLoading)
-        }
-        .padding(.horizontal, Tokens.Spacing.large)
-        .padding(.vertical, Tokens.Spacing.medium)
+    private var activeTodo: CompanionTodo? {
+        guard let activeTodoID else { return nil }
+        return env.todos.todos.first(where: { $0.id == activeTodoID })
     }
 
     private func controls(store: TodosStore) -> some View {
@@ -61,6 +68,7 @@ struct TodosView: View {
                     .foregroundStyle(.secondary)
                 TextField("Search title, next action, or source", text: $store.query)
                     .textFieldStyle(.plain)
+                    .focused($searchFocused)
                     .onSubmit {
                         Task { await store.load() }
                     }
@@ -69,11 +77,10 @@ struct TodosView: View {
                         store.query = ""
                         Task { await store.load() }
                     } label: {
-                        Image(systemName: "xmark.circle.fill")
+                        Label("Clear search", systemImage: "xmark.circle.fill")
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(.secondary)
-                    .accessibilityLabel("Clear search")
                 }
             }
             .padding(.horizontal, Tokens.Spacing.small)
@@ -141,151 +148,135 @@ struct TodosView: View {
                     Divider()
                 }
 
-                List(store.todos) { todo in
-                    TodoRow(
-                        todo: todo,
-                        isWorking: store.pendingActionIDs.contains(todo.id),
-                        action: {
-                            Task { await store.performPrimaryAction(on: todo) }
-                        }
-                    )
+                List(selection: $activeTodoID) {
+                    ForEach(store.todos) { todo in
+                        TodoRow(
+                            todo: todo,
+                            isMarked: markedTodoIDs.contains(todo.id),
+                            isWorking: store.pendingActionIDs.contains(todo.id),
+                            action: {
+                                Task {
+                                    await store.performPrimaryAction(on: todo)
+                                    reconcileSelection(store.todos)
+                                }
+                            }
+                        )
+                        .tag(todo.id)
+                    }
                 }
                 .listStyle(.inset)
-            }
-        }
-    }
-}
-
-private struct TodoRow: View {
-    let todo: CompanionTodo
-    let isWorking: Bool
-    let action: () -> Void
-
-    var body: some View {
-        HStack(alignment: .top, spacing: Tokens.Spacing.medium) {
-            VStack(alignment: .leading, spacing: Tokens.Spacing.xsmall) {
-                HStack(spacing: Tokens.Spacing.small) {
-                    Text(todo.title)
-                        .font(.callout.weight(.medium))
-                        .lineLimit(2)
-                    if todo.status == "snoozed" {
-                        Label("Snoozed", systemImage: "clock")
-                            .font(.caption)
-                            .foregroundStyle(StatusTone.attention.color)
-                    }
-                    if todo.priority >= 75 {
-                        Text(todo.priority >= 90 ? "Critical" : "High")
-                            .font(.caption.weight(.medium))
-                            .foregroundStyle(todo.priority >= 90 ? StatusTone.error.color : StatusTone.attention.color)
-                    }
+                .onKeyPress(keys: [.leftArrow, .rightArrow, .upArrow, .downArrow]) { press in
+                    handleArrowKey(press, store: store)
                 }
-
-                if let move = todo.recommendedMove {
-                    Text("Next: \(move)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                } else if let summary = todo.summary, !summary.isEmpty {
-                    Text(summary)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
+                .onKeyPress(.return) {
+                    handle(.open, store: store)
+                    return .handled
+                }
+                .onKeyPress(.escape) {
+                    let wasShown = inspectorShown
+                    handle(.back, store: store)
+                    return wasShown ? .handled : .ignored
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-
-            VStack(alignment: .leading, spacing: Tokens.Spacing.xsmall) {
-                Text(TodosCopy.sourceLabel(todo.source))
-                    .font(.callout)
-                Text(TodosCopy.attentionLabel(todo.attentionMode))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            .frame(width: 112, alignment: .leading)
-
-            Text(TodosCopy.dueLabel(todo.dueDate))
-                .font(.caption)
-                .foregroundStyle(TodosCopy.dueTone(todo.dueDate).color)
-                .frame(width: 96, alignment: .leading)
-
-            Button(actionTitle) {
-                action()
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-            .disabled(isWorking || (!todo.canMarkDone && !todo.canReopen))
-            .frame(width: 72, alignment: .trailing)
-            .overlay {
-                if isWorking {
-                    ProgressView()
-                        .controlSize(.small)
-                }
-            }
-            .opacity(isWorking ? 0.65 : 1)
         }
-        .padding(.vertical, Tokens.Spacing.xsmall)
-        .accessibilityElement(children: .contain)
     }
 
-    private var actionTitle: String {
-        todo.canReopen ? "Reopen" : "Done"
-    }
-}
-
-enum TodosCopy {
-    static func resultCount(_ count: Int, filter: TodoListFilter) -> String {
-        let noun = count == 1 ? "work item" : "work items"
-        return "\(count) \(filter == .active ? "active" : "completed") \(noun)"
-    }
-
-    static func emptyTitle(filter: TodoListFilter, query: String) -> String {
-        if !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return "No matching Todos"
+    private func focusedShortcutActions(store: TodosStore) -> TodoShortcutActions? {
+        guard !searchFocused, !shortcutHelpShown else { return nil }
+        return TodoShortcutActions { shortcut in
+            handle(shortcut, store: store)
         }
-        return filter == .active ? "Your open work list is clear" : "No completed work yet"
     }
 
-    static func emptyDescription(filter: TodoListFilter, query: String) -> String {
-        if !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return "Try another title, next action, or source."
+    private func handle(_ shortcut: TodoShortcut, store: TodosStore) {
+        switch shortcut {
+        case .next:
+            moveActiveTodo(by: 1, in: store.todos)
+        case .previous:
+            moveActiveTodo(by: -1, in: store.todos)
+        case .open:
+            inspectorShown = activeTodo != nil
+        case .back:
+            inspectorShown = false
+        case .select:
+            toggleActiveTodoMark()
+        case .complete:
+            perform(.done, store: store)
+        case .dismiss:
+            perform(.dismiss, store: store)
+        case .search:
+            searchFocused = true
+        case .help:
+            shortcutHelpShown = true
         }
-        if filter == .active {
-            return "Maraithon will surface commitments when the next move is clear."
-        }
-        return "Completed work will appear here and can be reopened."
     }
 
-    static func sourceLabel(_ source: String) -> String {
-        switch source {
-        case "gmail": return "Gmail"
-        case "google_calendar": return "Google Calendar"
-        case "imessage": return "iMessage"
-        case "browser_history": return "Browser History"
-        case "voice_memos": return "Voice Memos"
-        case "manual": return "Added by you"
+    private func handleArrowKey(_ press: KeyPress, store: TodosStore) -> KeyPress.Result {
+        switch press.key {
+        case .rightArrow, .downArrow:
+            moveActiveTodo(by: 1, in: store.todos)
+        case .leftArrow, .upArrow:
+            moveActiveTodo(by: -1, in: store.todos)
         default:
-            return source
-                .replacingOccurrences(of: "_", with: " ")
-                .split(separator: " ")
-                .map { $0.prefix(1).uppercased() + $0.dropFirst() }
-                .joined(separator: " ")
+            return .ignored
+        }
+        return .handled
+    }
+
+    private func moveActiveTodo(by offset: Int, in todos: [CompanionTodo]) {
+        guard !todos.isEmpty else { return }
+        guard let activeTodoID,
+              let index = todos.firstIndex(where: { $0.id == activeTodoID }) else {
+            self.activeTodoID = todos.first?.id
+            return
+        }
+
+        let targetIndex = index + offset
+        guard todos.indices.contains(targetIndex) else { return }
+        self.activeTodoID = todos[targetIndex].id
+    }
+
+    private func toggleActiveTodoMark() {
+        guard let activeTodoID else { return }
+        if markedTodoIDs.contains(activeTodoID) {
+            markedTodoIDs.remove(activeTodoID)
+        } else {
+            markedTodoIDs.insert(activeTodoID)
         }
     }
 
-    static func attentionLabel(_ value: String?) -> String {
-        value == "monitor" ? "Watching" : "Needs action"
-    }
+    private func perform(_ action: CompanionTodoAction, store: TodosStore) {
+        guard let todo = activeTodo else { return }
+        guard action != .done || todo.canMarkDone else { return }
+        guard action != .dismiss || todo.canDismiss else { return }
 
-    static func dueLabel(_ date: Date?) -> String {
-        guard let date else { return "No due date" }
-        if date < Date() {
-            return "Overdue " + date.formatted(.dateTime.month(.abbreviated).day())
+        Task {
+            await store.perform(action, on: todo)
+            markedTodoIDs.remove(todo.id)
+            reconcileSelection(store.todos)
         }
-        return date.formatted(.dateTime.month(.abbreviated).day())
     }
 
-    static func dueTone(_ date: Date?) -> StatusTone {
-        guard let date else { return .muted }
-        return date < Date() ? .error : .muted
+    private func performPrimaryAction(store: TodosStore) {
+        guard let todo = activeTodo else { return }
+        Task {
+            await store.performPrimaryAction(on: todo)
+            markedTodoIDs.remove(todo.id)
+            reconcileSelection(store.todos)
+        }
+    }
+
+    private func reconcileSelection(_ todos: [CompanionTodo]) {
+        let visibleIDs = Set(todos.map(\.id))
+        markedTodoIDs.formIntersection(visibleIDs)
+
+        if let activeTodoID, visibleIDs.contains(activeTodoID) {
+            return
+        }
+
+        activeTodoID = todos.first?.id
+        if activeTodoID == nil {
+            inspectorShown = false
+        }
     }
 }
