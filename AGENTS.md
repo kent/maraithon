@@ -14,9 +14,12 @@ on, question it.
   live at the repository root.
 - The native macOS companion app lives in `apps/companion`.
 - The native iOS app lives in `apps/mobile`.
-- Use the root `Makefile` for cross-stack workflows:
-  `make generate`, `make build`, `make test`, `make verify`, and
-  `make deploy`.
+- The default loop is intentionally small for this single-user test app:
+  `make build`, `make test`, and `make verify` compile the Phoenix app only,
+  and `make deploy` uses the cached single-service deployment path.
+- Full cross-stack work is explicit: use `make build-all`, `make test-full`,
+  `make verify-full`, or `make deploy-hardened` only when Kent explicitly asks
+  for that broader scope.
 - Use independent targets when you only need one slice:
   `make build-web`, `make build-api`, `make build-static`,
   `make build-assets`, `make build-companion`, and `make build-mobile`.
@@ -64,7 +67,10 @@ on, question it.
   `snapshot_state/1` to strip it before a checkpoint.
 - A node that dies with unproven tasks leaves its partition `draining` until
   the tasks are proven terminated. Deploys drain the serving revision through
-  `/api/v1/runtime/drain` before replacing it. A stranded task needs an
+  `/api/v1/runtime/drain` before replacing it on the opt-in hardened path. The
+  normal single-user test-app deploy intentionally uses a rolling combined
+  service and relies on PostgreSQL leases instead of making drain proof a
+  deployment gate. A stranded task needs an
   incident-role attestation (`mix maraithon.tasks.attest_terminated` for
   background jobs, `mix maraithon.effects.attest_terminated` for Effects,
   `mix maraithon.agents.attest_terminated` for Agents) with real destruction
@@ -97,21 +103,34 @@ messages the application redacts; read them first when the app reports
 ## Project guidelines
 
 - Use the already included and available `:req` (`Req`) library for HTTP requests, **avoid** `:httpoison`, `:tesla`, and `:httpc`. Req is included by default and is the preferred HTTP client for Phoenix apps
-- Deploy production to Google Cloud with `make deploy`. Production is pinned to project `maraithon`, region `us-central1`, Cloud Run service `maraithon`, and Cloud SQL instance `maraithon-db`. Every push to `main` deploys through `.github/workflows/deploy-gcp.yml`.
+- Deploy the test app to Google Cloud with `make deploy`. It is pinned to project `maraithon`, region `us-central1`, Cloud Run service `maraithon`, and Cloud SQL instance `maraithon-db`. Server-relevant pushes to `main` deploy through `.github/workflows/deploy-gcp.yml`; native-only, test-only, docs-only, and Markdown-only pushes do not. Use `make deploy-hardened` only when an exact staged rollout is explicitly requested.
 - CI authenticates keylessly through the `maraithon-github` Workload Identity provider as `admin-deployer@maraithon.iam.gserviceaccount.com`; do not create or commit service-account keys.
 - Keep operator credentials outside the repo and application secrets in Google Secret Manager. Never commit admin passwords, API bearer tokens, database URLs, LLM provider keys, or OAuth secrets.
 - Production checks run as Cloud Run job executions with an `eval` override (`--args="^@^eval@<elixir>"`, `--update-env-vars POOL_SIZE=2`), never from a laptop against the database.
 
 ## Current verification mode
 
-- Product iteration is currently production-first. Until Kent explicitly re-enables broad test runs, do not run `mix test`, `mix precommit`, `make test`, `make verify`, Xcode test actions, SwiftPM tests, or other expensive test suites by default.
-- Use compile/build sanity checks instead: `mix compile --warnings-as-errors`, `make build-web`, `make build-api`, `make build-mobile`, `swift build`, or the narrowest build command relevant to the changed slice. Running the single test file you touched is fine.
-- If a narrow test would materially reduce risk, ask first or explain why it is necessary before running it. Prefer getting the change deployed quickly for live product feedback.
-- Do not delete, gut, skip, or game the existing test suite. This is an operating mode for faster iteration, not permission to remove coverage. When Kent says to harden again, restore normal test/precommit discipline.
+- [`docs/development-mode.md`](docs/development-mode.md) is the authoritative
+  workflow policy until Kent explicitly changes it. It overrides test or
+  verification commands embedded in historical plans, specs, reports, and
+  release notes.
+- Product iteration is manual-first. Do not run or add broad or focused tests
+  by default. In particular, do not run `mix test`, `mix precommit`,
+  `make test-full`, `make verify-full`, slice-specific test targets, Xcode test
+  actions, or SwiftPM tests unless Kent explicitly asks.
+- Use `make build` or the narrowest relevant compile/build sanity check.
+  `make test` and `make verify` are retained as compile-only compatibility
+  aliases and do not execute tests.
+- Keep the dormant test suite intact. Do not delete, gut, skip, weaken, or game
+  tests. When Kent explicitly requests hardening, restore the appropriate test
+  discipline for that task.
 
 ## Testing principle
 
-- Tests are there for a reason and must not be ignored, worked around, or gamed to look green. A failing test means either the production code has a real issue, or the test no longer represents valid product behavior and should be deliberately removed or rewritten with that rationale. Use the test suite as the highest-leverage harness for moving fast safely: understand what each failing test is trying to protect, then fix the underlying code or retire obsolete coverage intentionally.
+- Existing tests preserve useful hardening knowledge, but they are not part of
+  the current routine loop. Only when testing is explicitly requested, a
+  failure means either the product has a defect or the expectation is obsolete;
+  fix one of those causes deliberately rather than working around the failure.
 
 ## Design guidelines
 
@@ -183,11 +202,15 @@ custom classes must fully style the input
 ## Mix guidelines
 
 - Read the docs and options before using tasks (by using `mix help task_name`)
-- To debug test failures, run tests in a specific file with `mix test test/my_test.exs` or run all previously failed tests with `mix test --failed`
+- When Kent has explicitly requested testing, debug failures with the narrowest
+  file command (`mix test test/my_test.exs`) or the previously failed set
+  (`mix test --failed`). These commands are not part of the default loop.
 - `mix deps.clean --all` is **almost never needed**. **Avoid** using it unless you have good reason
 
 ## Test guidelines
 
+- This section applies only when Kent explicitly requests testing; it does not
+  re-enable tests in the current manual-first mode.
 - **Always use `start_supervised!/1`** to start processes in tests as it guarantees cleanup between tests
 - **Avoid** `Process.sleep/1` and `Process.alive?/1` in tests
   - Instead of sleeping to wait for a process to finish, **always** use `Process.monitor/1` and assert on the DOWN message:

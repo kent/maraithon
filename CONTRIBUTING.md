@@ -24,8 +24,8 @@ mix deps.get
 # Setup database
 mix ecto.setup
 
-# Run tests
-mix test
+# Fast compile check
+make build
 
 # Start development server
 mix phx.server
@@ -33,43 +33,29 @@ mix phx.server
 
 ## Development Workflow
 
-### Running Tests
+### Current Fast Loop
 
 ```bash
-# Run all tests
-mix test
-
-# Run tests with coverage (once configured)
-mix coveralls
-
-# Run a specific test file
-mix test test/path/to/test.exs
-
-# Run tests matching a pattern
-mix test --only tag_name
+make build   # Phoenix compile
+make deploy  # cached single-service test-app deploy
 ```
+
+Maraithon is in manual-first, single-user test-app mode. Do not run or add
+automated tests by default. The authoritative policy, including explicit
+hardening commands, is [`docs/development-mode.md`](docs/development-mode.md).
 
 ### Code Quality
 
-Before submitting a PR, ensure your code passes all checks:
+Use the narrowest compile/build check relevant to the change:
 
 ```bash
-# Run the full precommit suite
-mix precommit
-
-# Or run individual checks:
 mix compile --warnings-as-errors  # No compiler warnings
-mix format --check-formatted       # Code is formatted
-mix test                           # Tests pass
+mix format --check-formatted      # Check formatting when relevant
 ```
 
-### Smoke Tests
-
-Run the smoke test script to verify the application works end-to-end:
-
-```bash
-./scripts/smoke_test.sh
-```
+Do not run `mix precommit`, test suites, or smoke-test gates unless Kent
+explicitly asks for hardening. Kent performs the routine product validation
+manually after deployment.
 
 ## Code Style
 
@@ -145,7 +131,7 @@ test/
 
 ### Branching
 
-- Create feature branches from `master`
+- Create feature branches from `main`
 - Use descriptive branch names: `feature/add-discord-connector`, `fix/oauth-token-refresh`
 
 ### Commits
@@ -160,19 +146,17 @@ test/
 
 ### Pull Requests
 
-1. Ensure all tests pass
-2. Run `mix precommit` before pushing
-3. Update documentation if needed
-4. Add tests for new functionality
-5. Keep PRs focused - one feature/fix per PR
+1. Run the narrowest relevant compile/build check.
+2. Update documentation when behavior or operating rules change.
+3. Keep PRs focused—one feature or fix per PR.
+4. Leave automated testing to an explicitly requested hardening pass.
 
 ### PR Checklist
 
-- [ ] Tests pass (`mix test`)
 - [ ] No compiler warnings (`mix compile --warnings-as-errors`)
 - [ ] Code is formatted (`mix format`)
 - [ ] Documentation updated (if applicable)
-- [ ] Smoke tests pass (`./scripts/smoke_test.sh`)
+- [ ] Tests intentionally not run, or explicitly requested test results reported
 
 ## Adding New Connectors
 
@@ -199,7 +183,7 @@ end
 
 3. Add routes in `router.ex`
 4. Add configuration in `runtime.exs`
-5. Add tests
+5. Keep the implementation testable for a later hardening pass
 6. Document in README
 
 ## Adding New Behaviors
@@ -209,44 +193,18 @@ Behaviors define how agents think and act. To add a new behavior:
 1. Create `lib/maraithon/behaviors/your_behavior.ex`
 2. Implement the `Maraithon.Behaviors.Behavior` behaviour
 3. Register in `lib/maraithon/behaviors.ex`
-4. Add tests
+4. Keep the implementation testable for a later hardening pass
 5. Document usage
 
 ## Testing Guidelines
 
-### Unit Tests
+The existing unit and integration suites remain in the repository but are
+dormant during the current manual-first mode. Do not delete or weaken them, and
+do not add, update, or run tests unless Kent explicitly requests that work.
 
-Test individual functions in isolation:
-
-```elixir
-defmodule Maraithon.CryptoTest do
-  use ExUnit.Case, async: true
-
-  describe "verify_hmac_sha256/3" do
-    test "returns :ok for valid signature" do
-      # ...
-    end
-
-    test "returns error for invalid signature" do
-      # ...
-    end
-  end
-end
-```
-
-### Integration Tests
-
-Test components working together:
-
-```elixir
-defmodule MaraithonWeb.WebhookControllerTest do
-  use MaraithonWeb.ConnCase
-
-  test "processes valid GitHub webhook" do
-    # ...
-  end
-end
-```
+When hardening is requested, prefer focused tests first and treat every failure
+as a real product defect or a deliberately obsolete expectation. Never skip or
+game a failing check merely to make a run green.
 
 ## Security
 

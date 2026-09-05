@@ -10,6 +10,9 @@ Canonical specs live in [specs](./specs). Each spec also has exactly one JSON ma
 Rules:
 
 - Keep the Markdown spec in `specs/<slug>.md` as the source of truth.
+- Follow the current manual-first workflow in
+  [`../development-mode.md`](../development-mode.md). Test gates copied into
+  older specs are historical unless Kent explicitly requests hardening.
 - Move only the JSON manifest between stage directories.
 - Do not duplicate the full spec body in manifests.
 - Store enough metadata in the manifest to answer status questions and resume interrupted work.

@@ -8,9 +8,8 @@ Chat.
 From the monorepo root:
 
 ```sh
-make generate
-make build
-make test
+make generate-mobile
+make build-mobile
 ```
 
 From this directory:
@@ -24,6 +23,9 @@ xcodebuild -project MaraithonMobile.xcodeproj \
 ```
 
 `project.yml` is the source of truth. The generated `.xcodeproj` is ignored.
+Automated tests are not part of the current manual-first loop. Do not run or
+add them unless Kent explicitly asks; see
+[`../../docs/development-mode.md`](../../docs/development-mode.md).
 
 ## Production Simulator Verification
 

@@ -1,13 +1,17 @@
 # Maraithon Monorepo
 
+The current manual-first workflow is defined in
+[`development-mode.md`](development-mode.md). That policy takes precedence over
+verification commands preserved in historical specifications and reports.
+
 This repository owns the full Maraithon stack:
 
-- `.`: Phoenix web app, API, connectors, OTP runtime, and Fly deployment.
+- `.`: Phoenix web app, API, connectors, OTP runtime, and GCP deployment.
 - `apps/companion`: native macOS companion app for local data sync.
 - `apps/mobile`: native iOS app for on-the-go chief-of-staff workflows.
 
 The Phoenix app intentionally remains at the repository root. That keeps the
-current Fly release, `mix` aliases, Dockerfile, migrations, and production
+current Cloud Run release, `mix` aliases, Dockerfile, migrations, and production
 runtime stable while the native clients live under `apps/`.
 
 ## Commands
@@ -16,21 +20,25 @@ Use the root `Makefile` for cross-stack work:
 
 ```sh
 make generate                 # regenerate Xcode projects
-make build                    # build web, companion, and mobile
-make test                     # run web tests plus native local tests
-make verify                   # full local verification loop
+make build                    # fast Phoenix compile (default loop)
+make test                     # fast Phoenix compile; broad tests are opt-in
+make verify                   # fast Phoenix compile; broad checks are opt-in
+make build-all                # explicit request: build every stack slice
+make test-full                # explicit request: all web and native tests
+make verify-full              # explicit request: full verification loop
 make build-web                # compile the Phoenix web/API runtime
 make build-api                # alias for the Phoenix API/runtime build
 make build-static             # digest and validate Phoenix/PWA static files
 make build-assets             # build web static and native asset catalogs
 make build-companion          # build only the macOS companion app
 make build-mobile             # build only the iOS app
-make verify-native            # native-only generation/build/test loop
+make verify-native            # explicit request: native verification loop
 make verify-production-mobile # production simulator flow, requires local config
-make deploy                   # deploy the Phoenix/Fly production app
+make deploy                   # cached single-service GCP test-app deploy
+make deploy-hardened          # explicit request: staged exact-runtime rollout
 ```
 
-The verification scripts use language-native tooling:
+The opt-in full verification scripts use language-native tooling:
 
 - Phoenix: `mix precommit`
 - macOS companion: `swift build`, `swift test`, and `xcodebuild`
@@ -59,14 +67,16 @@ cp apps/mobile/Config/production-verification.env.example \
 Fill in a local simulator UDID and verification account values before running
 `make verify-production-mobile`.
 
-Production Fly commands are token-scoped for multi-account terminals. Put
-`FLY_API_TOKEN` and `MARAITHON_FLY_APP=maraithon` in
-`~/.config/maraithon/fly-prod.env` or point `MARAITHON_DEPLOY_ENV_FILE` at an
-equivalent ignored file. The deploy and production mobile verification helpers
-source that file and do not rely on the active `flyctl` login.
+The fast server deploy uses keyless GCP credentials and the pinned Maraithon
+project settings. Local deploys require an authenticated `gcloud` session;
+GitHub Actions uses Workload Identity Federation.
 
 ## CI Shape
 
-The default local loop is deterministic and does not depend on a fresh
-production magic-link token. Production simulator verification is explicit
-because it creates real API data and requires local operator credentials.
+Server-relevant pushes use the cached single-service deploy. Native-only,
+test-only, docs-only, and Markdown-only changes do not trigger a server deploy,
+and a newer push cancels the superseded run. CI does not run the dormant test
+suite in the current mode.
+
+Production simulator verification is explicit because it creates real API data
+and requires local operator credentials.

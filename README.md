@@ -59,7 +59,7 @@ Your agent is **always watching**, **always remembering**, and **always ready**.
 - Event-first runtime for low-latency reactions.
 - Durable scheduler for wakeups that must survive restarts.
 - OTP supervision plus database-fenced recovery from the latest durable checkpoint.
-- Production observability (agent events, effect logs, Fly logs, spend tracking).
+- Live observability (agent events, effect logs, Google Cloud logs, spend tracking).
 
 ## Architecture
 
@@ -116,12 +116,9 @@ Your agent is **always watching**, **always remembering**, and **always ready**.
 
 ### Durable runtime operations
 
-These documents describe the repository-staged authority model and the guarded
-operator procedure. Their presence is not evidence that the revision was
-deployed or that either one-way database protocol was activated. The staged
-implementation includes the local Agent/Task capability-digest path described
-in the architecture and cutover guides; production activation remains blocked
-until that path and the full evidence envelope are independently reviewed.
+These documents describe the runtime authority model and the opt-in hardened
+operator procedures. Their verification and rollout gates are not part of the
+normal single-user test-app deployment path.
 
 - [Durable resident Agent runtime and local-proof contract](docs/architecture/durable-agent-runtime.md)
 - [Exact Agent runtime production cutover](docs/exact-agent-runtime-cutover.md)
@@ -162,19 +159,21 @@ curl http://localhost:4000/api/v1/agents/{id}/events
 
 Maraithon now lives in one repo across the full stack:
 
-- `.`: Phoenix web app, API, connectors, OTP runtime, and Fly deployment.
+- `.`: Phoenix web app, API, connectors, OTP runtime, and GCP deployment.
 - `apps/companion`: macOS companion app for secure local sync.
 - `apps/mobile`: iOS app for mobile chief-of-staff workflows.
 
-Use the root commands when working across the stack:
+The default loop is intentionally narrow for the single-user test app:
 
 ```bash
-make generate
-make build
-make test
-make verify
-make deploy
+make build   # compile Phoenix only
+make deploy  # cached combined-service GCP deploy
 ```
+
+`make test` and `make verify` are compile-only compatibility aliases. Automated
+tests are not part of the current loop. See
+[`docs/development-mode.md`](docs/development-mode.md) for the authoritative
+manual-first policy and explicit full/hardened commands.
 
 Each stack slice can also be built independently:
 
@@ -187,33 +186,32 @@ make build-companion
 make build-mobile
 ```
 
-See [`docs/monorepo.md`](docs/monorepo.md) for the verification loop, native
-build details, and production mobile simulator gate.
+See [`docs/monorepo.md`](docs/monorepo.md) for native build details and the
+explicit production mobile simulator workflow.
 
-## Production Shape
+## Current Test-App Shape
 
-The current production shape is intentionally simple:
+The current single-user test-app shape is intentionally simple:
 
-- One Fly app: `maraithon`
-- One always-on app machine in `yyz`
-- Phoenix, the admin control center, the API, and the OTP runtime all run in the same release
+- One combined Cloud Run service: `maraithon` in `us-central1`
+- Phoenix, the admin control center, API, connectors, and OTP runtime run in the
+  same release and instance
 - Database-backed runtime state in PostgreSQL
-- Fly Managed Postgres in the same region
+- Cloud SQL instance `maraithon-db`
 - `DATABASE_URL` is the pooled `maraithon_runtime` URL
-- `DIRECT_DATABASE_URL` is the verified direct `maraithon_migrator` transport
-  used only by the release command
+- Migration jobs use the separate `maraithon_migrator` credential only when
+  migration files change
 - `MARAITHON_MIGRATOR_DATABASE_URL` is the separate storage-only migrator
   credential; Snapshot migration selects it directly and must not be run by
   overriding pooled runtime `DATABASE_URL`
 - Named verifier and activation URLs remain role-specific;
   `MARAITHON_INCIDENT_DATABASE_URL` is termination-only, while Vault,
   payload-binding, and key-retirement CLIs use `VAULT_ROTATION_DATABASE_URL`
-- `POOL_SIZE=8`, `DB_QUEUE_TARGET_MS=250`, and `DB_QUEUE_INTERVAL_MS=2000` for the current single-machine footprint
+- `POOL_SIZE=16` for the combined service
 
 This is the right shape for a single-user or small-team ambient agent
-deployment. Scale app Machines horizontally only after the one-way coordination
-cutover and after adjusting database capacity for the additional node and
-worker pools.
+deployment. The default deployment intentionally favors fast manual feedback
+over staged rollout ceremony.
 
 ### Why This Shape Wins
 
@@ -618,7 +616,8 @@ When enabled, include: `Authorization: Bearer <API_BEARER_TOKEN>`.
 ## Admin Control Center
 
 The Phoenix admin interface is your browser-based operator console. It lives at `/` and `/admin` and is protected by HTTP Basic auth when `ADMIN_USERNAME` and `ADMIN_PASSWORD` are set.
-When PostgreSQL is degraded, the page now stays up in a degraded mode so Fly platform logs and in-app raw logs remain available for troubleshooting instead of crashing the dashboard.
+When PostgreSQL is degraded, the page stays up in a degraded mode so in-app
+diagnostics remain available instead of crashing the dashboard.
 
 High-value workflows:
 
@@ -628,7 +627,8 @@ High-value workflows:
 - **Monitor the fleet** from the lower panels. Health, queue depth, failures, operational activity, and raw runtime logs are all visible from the same page.
 - **Manage server-side OAuth grants** from the `Connections` and `Connected Accounts` panels. Pick the control-center `user_id`, connect Google/Slack/GitHub/Linear/Notion, inspect each connected account, and run account-level reconnect/disconnect actions in-place.
 - **Configure providers from the `OAuth Configuration` panel.** Each provider card shows callback URLs, webhook endpoints, required and optional environment variables, setup status, permissions, and the exact values you should register in the provider console before clicking connect.
-- **Troubleshoot Fly deployment issues** from the Fly.io Platform Logs panel. This surfaces runner, machine, and app logs from Fly itself, including machine stops, restarts, and DB machine problems when configured.
+- **Troubleshoot runtime issues** with Google Cloud Logging. Cloud SQL server
+  logs are the first stop when a database trigger error is redacted by the app.
 
 Recommended flow for personal production use:
 
@@ -665,12 +665,6 @@ export MARAITHON_BASE_URL="https://maraithon.com"
 export MARAITHON_API_TOKEN="replace-with-your-api-token"
 ```
 
-If you keep local operator credentials in a shell file outside the repo, load that instead:
-
-```bash
-source ~/.config/maraithon/fly-prod.env
-```
-
 Agent lifecycle:
 
 ```bash
@@ -691,183 +685,48 @@ Fleet inspection:
 ```bash
 mix maraithon.admin dashboard
 mix maraithon.admin dashboard --activity-limit 20 --log-limit 100
-mix maraithon.admin fly-logs
-mix maraithon.admin fly-logs --app maraithon --limit 50
 ```
 
 The CLI is the terminal equivalent of the admin UI:
 
 - `mix maraithon.admin dashboard` = fleet health, queue, failures, logs
-- `mix maraithon.admin fly-logs` = Fly platform logs from the configured app set
 - `mix maraithon.agent create|update|start|stop|delete` = agent CRUD and lifecycle
 - `mix maraithon.agent inspect` = deep inspection for one agent
 - `mix maraithon.agent ask` = operator console from the terminal
 
-## Fly.io Deployment
+## Google Cloud Run Deployment
 
-Deploy the production app with Fly secrets and PostgreSQL. The app boots Phoenix, runs one-off release migrations with `DIRECT_DATABASE_URL`, and resumes persisted agents on startup.
-
-Recommended shape:
-
-- Fly app `maraithon`
-- Region `yyz`
-- One always-on `shared-cpu-1x` 1 GB machine
-- Fly Managed Postgres in the same region
-- Runtime traffic goes through the pooled `DATABASE_URL`
-- Release migrations use `DIRECT_DATABASE_URL` authenticated as
-  `maraithon_migrator`; storage-only tasks use their named URLs
-- `POOL_SIZE=8`, `DB_QUEUE_TARGET_MS=250`, `DB_QUEUE_INTERVAL_MS=2000`
-
-Local deploys should use a production Fly token instead of the active
-`flyctl` login. This matters on workstations with multiple Fly accounts.
+The single-user test app is pinned to GCP project `maraithon`, region
+`us-central1`, Cloud Run service `maraithon`, and Cloud SQL instance
+`maraithon-db`.
 
 ```bash
-mkdir -p ~/.config/maraithon
-chmod 700 ~/.config/maraithon
-
-cat > ~/.config/maraithon/fly-prod.env <<'EOF'
-export FLY_API_TOKEN="replace-with-fly-deploy-token"
-export MARAITHON_FLY_APP="maraithon"
-export MARAITHON_FLY_CONFIG="fly.toml"
-EOF
-
-chmod 600 ~/.config/maraithon/fly-prod.env
 make deploy
 ```
 
-`make deploy` sources that env file, verifies token access to the Fly app,
-takes a local deploy lock, runs `flyctl deploy --remote-only`, and checks
-`/health` on the live app. Deploys are not tied to local Docker or the current
-Fly CLI account. Production helpers that use Fly SSH, including mobile
-verification, source the same env file and prefer `MARAITHON_FLY_APP`; `FLY_APP`
-is only a compatibility alias.
+The default command uses cached Cloud Build layers, runs the migration job only
+when migration files changed, deploys one combined Phoenix/runtime instance,
+and performs one health request. It does not run automated tests or the staged
+runtime rollout gates. An authenticated local `gcloud` session is required;
+GitHub Actions authenticates keylessly with Workload Identity Federation.
 
-Initial app and secret setup still uses Fly commands:
+Pushes to `main` follow the same path through
+`.github/workflows/deploy-gcp.yml`. Only use `make deploy-hardened` when Kent
+explicitly requests the slower staged rollout. The full policy lives in
+[`docs/development-mode.md`](docs/development-mode.md).
 
-```bash
-fly mpg create --name maraithon-pg -r yyz
-fly mpg attach maraithon-pg -a maraithon
-
-# After provisioning the canonical roles, set a direct maraithon_migrator URL.
-# Keep DATABASE_URL as the pooled maraithon_runtime URL for runtime traffic.
-flyctl secrets set -a maraithon \
-  DIRECT_DATABASE_URL="postgres://..."
-
-flyctl secrets set -a maraithon \
-  SECRET_KEY_BASE="$(mix phx.gen.secret)" \
-  CLOAK_KEY="$(openssl rand -base64 32)" \
-  ADMIN_USERNAME="admin" \
-  ADMIN_PASSWORD="replace-with-long-random-password" \
-  API_BEARER_TOKEN="replace-with-long-random-token" \
-  AGENT_TERMINATION_ATTESTATION_PUBLIC_KEY="base64-or-hex-ed25519-public-key" \
-  OPENAI_API_KEY="sk-proj-..." \
-  OPENROUTER_API_KEY="sk-or-v1-..." \
-  LLM_MODEL="moonshotai/kimi-k3" \
-  FLY_API_TOKEN="replace-with-fly-token" \
-  FLY_LOG_APPS="maraithon" \
-  FLY_LOG_REGION="yyz" \
-  POOL_SIZE="8" \
-  DB_QUEUE_TARGET_MS="250" \
-  DB_QUEUE_INTERVAL_MS="2000"
-```
-
-### GitHub Actions Auto-Deploy
-
-Pushes to `main` automatically deploy to Fly via `.github/workflows/deploy-fly.yml`.
-
-Set this repository secret in GitHub:
-
-- `FLY_API_TOKEN`: a Fly token with permission to deploy the `maraithon` app
-
-Create a deploy token from Fly:
-
-```bash
-fly tokens create deploy -x 999999h
-```
-
-You can also trigger the same workflow manually via `workflow_dispatch`.
-
-### Migrating from Legacy `maraithon-db`
-
-If you still have the old unmanaged Postgres app, migrate before changing production traffic:
-
-```bash
-# 1. Create and attach the managed cluster
-fly mpg create --name maraithon-pg -r yyz
-fly mpg attach maraithon-pg -a maraithon
-
-# 2. Obtain a short-lived provider/bootstrap restore credential outside app
-# secrets. Do not reuse DATABASE_URL, DIRECT_DATABASE_URL, or an operator URL.
-
-# 3. Proxy the managed cluster locally
-fly mpg proxy 15433 -a maraithon-pg
-```
-
-Restore the legacy database from another shell with that short-lived credential,
-pointed at `127.0.0.1:15433`. Revoke it after import. Then provision the
-canonical roles and bind pooled `DATABASE_URL` as `maraithon_runtime` and direct
-`DIRECT_DATABASE_URL` as `maraithon_migrator` for the release command only:
-
-```bash
-pg_dump --no-owner --no-acl "$LEGACY_DATABASE_URL" | \
-  psql "postgres://RESTORE_USER:RESTORE_PASSWORD@127.0.0.1:15433/DATABASE?sslmode=disable"
-
-flyctl secrets set --app "$MARAITHON_FLY_APP" \
-  DATABASE_URL="postgres://maraithon_runtime:..." \
-  DIRECT_DATABASE_URL="postgres://maraithon_migrator:..."
-```
-
-After import:
-
-```bash
-# 4. Deploy once so release migrations run against DIRECT_DATABASE_URL
-: "${FLY_API_TOKEN:?scoped Fly token required}"
-: "${MARAITHON_FLY_APP:?pinned production app required}"
-make deploy
-
-# 5. Verify app and DB health
-curl https://maraithon.com/health
-flyctl logs --app "$MARAITHON_FLY_APP"
-
-# 6. When you are satisfied with the cutover, destroy the old unmanaged DB app
-# only after taking a final backup.
-```
-
-Fly docs used for this repo shape:
-
-- `fly mpg create` / `fly mpg attach`
-- transaction pool mode for app traffic
-- direct connections for migrations and imports
-- Phoenix/Ecto with `prepare: :unnamed`
-
-After deploy:
-
-- Open `https://maraithon.com/` and sign in with the admin credentials.
-- Use the CLI with `MARAITHON_BASE_URL=https://maraithon.com`.
-- Keep all third-party tokens in Fly secrets, never in the repo.
-- Verify the app with `curl https://maraithon.com/health`.
-
-Operational checks:
-
-```bash
-: "${FLY_API_TOKEN:?scoped Fly token required}"
-: "${MARAITHON_FLY_APP:?pinned production app required}"
-flyctl status --app "$MARAITHON_FLY_APP"
-flyctl machine list --app "$MARAITHON_FLY_APP"
-flyctl logs --app "$MARAITHON_FLY_APP"
-curl https://maraithon.com/health
-```
-
-This repo currently runs well on one app machine. If you add more app machines before fixing the DB footprint and runtime polling load, you can starve the database and take the control plane down.
+After a requested deploy, open `https://maraithon.com/` for manual validation.
+Use Google Cloud Logging for application logs and Cloud SQL server logs for
+database-trigger errors that the application redacts.
 
 ## Secrets Hygiene
 
 Never commit deployment secrets.
 
-- Keep production secrets in Fly secrets
-- Keep local operator credentials in a file outside the repo, such as `~/.config/maraithon/fly-prod.env`
+- Keep application secrets in Google Secret Manager
+- Use keyless Google Cloud authentication; do not create service-account key files
 - Do not commit `.env`, `.env.*`, service-account JSON, or copied API tokens
-- Treat `API_BEARER_TOKEN`, `ADMIN_PASSWORD`, `DATABASE_URL`, `DIRECT_DATABASE_URL`, `MARAITHON_MIGRATOR_DATABASE_URL`, `DURABLE_PAYLOAD_VERIFIER_DATABASE_URL`, `MARAITHON_ACTIVATION_DATABASE_URL`, `MARAITHON_INCIDENT_DATABASE_URL`, `VAULT_ROTATION_DATABASE_URL`, `CLOAK_KEY`, `FLY_API_TOKEN`, the Agent-termination private signing key, and third-party OAuth secrets as production credentials
+- Treat `API_BEARER_TOKEN`, `ADMIN_PASSWORD`, `DATABASE_URL`, `DIRECT_DATABASE_URL`, `MARAITHON_MIGRATOR_DATABASE_URL`, `DURABLE_PAYLOAD_VERIFIER_DATABASE_URL`, `MARAITHON_ACTIVATION_DATABASE_URL`, `MARAITHON_INCIDENT_DATABASE_URL`, `VAULT_ROTATION_DATABASE_URL`, `CLOAK_KEY`, the Agent-termination private signing key, and third-party OAuth secrets as sensitive credentials
 - Reserve `MARAITHON_INCIDENT_DATABASE_URL` for physical-termination commands. Vault re-encryption, payload-binding rotation, and key retirement use the separately named `VAULT_ROTATION_DATABASE_URL` even though both authenticate the incident-operator role.
 - Configure `AGENT_TERMINATION_ATTESTATION_PUBLIC_KEY` on every runtime node; keep the matching private key only in the external incident-attestation system
 
@@ -886,10 +745,7 @@ export ADMIN_DEFAULT_USER_ID="kent"
 export API_BEARER_TOKEN="replace-with-long-random-token"
 export SECRET_KEY_BASE="$(mix phx.gen.secret)"
 export CLOAK_KEY="$(openssl rand -base64 32)"
-export FLY_API_TOKEN="replace-with-fly-token"
-export FLY_LOG_APPS="maraithon"
-export FLY_LOG_REGION="yyz"
-export POOL_SIZE="8"
+export POOL_SIZE="16"
 export DB_QUEUE_TARGET_MS="250"
 export DB_QUEUE_INTERVAL_MS="2000"
 
@@ -1057,9 +913,12 @@ mix ecto.setup
 # Run server
 mix phx.server
 
-# Run tests
-mix test
+# Fast compile check (automated tests are opt-in)
+make build
 ```
+
+See [`docs/development-mode.md`](docs/development-mode.md) before running any
+test, full verification, or hardened deployment command.
 
 ## License
 

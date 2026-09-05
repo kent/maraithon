@@ -2,7 +2,7 @@
 
 > **Status (2026-05-20): Active through a narrow double-down proof window.** Complete the 30-day Chief of Staff dogfood run, onboard 3 alpha candidates, and keep building only what proves Telegram-first open-loop capture. See [Maraithon 6-month Path Decision](docs/decisions/2026-05-09-maraithon-path.md).
 
-Updated: May 9, 2026
+Updated: September 5, 2026
 
 ## North Star
 
@@ -58,18 +58,20 @@ Maraithon wins if it becomes the trusted place where the user can ask:
 
 ## Current State
 
-Maraithon is live in production at `maraithon.com`.
+Maraithon is a live single-user test app at `maraithon.com`.
 
-The production shape is:
+The current test-app shape is:
 
 - Phoenix 1.8 + LiveView web app.
-- Fly.io deployment in Toronto.
+- One combined Phoenix/runtime service on Google Cloud Run in `us-central1`.
 - Postgres-backed durable state.
 - Encrypted credentials with Cloak.
 - Magic-link sign-in.
 - Telegram bot/webhook interaction.
 - OTP runtime for long-lived agents, wakeups, event handling, and recovery.
-- GitHub Actions deploys `main` to Fly and release migrations run on deploy.
+- GitHub Actions uses the cached fast path for server-relevant pushes to
+  `main`; migrations run only when migration files change and automated tests
+  are not part of the current loop.
 
 Shipped primitives:
 

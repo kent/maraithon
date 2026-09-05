@@ -26,15 +26,18 @@ Use Apple frameworks first. Add third-party packages only when they remove meani
 xcodegen generate
 ```
 
-6. Current product-iteration mode: run the app build before finishing, but do not run Xcode tests or broad test suites unless Kent explicitly re-enables tests or asks for them.
+6. The root [`../../docs/development-mode.md`](../../docs/development-mode.md)
+   policy applies. Run the app build before finishing, but do not add, update,
+   or run Xcode tests or other test suites unless Kent explicitly asks.
 
 ```sh
 xcodebuild -quiet -project MaraithonMobile.xcodeproj -scheme MaraithonMobile -destination 'platform=iOS Simulator,name=iPhone 17,OS=26.4.1' build
 ```
 
-If a simulator is unavailable or busy, list available devices with `xcrun simctl list devices available` and use another iOS 26 simulator. Do not delete or weaken tests; this is only a temporary no-test execution mode for faster live iteration.
+If a simulator is unavailable or busy, list available devices with `xcrun simctl list devices available` and use another iOS 26 simulator. Do not delete or weaken the dormant tests.
 
-Production verification scripts that call Fly must source the shared deploy env from `~/.config/maraithon/fly-prod.env` or `MARAITHON_DEPLOY_ENV_FILE`, require `FLY_API_TOKEN`, and use `MARAITHON_FLY_APP` as the pinned Fly app. Do not depend on the active `flyctl` account.
+Server deployment uses the root GCP fast path. Do not introduce Fly credentials
+or rely on a `flyctl` account.
 
 ## Architecture Rules
 
@@ -86,12 +89,13 @@ Do not move feature-specific logic into `Core/` unless at least two features use
 
 ## Testing Rules
 
-- Current mode: do not run Xcode tests by default. Kent is testing live in production until he says to harden the app again.
-- Add or update tests for every nontrivial domain rule, validator, formatter, filter, naming algorithm, auth behavior, and persistence helper.
-- Keep pure helper tests independent of SwiftUI and simulator UI whenever possible.
-- Use Swift Testing with `@Suite`, `@Test`, and `#expect`.
-- Use isolated `UserDefaults` suites and in-memory containers when testing stateful services.
-- Do not rely on seeded persistent data for unit tests unless the test is explicitly validating seeding.
+- Do not add, update, or run tests unless Kent explicitly requests testing or a
+  hardening pass.
+- Keep the existing suite intact and keep new domain logic structured for later
+  focused testing.
+- When testing is requested, use Swift Testing, keep pure helpers independent
+  of SwiftUI, and isolate stateful services with dedicated `UserDefaults` suites
+  or in-memory containers.
 
 ## UI Quality Bar
 
@@ -108,7 +112,8 @@ Before finishing a code change, report:
 - Files changed at a high level.
 - Whether `xcodegen generate` was needed and whether it passed.
 - Build result.
-- Test result, or that tests were intentionally not run under the current product-iteration mode.
+- State that tests were intentionally not run under the current mode, unless
+  Kent explicitly requested and received test results.
 - Any skipped verification and the reason.
 
 Official Apple references used as the baseline for this guidance:

@@ -74,12 +74,12 @@ This app must feel native. Every UI ticket is judged against these rules.
 
 ## Testing
 
-- Current mode: do not run `swift test` or broad test suites by default. Kent is testing live in production until he explicitly says to harden the app again.
-- Do not delete or weaken tests; this only changes routine verification.
-- Every parser change ships with a fixture (`Tests/MaraithonTests/Fixtures/`).
-- iMessage parser: golden fixtures per macOS major version.
-- `SyncEngine`: tests cover retry, backoff, offline-resume, idempotency.
-- `DeviceAuth`: tests cover full state machine, including 401 → re-pair.
+- The root [`../../docs/development-mode.md`](../../docs/development-mode.md)
+  policy applies here. Do not add, update, or run `swift test`, Xcode test
+  actions, or other tests unless Kent explicitly requests testing.
+- Do not delete or weaken the dormant tests. When hardening is requested, keep
+  parser coverage fixture-based and preserve the existing `SyncEngine` and
+  `DeviceAuth` invariants.
 - Run `swift build` for compile sanity before finishing companion changes.
 
 ## Style
@@ -106,7 +106,7 @@ This app must feel native. Every UI ticket is judged against these rules.
 The server lives at the monorepo root (`../..`). When adding a new
 endpoint or changing an existing payload:
 
-1. Update the server first (with tests).
+1. Update the server first.
 2. Deploy server.
 3. Then ship the client change.
 

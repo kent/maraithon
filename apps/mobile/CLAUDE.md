@@ -2,6 +2,10 @@
 
 You are working in a native iOS 26 SwiftUI codebase. Make changes as a senior iOS engineer: small, modular, testable, and aligned with the existing app structure.
 
+The root manual-first policy in
+[`../../docs/development-mode.md`](../../docs/development-mode.md) applies and
+overrides testing instructions preserved in historical specs.
+
 ## Current App Shape
 
 ```text
@@ -34,7 +38,8 @@ The app uses SwiftUI, SwiftData, Observation, Swift Testing, and XcodeGen. Do no
 - Keep UI code declarative and direct.
 - Keep business logic testable without launching the app.
 - Avoid secrets, backend assumptions, and production credentials.
-- Production verification that reaches Fly must use the shared `FLY_API_TOKEN` env file and pinned `MARAITHON_FLY_APP`; never depend on the active `flyctl` account.
+- Server deployment uses the root GCP fast path; do not introduce Fly
+  credentials or depend on a `flyctl` account.
 
 ## Implementation Rules
 
@@ -60,7 +65,8 @@ The app uses SwiftUI, SwiftData, Observation, Swift Testing, and XcodeGen. Do no
 - Save after user-visible insert, update, delete, and reset operations.
 - Prefer explicit reset/seed helpers in `Core/Persistence/`.
 - Keep delete order relationship-safe.
-- Treat schema changes as meaningful product changes. Document them and add migration-aware tests where practical.
+- Treat schema changes as meaningful product changes and document their
+  migration impact.
 
 ### Auth
 
@@ -70,13 +76,12 @@ The app uses SwiftUI, SwiftData, Observation, Swift Testing, and XcodeGen. Do no
 
 ### Testing
 
-- Current mode: do not run Xcode tests or broad test suites by default. Kent is testing live in production until he explicitly says to harden the app again.
-- Do not delete or weaken tests; this only changes routine verification.
-- Use Swift Testing.
-- Test pure helpers directly.
-- Add tests for new domain behavior before or alongside implementation.
-- Use isolated state for auth tests and in-memory persistence for persistence tests.
-- Do not test SwiftUI layout through brittle string assertions.
+- Do not add, update, or run Xcode tests or other test suites unless Kent
+  explicitly requests testing or hardening.
+- Do not delete or weaken the dormant suite. Keep new behavior testable.
+- When testing is requested, use Swift Testing, test pure helpers directly, use
+  isolated auth state and in-memory persistence, and avoid brittle SwiftUI
+  layout assertions.
 
 ## Commands
 
@@ -98,7 +103,7 @@ Test:
 xcodebuild -quiet -project MaraithonMobile.xcodeproj -scheme MaraithonMobile -destination 'platform=iOS Simulator,id=D8E48B6C-EC1D-40AF-9D4E-913F531CACCC' test
 ```
 
-Do not run this test command by default during the current product-iteration mode.
+Do not run this test command unless Kent explicitly requests testing.
 
 If a destination fails because a simulator is unavailable or busy, inspect available simulators:
 

@@ -1,7 +1,13 @@
 # Workflows
 
 ## `deploy-gcp.yml`
-Push to `main` → deploys the Phoenix backend to Google Cloud Run.
+
+Server-relevant pushes to `main` run the manual-first fast path: cached Cloud
+Build, migrations only when migration files changed, one combined Cloud Run
+service deployment, and one health request. The workflow does not run tests.
+Native-only, test-only, docs-only, and Markdown-only pushes are ignored, and a
+newer push cancels a superseded deploy. See
+[`../../docs/development-mode.md`](../../docs/development-mode.md).
 
 ## `mobile-release.yml`
 - Pushes to `main` that change the iOS app or its release tooling → build the iOS app and upload it to TestFlight, then make it available to the required internal **Founders** group. Backend-only pushes do not create mobile certificates or TestFlight builds. If a **Staging** beta group exists, CI attaches the build there too.

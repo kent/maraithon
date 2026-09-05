@@ -11,13 +11,14 @@ designed to grow into additional sources (Files, Voice Memos, Notes).
 
 ## Build
 
-Two build paths, both kept green.
+Two build paths are available. The current manual-first policy runs builds, not
+tests, unless Kent explicitly requests hardening; see
+[`../../docs/development-mode.md`](../../docs/development-mode.md).
 
 **SwiftPM (fast inner loop, CLI binary):**
 
 ```sh
 swift build
-swift test
 swift run Maraithon
 ```
 
@@ -29,9 +30,10 @@ xcodegen generate               # regenerates Maraithon.xcodeproj
 open Maraithon.xcodeproj        # or:
 xcodebuild -project Maraithon.xcodeproj -scheme Maraithon \
            -configuration Debug -destination 'platform=macOS' build
-xcodebuild -project Maraithon.xcodeproj -scheme Maraithon \
-           -configuration Debug -destination 'platform=macOS' test
 ```
+
+The dormant SwiftPM and Xcode test suites remain available for an explicitly
+requested hardening pass; they are not part of the default loop.
 
 From the repository root, prefer `make build-companion` for CLI app-bundle
 builds. The monorepo helper supplies an ad-hoc signing fallback on fresh clones

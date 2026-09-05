@@ -37,15 +37,16 @@ Describe architecture, state, workflows, or interfaces.
 - <Failure mode>
 - <Recovery / safeguard>
 
-## 7. Test and Validation Plan
+## 7. Validation Plan
 
-- <Format/lint/typecheck/build/test expectations>
-- <Conformance or acceptance checks>
+- <Narrow generation/build expectation>
+- <Manual product validation>
+- <Tests only when Kent explicitly requested hardening>
 
 ## 8. Implementation Checklist
 
 - [ ] <Implement feature or subsystem>
-- [ ] <Run verification gates>
+- [ ] <Run the narrow build check and record manual validation>
 - [ ] <Final review against spec>
 
 ## 9. Open Questions / Assumptions
