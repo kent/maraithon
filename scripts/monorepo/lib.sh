@@ -68,6 +68,33 @@ generate_xcode_project() {
   run_in "${dir}" xcodegen generate
 }
 
+companion_project_generation_fingerprint() {
+  (
+    cd "${COMPANION_DIR}"
+    {
+      shasum project.yml Package.swift Package.resolved
+      find Sources Tests -type f -print | LC_ALL=C sort
+    } | shasum | awk '{print $1}'
+  )
+}
+
+ensure_companion_xcode_project() {
+  local project_file="${COMPANION_DIR}/Maraithon.xcodeproj/project.pbxproj"
+  local marker_file="${COMPANION_DIR}/Maraithon.xcodeproj/.maraithon-input-fingerprint"
+  local current_fingerprint previous_fingerprint
+
+  current_fingerprint="$(companion_project_generation_fingerprint)"
+  previous_fingerprint="$(cat "${marker_file}" 2>/dev/null || true)"
+
+  if [[ -f "${project_file}" && "${current_fingerprint}" == "${previous_fingerprint}" ]]; then
+    echo "Using current companion Xcode project."
+    return
+  fi
+
+  generate_xcode_project "${COMPANION_DIR}"
+  printf '%s\n' "${current_fingerprint}" > "${marker_file}"
+}
+
 companion_xcode_signing_args() {
   local config="${COMPANION_DIR}/Config.local.xcconfig"
 
@@ -193,20 +220,22 @@ quit_running_companion_app() {
     osascript -e 'tell application id "com.maraithon.companion" to quit' >/dev/null 2>&1 || true
   fi
 
-  for _ in {1..40}; do
+  for _ in {1..4}; do
     if ! pgrep -x Maraithon >/dev/null 2>&1; then
       return
     fi
     sleep 0.25
   done
 
-  pkill -x Maraithon >/dev/null 2>&1 || true
-  for _ in {1..20}; do
+  pkill -TERM -x Maraithon >/dev/null 2>&1 || true
+  for _ in {1..8}; do
     if ! pgrep -x Maraithon >/dev/null 2>&1; then
       return
     fi
     sleep 0.25
   done
+
+  pkill -KILL -x Maraithon >/dev/null 2>&1 || true
 }
 
 install_companion_dev_app() {
@@ -224,7 +253,7 @@ install_companion_dev_app() {
     # Preserve the existing bundle and file identities as much as possible:
     # macOS privacy grants can be sensitive to dev app replacement even when
     # the bundle identifier and signing requirement stay the same.
-    rsync -a --checksum --delete --inplace "${built_app}/" "${install_app}/"
+    rsync -a --delete --inplace "${built_app}/" "${install_app}/"
     return
   fi
 

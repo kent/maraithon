@@ -24,13 +24,14 @@ if selected_component "${component}" "web"; then
 fi
 
 if selected_component "${component}" "companion"; then
-  generate_xcode_project "${COMPANION_DIR}"
+  ensure_companion_xcode_project
   companion_signing_args=()
   while IFS= read -r arg; do
     companion_signing_args+=("${arg}")
   done < <(companion_xcode_signing_args)
 
   companion_build_args=(
+    -quiet
     -project Maraithon.xcodeproj
     -scheme Maraithon
     -configuration Debug
@@ -48,11 +49,14 @@ if selected_component "${component}" "companion"; then
     "${companion_signing_args[@]}" \
     build
 
-  companion_built_app="$(
-    MARAITHON_COMPANION_DERIVED_DATA_PATH="${MARAITHON_COMPANION_DERIVED_DATA_PATH:-}" \
-      MARAITHON_COMPANION_CONFIGURATION_BUILD_DIR="${MARAITHON_COMPANION_CONFIGURATION_BUILD_DIR:-}" \
-      companion_debug_app_path
-  )"
+  if [[ -n "${MARAITHON_COMPANION_CONFIGURATION_BUILD_DIR:-}" ]]; then
+    companion_built_app="${MARAITHON_COMPANION_CONFIGURATION_BUILD_DIR%/}/Maraithon.app"
+  else
+    companion_built_app="$(
+      MARAITHON_COMPANION_DERIVED_DATA_PATH="${MARAITHON_COMPANION_DERIVED_DATA_PATH:-}" \
+        companion_debug_app_path
+    )"
+  fi
   verify_companion_app_signature "${companion_built_app}"
 fi
 

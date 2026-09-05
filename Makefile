@@ -4,7 +4,7 @@
 	test test-full test-web test-api test-native test-companion test-mobile \
 	verify verify-full verify-web verify-api verify-static verify-assets verify-native verify-companion verify-mobile verify-production-mobile \
 	archive-mobile upload-mobile testflight-mobile ship-mobile \
-	deploy deploy-web deploy-hardened
+	deploy deploy-web deploy-companion deploy-hardened release-companion
 
 setup:
 	mix setup
@@ -15,8 +15,7 @@ setup-companion-signing:
 reset-companion-fda:
 	scripts/monorepo/reset-companion-fda
 
-run-companion:
-	scripts/monorepo/run companion
+run-companion: deploy-companion
 
 generate:
 	scripts/monorepo/generate
@@ -123,5 +122,11 @@ deploy:
 
 deploy-web: deploy
 
+deploy-companion:
+	scripts/monorepo/run companion
+
 deploy-hardened:
 	scripts/monorepo/deploy
+
+release-companion:
+	apps/companion/scripts/release.sh

@@ -39,16 +39,23 @@ From the repository root, prefer `make build-companion` for CLI app-bundle
 builds. The monorepo helper supplies an ad-hoc signing fallback on fresh clones
 and verifies the built `.app` signature before reporting success.
 
-For local runs that need Full Disk Access, use the root launcher from the repo
+For the normal testing loop, use the fast companion deploy from the repository
 root:
 
 ```sh
-make run-companion
+make deploy-companion
 ```
 
-It builds the Debug app with stable local signing, then refreshes
-`~/Applications/Maraithon.app` in place so macOS keeps granting Full Disk
-Access to the same app copy across rebuilds and reloads.
+It incrementally builds the Debug app, reuses the generated Xcode project when
+its structure is unchanged, keeps cached build products and pinned development
+signing, refreshes `~/Applications/Maraithon.app` in place, and relaunches it.
+It does not run tests, clean the build, archive, notarize, build a DMG, or
+publish an update. `make run-companion` remains an alias for the same fast
+route.
+
+Use `make release-companion` only for an actual Developer ID distribution. It
+runs the full signed, notarized, stapled DMG pipeline documented in
+[`docs/RELEASE.md`](docs/RELEASE.md).
 
 When the local signing identity is first pinned or changes, the launcher clears
 stale Maraithon Full Disk Access rows once before opening the app. Grant

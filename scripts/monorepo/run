@@ -13,8 +13,11 @@ if selected_component "${component}" "companion"; then
   install_dir="$(dirname "${install_app}")"
   build_products_dir="${MARAITHON_COMPANION_BUILD_PRODUCTS_DIR:-${HOME}/Library/Caches/Maraithon/companion-build-products}"
 
-  ensure_companion_dev_signing
-  quit_running_companion_app
+  if companion_has_persistent_signing_config; then
+    echo "Using pinned companion development signing."
+  else
+    ensure_companion_dev_signing
+  fi
   mkdir -p "${install_dir}"
   mkdir -p "${build_products_dir}"
 
@@ -23,27 +26,20 @@ if selected_component "${component}" "companion"; then
   # bundle macOS granted, which makes Full Disk Access appear to reset.
   MARAITHON_COMPANION_CONFIGURATION_BUILD_DIR="${build_products_dir}" \
     "${ROOT_DIR}/scripts/monorepo/build" companion
-  built_app="$(
-    MARAITHON_COMPANION_CONFIGURATION_BUILD_DIR="${build_products_dir}" \
-      companion_debug_app_path
-  )"
+  built_app="${build_products_dir%/}/Maraithon.app"
 
   if [[ ! -d "${built_app}" ]]; then
     echo "Companion app was not built at ${built_app}" >&2
     exit 1
   fi
 
+  # Keep the current app usable while the incremental Debug build runs. Only
+  # stop it for the short in-place bundle refresh.
+  quit_running_companion_app
   install_companion_dev_app "${built_app}" "${install_app}"
-  cleanup_companion_direct_build_products "${build_products_dir}" "${built_app}"
-  cleanup_companion_direct_build_products "${install_dir}" "${install_app}"
   xattr -dr com.apple.quarantine "${install_app}" >/dev/null 2>&1 || true
   if [[ -x "${LSREGISTER}" ]]; then
-    unregister_stale_companion_apps "${install_app}"
-    "${LSREGISTER}" -f "${install_app}" >/dev/null 2>&1 || true
-  fi
-  remove_derived_companion_apps "${install_app}"
-  if [[ -x "${LSREGISTER}" ]]; then
-    unregister_stale_companion_apps "${install_app}"
+    "${LSREGISTER}" -u "${built_app}" >/dev/null 2>&1 || true
     "${LSREGISTER}" -f "${install_app}" >/dev/null 2>&1 || true
   fi
   record_companion_tcc_requirement "${install_app}"
@@ -52,5 +48,9 @@ if selected_component "${component}" "companion"; then
   echo "Installed companion dev app at ${install_app}"
   echo "If Full Disk Access is already enabled for this app, this reload keeps using it."
   echo "If it is not enabled yet, grant this exact app path once; future reloads preserve it."
+  open "${install_app}"
+  # A second open is the native reopen event. It restores the main window when
+  # the prior process had closed it while leaving the menu-bar scene active.
+  sleep 2
   open "${install_app}"
 fi
