@@ -21,6 +21,7 @@ defmodule Maraithon.Runtime.PeriodicJobs do
   alias Maraithon.Runtime.BackgroundJob
   alias Maraithon.Runtime.BackgroundJobs
   alias Maraithon.Runtime.Config
+  alias Maraithon.Runtime.CriticalTodoPush
   alias Maraithon.Runtime.Coordination.FairScheduler
   alias Maraithon.Runtime.FreshnessSweep
   alias Maraithon.Runtime.GmailSourceReplay
@@ -65,6 +66,7 @@ defmodule Maraithon.Runtime.PeriodicJobs do
   @todo_account_closure_reason_job "runtime_partition:source_account_closure_reason"
   @todo_account_closure_finalize_job "runtime_partition:source_account_closure_finalize"
   @nudge_job "runtime_partition:nudge"
+  @critical_todo_push_job "runtime_partition:critical_todo_push"
   @staleness_job "runtime_partition:staleness_triage"
   @todo_outcome_job "runtime_partition:todo_outcome_learning"
 
@@ -186,6 +188,7 @@ defmodule Maraithon.Runtime.PeriodicJobs do
   def schedule("source_account_discovery"), do: schedule_source_account_discovery()
   def schedule("todo_completion_sweep"), do: schedule_todo_completion_partitions()
   def schedule("nudge_sweep"), do: schedule_nudge_users()
+  def schedule("critical_todo_push"), do: schedule_critical_todo_pushes()
   def schedule("staleness_triage_sweep"), do: schedule_open_todo_users("staleness_triage_sweep")
   def schedule(name), do: {:error, {:unknown_periodic_schedule, name}}
 
@@ -1058,6 +1061,37 @@ defmodule Maraithon.Runtime.PeriodicJobs do
     |> record_cursor_after(cursor_key, users)
   end
 
+  defp schedule_critical_todo_pushes do
+    if CriticalTodoPush.enabled?() do
+      cursor_key = "durable_critical_todo_push"
+      now = database_now!()
+      users = UserBatch.open_todo_user_ids(after_user_id: UserBatch.load_cursor(cursor_key))
+
+      enqueue_many(users, fn user_id ->
+        case CriticalTodoPush.due_slot(user_id, now) do
+          nil ->
+            {:skip, :not_due}
+
+          slot ->
+            BackgroundJobs.enqueue(@critical_todo_push_job, %{
+              user_id: user_id,
+              queue: @provider_queue,
+              dedupe_key: "critical-todo-push:#{user_id}:#{slot}",
+              partition_key: provider_partition(user_id, "apns"),
+              rate_limit_key: "apns",
+              max_attempts: 3,
+              scheduled_at: now,
+              payload: %{"user_id" => user_id, "slot" => slot}
+            })
+        end
+      end)
+      |> schedule_summary("critical_todo_push", length(users))
+      |> record_cursor_after(cursor_key, users)
+    else
+      {:ok, %{schedule: "critical_todo_push", outcome: "disabled"}}
+    end
+  end
+
   defp schedule_open_todo_users(schedule) do
     {cursor_key, job_type} =
       case schedule do
@@ -1348,6 +1382,13 @@ defmodule Maraithon.Runtime.PeriodicJobs do
         lookahead_seconds: payload_integer_value(job, "lookahead_seconds", 15 * 60)
       )
       |> normalize_work_result()
+    end
+  end
+
+  defp execute_provider(%BackgroundJob{job_type: @critical_todo_push_job} = job) do
+    with {:ok, user_id} <- partition_user_id(job),
+         {:ok, slot} <- payload_string(job, "slot") do
+      CriticalTodoPush.run_for_user(user_id, slot, database_now!()) |> normalize_work_result()
     end
   end
 

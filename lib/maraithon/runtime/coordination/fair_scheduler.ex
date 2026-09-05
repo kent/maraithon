@@ -295,7 +295,9 @@ defmodule Maraithon.Runtime.Coordination.FairScheduler do
                    -- A bounded, infrequent due-time decision must not wait
                    -- behind an entire account's source-discovery fan-out.
                    -- Tenant fairness and every admission fence still apply.
-                   CASE WHEN job.job_type = 'runtime_partition:nudge' THEN 0 ELSE 1 END,
+                   CASE WHEN job.job_type IN (
+                     'runtime_partition:nudge', 'runtime_partition:critical_todo_push'
+                   ) THEN 0 ELSE 1 END,
                    job.scheduled_at, job.inserted_at, job.id
           LIMIT 1
         )

@@ -101,6 +101,7 @@ defmodule Maraithon.Runtime.RecurringJobs do
         :timer.minutes(30),
         :nudge_sweep_initial_delay_ms
       ),
+      interval_spec("critical_todo_push", :timer.minutes(5), :timer.seconds(15)),
       configured_interval_spec(
         "staleness_triage_sweep",
         :staleness_triage_sweep_interval_ms,

@@ -97,6 +97,25 @@ defmodule Maraithon.Todos do
     end
   end
 
+  @doc "Returns up to three actionable Critical todos for a mobile reminder."
+  def list_critical_for_push(user_id) when is_binary(user_id) do
+    # Match the mobile app's Critical band (90+) and its actionable work,
+    # not monitoring, waiting-on, hidden, completed, or still-snoozed items.
+    user_id
+    |> filtered_todo_query(
+      statuses: ["open", "snoozed"],
+      open_due_only: true,
+      attention_mode: "act_now",
+      direction: "owed_by_me",
+      owner_user_id: user_id
+    )
+    |> where([todo], todo.priority >= 90)
+    |> order_by([todo], desc: todo.priority, asc_nulls_last: todo.due_at, asc: todo.id)
+    |> limit(3)
+    |> Repo.all()
+    |> Enum.map(&polish_todo_copy/1)
+  end
+
   @doc "Returns filtered todo ids in the same deterministic order as list_for_user/2."
   def list_ids_for_user(user_id, opts \\ []) when is_binary(user_id) do
     sort_by = normalize_sort_by(Keyword.get(opts, :sort_by, "rank"))
