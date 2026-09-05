@@ -720,11 +720,11 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
       {:ok,
        %{
          "messages" => [%{"role" => "user", "content" => memo_prompt(state)}],
-         "max_tokens" => 400,
+         "max_tokens" => 800,
          "temperature" => 0.2,
          # This is bounded summarization, not a reasoning task. Reserving the
-         # whole budget for visible text prevents hybrid models from spending
-         # all 400 tokens on hidden thought and returning `content: nil`.
+         # whole budget for visible text leaves enough room for the requested
+         # 1,500-character memo without inviting hidden reasoning overhead.
          "reasoning_effort" => "none"
        }}
     else

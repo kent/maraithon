@@ -173,6 +173,23 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommand do
         {:error, :timeout} = error ->
           error
 
+        {:error, {:incomplete_response, _summary} = reason}
+        when attempt < @max_retry_attempts ->
+          case expand_incomplete_response_budget(params) do
+            {:ok, expanded, max_tokens} ->
+              Logger.info("LLM incomplete response retry scheduled",
+                effect_reference: Redaction.fingerprint(effect.id),
+                attempt: attempt,
+                max_tokens: max_tokens,
+                failure_code: "incomplete_response"
+              )
+
+              run_with_retry(expanded, effect, attempt + 1, deadline)
+
+            :at_capacity ->
+              {:error, reason}
+          end
+
         {:error, reason} ->
           record_provider_limit(reason)
 
@@ -392,6 +409,31 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommand do
   end
 
   defp cap_primary_tokens(params), do: params
+
+  defp expand_incomplete_response_budget(params) do
+    cap = primary_max_tokens()
+    current = params["max_tokens"] || params["max_output_tokens"] || 2_048
+
+    if is_integer(current) and current > 0 and current < cap do
+      expanded = min(current * 2, cap)
+
+      params =
+        ["max_tokens", "max_output_tokens"]
+        |> Enum.reduce(params, fn key, acc ->
+          if Map.has_key?(acc, key), do: Map.put(acc, key, expanded), else: acc
+        end)
+        |> then(fn expanded_params ->
+          if Map.has_key?(expanded_params, "max_tokens") or
+               Map.has_key?(expanded_params, "max_output_tokens"),
+             do: expanded_params,
+             else: Map.put(expanded_params, "max_tokens", expanded)
+        end)
+
+      {:ok, params, expanded}
+    else
+      :at_capacity
+    end
+  end
 
   defp cap_fallback_tokens(params) do
     params
