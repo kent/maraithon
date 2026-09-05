@@ -37,7 +37,10 @@ defmodule Maraithon.Runtime.NudgeSweep do
   @default_todos_per_user 20
   @default_due_soon_horizon_hours 4
   @default_nudge_cap 4
-  @default_llm_timeout_ms 60_000
+  # Use the existing two-minute cycle budget for a full tenant page. A 45s
+  # first attempt plus a 15s retry was too short for real provider responses;
+  # restarting that same work twice did not make a slow response recoverable.
+  @default_llm_timeout_ms 120_000
   # A single tenant pass can return decisions for up to 20 todos, including
   # ready-to-review follow-up drafts. The old 2,048-token budget repeatedly
   # ended otherwise valid provider responses with finish_reason=length.
@@ -56,7 +59,7 @@ defmodule Maraithon.Runtime.NudgeSweep do
   @max_draft_text_bytes 2_000
   @max_next_nudge_at_bytes 100
   @max_decision_attempts 2
-  @decision_retry_reserve_ms 15_000
+  @decision_retry_reserve_ms 30_000
   @minimum_decision_retry_ms 1_000
   @task_shutdown_margin_ms 250
 
