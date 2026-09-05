@@ -247,7 +247,7 @@ final class MockSocket: RealtimeWebSocket, @unchecked Sendable {
     func resume() async {}
 
     func send(text: String) async throws {
-        await sendHook.fire(frame: text, sender: self)
+        try await sendHook.fire(frame: text)
     }
 
     func receive() async throws -> RealtimeMessage {
@@ -264,6 +264,10 @@ final class MockSocket: RealtimeWebSocket, @unchecked Sendable {
 
     func onSend(_ handler: @escaping @Sendable (String) async -> Void) async {
         await sendHook.set(handler)
+    }
+
+    func failNextSend() async {
+        await sendHook.failNext()
     }
 
     var sentFrames: [String] {
@@ -313,13 +317,22 @@ private actor Inbox {
 private actor SendHook {
     private(set) var frames: [String] = []
     private var handler: (@Sendable (String) async -> Void)?
+    private var shouldFailNext = false
 
     func set(_ handler: @escaping @Sendable (String) async -> Void) {
         self.handler = handler
     }
 
-    func fire(frame: String, sender _: AnyObject) async {
+    func failNext() {
+        shouldFailNext = true
+    }
+
+    func fire(frame: String) async throws {
         frames.append(frame)
+        if shouldFailNext {
+            shouldFailNext = false
+            throw URLError(.networkConnectionLost)
+        }
         if let handler {
             await handler(frame)
         }

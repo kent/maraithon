@@ -15,6 +15,15 @@ import Foundation
 /// next poll re-tries the same batch on failure. Once the engine grows a
 /// generic `enqueue(source:envelopes:)` we can fold this back in.
 struct VoiceMemosIngest: Sendable {
+    /// Leave headroom below Bandit's 8,000,000-byte WebSocket message cap
+    /// and the server's 8 MiB inflated HTTP-body cap. The budget applies to
+    /// the uncompressed JSON envelope shared by both transports.
+    nonisolated static let maximumBodyBytes = 7_500_000
+
+    /// Keep the client aligned with `Maraithon.LocalVoiceMemos` so audio the
+    /// server would discard never consumes frame or request-body capacity.
+    nonisolated static let maximumAudioBytes = 5 * 1024 * 1024
+
     /// Closure invoked after a successful push so the source can be
     /// mirrored into Spotlight. See `NotesIngest.SpotlightHook` — same
     /// contract: best-effort, errors are swallowed by the caller.
@@ -31,6 +40,8 @@ struct VoiceMemosIngest: Sendable {
     let realtime: RealtimeChannel?
     /// Optional Spotlight hook (see `SpotlightHook`).
     let spotlight: SpotlightHook?
+    let bodyBudgetBytes: Int
+    let audioBudgetBytes: Int
 
     init(
         baseURL: URL = MaraithonClient.defaultBaseURL,
@@ -39,7 +50,9 @@ struct VoiceMemosIngest: Sendable {
         userAgent: String = "MaraithonCompanion/1.0 (macOS)",
         path: String = "/api/v1/companion/voice-memos",
         realtime: RealtimeChannel? = nil,
-        spotlight: SpotlightHook? = nil
+        spotlight: SpotlightHook? = nil,
+        bodyBudgetBytes: Int = VoiceMemosIngest.maximumBodyBytes,
+        audioBudgetBytes: Int = VoiceMemosIngest.maximumAudioBytes
     ) {
         self.baseURL = baseURL
         self.tokenProvider = tokenProvider
@@ -48,6 +61,8 @@ struct VoiceMemosIngest: Sendable {
         self.path = path
         self.realtime = realtime
         self.spotlight = spotlight
+        self.bodyBudgetBytes = max(bodyBudgetBytes, 1)
+        self.audioBudgetBytes = max(audioBudgetBytes, 0)
     }
 
     /// Push a batch. Returns the server's accepted/duplicate counts so the
@@ -58,6 +73,29 @@ struct VoiceMemosIngest: Sendable {
         guard !voiceMemos.isEmpty else {
             return SyncOutcome(accepted: 0, duplicate: 0)
         }
+
+        let batches = try VoiceMemosTransportBatcher(
+            bodyBudgetBytes: bodyBudgetBytes,
+            audioBudgetBytes: audioBudgetBytes
+        ).batches(deviceId: deviceId, voiceMemos: voiceMemos)
+        var aggregate = SyncOutcome(accepted: 0, duplicate: 0)
+
+        for batch in batches {
+            let outcome = try await pushBatch(deviceId: deviceId, voiceMemos: batch)
+            aggregate = SyncOutcome(
+                accepted: aggregate.accepted + outcome.accepted,
+                duplicate: aggregate.duplicate + outcome.duplicate,
+                invalid: aggregate.invalid + outcome.invalid
+            )
+        }
+
+        if let spotlight {
+            await spotlight(voiceMemos)
+        }
+        return aggregate
+    }
+
+    private func pushBatch(deviceId: UUID, voiceMemos: [VoiceMemoPayload]) async throws -> SyncOutcome {
         let body = VoiceMemoIngestBody(
             deviceId: deviceId,
             source: "voice_memos",
@@ -67,9 +105,6 @@ struct VoiceMemosIngest: Sendable {
             do {
                 let payload = try Self.realtimePayload(from: body)
                 let outcome = try await realtime.push(event: "ingest:voice_memos", payload: payload)
-                if let spotlight {
-                    await spotlight(voiceMemos)
-                }
                 return SyncOutcome(
                     accepted: outcome.accepted,
                     duplicate: outcome.duplicate,
@@ -118,9 +153,6 @@ struct VoiceMemosIngest: Sendable {
             throw MaraithonClientError.serverError(status: http.statusCode)
         }
         let decoded = try JSONDecoder().decode(IngestResponse.self, from: data)
-        if let spotlight {
-            await spotlight(voiceMemos)
-        }
         return SyncOutcome(accepted: decoded.accepted, duplicate: decoded.duplicate, invalid: decoded.invalid)
     }
 
@@ -167,6 +199,9 @@ struct VoiceMemoPayload: Codable, Sendable, Equatable {
     /// `audio/m4a` for Voice Memos recordings. Wire-explicit so the
     /// server doesn't have to guess.
     let audioMime: String?
+    /// True when bytes were intentionally omitted because either the
+    /// per-record audio cap or the aggregate transport budget was reached.
+    let audioTruncated: Bool
     /// On-device transcript. `nil` when speech recognition isn't
     /// authorized or available — the audio still uploads.
     let transcript: String?
@@ -189,6 +224,7 @@ struct VoiceMemoPayload: Codable, Sendable, Equatable {
         case createdAt = "created_at"
         case audioBytesBase64 = "audio_bytes"
         case audioMime = "audio_mime"
+        case audioTruncated = "audio_truncated"
         case transcript
         case transcriptEngine = "transcript_engine"
         case transcriptLang = "transcript_lang"
@@ -204,6 +240,7 @@ struct VoiceMemoPayload: Codable, Sendable, Equatable {
         createdAt: Date,
         audioBytesBase64: String? = nil,
         audioMime: String? = nil,
+        audioTruncated: Bool = false,
         transcript: String? = nil,
         transcriptEngine: String? = nil,
         transcriptLang: String? = nil,
@@ -217,16 +254,35 @@ struct VoiceMemoPayload: Codable, Sendable, Equatable {
         self.createdAt = createdAt
         self.audioBytesBase64 = audioBytesBase64
         self.audioMime = audioMime
+        self.audioTruncated = audioTruncated
         self.transcript = transcript
         self.transcriptEngine = transcriptEngine
         self.transcriptLang = transcriptLang
         self.summary = summary
     }
+
+    func omittingAudioAsTruncated() -> VoiceMemoPayload {
+        VoiceMemoPayload(
+            guid: guid,
+            localId: localId,
+            title: title,
+            durationSeconds: durationSeconds,
+            fileSizeBytes: fileSizeBytes,
+            createdAt: createdAt,
+            audioBytesBase64: nil,
+            audioMime: audioMime,
+            audioTruncated: true,
+            transcript: transcript,
+            transcriptEngine: transcriptEngine,
+            transcriptLang: transcriptLang,
+            summary: summary
+        )
+    }
 }
 
-/// Envelope of the full request body — kept private to the helper so the
-/// only thing callers ever see is the typed `[VoiceMemoPayload]`.
-private struct VoiceMemoIngestBody: Codable, Sendable {
+/// Envelope of the full request body. Module-internal so the transport
+/// batcher can measure the exact same JSON that the ingest helper sends.
+struct VoiceMemoIngestBody: Codable, Sendable {
     let deviceId: UUID
     let source: String
     let voiceMemos: [VoiceMemoPayload]

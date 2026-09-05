@@ -50,6 +50,7 @@ actor RealtimeChannel {
         case decodeFailure
         case closed
         case pushTimeout
+        case sendFailed
     }
 
     /// Pluggable WebSocket factory so tests can inject a mock without
@@ -139,10 +140,9 @@ actor RealtimeChannel {
     /// successful `{:reply, {:ok, _}, _}` reply, or throws on
     /// `{:reply, {:error, _}, _}` / transport failures.
     ///
-    /// Callers should treat `RealtimeChannelError.notConnected` as a
-    /// signal to fall back to HTTP. Other errors imply a server-side
-    /// rejection (bad batch shape, missing fields) that HTTP would
-    /// also fail on.
+    /// Transport failures are normalized to `RealtimeChannelError` cases so
+    /// ingest callers can reliably fall back to HTTP. Explicit error replies
+    /// remain `serverError(reason:)` for callers that need the server reason.
     func push(event: String, payload: [String: Any]) async throws -> Outcome {
         guard case .connected = status, let socket else {
             throw RealtimeChannelError.notConnected
@@ -169,7 +169,7 @@ actor RealtimeChannel {
                     try await socket.send(text: text)
                 } catch {
                     if let cont = pending.removeValue(forKey: ref) {
-                        cont.resume(throwing: error)
+                        cont.resume(throwing: RealtimeChannelError.sendFailed)
                     }
                 }
             }
@@ -261,7 +261,7 @@ actor RealtimeChannel {
                     try await socket.send(text: text)
                 } catch {
                     if let cont = pending.removeValue(forKey: ref) {
-                        cont.resume(throwing: error)
+                        cont.resume(throwing: RealtimeChannelError.sendFailed)
                     }
                 }
             }
@@ -324,7 +324,7 @@ actor RealtimeChannel {
         heartbeatTask = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
-                let interval = await self.heartbeatInterval
+                let interval = self.heartbeatInterval
                 try? await Task.sleep(for: interval)
                 await self.sendHeartbeat()
             }

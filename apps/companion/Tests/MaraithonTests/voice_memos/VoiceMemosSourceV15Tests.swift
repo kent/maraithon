@@ -94,6 +94,7 @@ final class VoiceMemosSourceV15Tests: XCTestCase {
             payload.audioBytesBase64,
             "Oversize audio must be dropped client-side so the server flags audio_truncated"
         )
+        XCTAssertTrue(payload.audioTruncated)
         XCTAssertEqual(
             payload.audioMime,
             "audio/m4a",
@@ -194,31 +195,53 @@ final class VoiceMemosSourceV15Tests: XCTestCase {
     }
 
     @MainActor
-    func testAudioReadFailureDegradesGracefully() async throws {
+    func testAudioReadFailureAndGrowthRaceDegradeGracefully() async throws {
         try VoiceMemosFixture.build(at: dbURL, rows: [
             VoiceMemosFixture.Row(
                 pk: 1,
-                uniqueID: "VM-RACE",
+                uniqueID: "VM-READ-FAIL",
                 customLabel: nil,
                 dateSeconds: 779_500_000,
                 durationSeconds: 5,
                 relativePath: "racey.m4a",
                 fileBytes: 64
+            ),
+            VoiceMemosFixture.Row(
+                pk: 2,
+                uniqueID: "VM-GREW",
+                customLabel: "Keep growing metadata",
+                dateSeconds: 779_500_001,
+                durationSeconds: 6,
+                relativePath: "growing.m4a",
+                fileBytes: 64
             )
         ])
 
+        let cap: Int64 = 512
         let env = makeEnvironment(
             transcriber: makeTranscriber(outcome: .unavailable(reason: "test_skip")),
-            audioReader: { _ in
+            audioReader: { url in
+                if url.lastPathComponent == "growing.m4a" {
+                    return Data(repeating: 0, count: Int(cap) + 1)
+                }
                 throw NSError(domain: "test", code: 1)
-            }
+            },
+            maxAudioBytes: cap
         )
         try await env.source.syncNow()
 
         let batches = await env.collector.snapshot()
-        let payload = try XCTUnwrap(batches.first?.payloads.first)
-        XCTAssertNil(payload.audioBytesBase64, "read failure → no audio bytes on the wire")
-        XCTAssertEqual(payload.audioMime, "audio/m4a")
+        let payloads = try XCTUnwrap(batches.first?.payloads)
+        let readFailure = try XCTUnwrap(payloads.first { $0.guid == "VM-READ-FAIL" })
+        XCTAssertNil(readFailure.audioBytesBase64, "read failure → no audio bytes on the wire")
+        XCTAssertEqual(readFailure.audioMime, "audio/m4a")
+        XCTAssertFalse(readFailure.audioTruncated)
+
+        let grew = try XCTUnwrap(payloads.first { $0.guid == "VM-GREW" })
+        XCTAssertNil(grew.audioBytesBase64)
+        XCTAssertEqual(grew.audioMime, "audio/m4a")
+        XCTAssertTrue(grew.audioTruncated)
+        XCTAssertEqual(grew.title, "Keep growing metadata")
         XCTAssertEqual(env.source.statusPublisher.activeIssue?.severity, .error)
     }
 

@@ -34,16 +34,12 @@ final class VoiceMemosSource: SourceProtocol {
     /// HTTP transport — matches `IMessageSource.outbox`'s pattern.
     typealias Outbox = @Sendable (UUID, [VoiceMemoPayload]) async throws -> SyncOutcome
 
-    /// Per-record audio cap. Files larger than this still ingest as
-    /// metadata-only rows — the server sets `audio_truncated = true`
-    /// for us — but the bytes themselves get dropped client-side so we
-    /// never even base64-encode them. 2 MB is roughly a 90-second m4a
-    /// at stock Voice Memos quality (~32 kbps mono AAC). The cap is
-    /// deliberately tight so an aggregate batch of `batchLimit`
-    /// recordings (≤ 20 MB compressed JSON) fits comfortably inside
-    /// Phoenix's default frame / request-body limits — anything larger
-    /// stalled the realtime push indefinitely in production.
-    nonisolated static let maxAudioBytes: Int64 = 16 * 1024 * 1024
+    /// Per-record audio cap. This matches the server's durable 5 MiB
+    /// ceiling. Larger files still ingest as metadata-only rows, with an
+    /// explicit `audio_truncated` marker, and are never base64-encoded.
+    /// `VoiceMemosIngest` independently shapes aggregate batches to the
+    /// stricter common WebSocket / HTTP body budget.
+    nonisolated static let maxAudioBytes: Int64 = 5 * 1024 * 1024
 
     private let cursor: VoiceMemosCursor
     private let eventLog: EventLog
@@ -297,7 +293,7 @@ final class VoiceMemosSource: SourceProtocol {
         var transcribed = 0
         for raw in raws {
             let payload = await buildPayload(from: raw)
-            if payload.audioBytesBase64 == nil, raw.fileSizeBytes > maxAudioBytes {
+            if payload.audioTruncated {
                 audioTruncated += 1
             }
             if payload.transcript != nil {
@@ -421,7 +417,7 @@ final class VoiceMemosSource: SourceProtocol {
     func buildPayload(from raw: RawVoiceMemo) async -> VoiceMemoPayload {
         var base = Self.payload(from: raw)
 
-        let (audioB64, audioMime): (String?, String?) = readAudio(raw: raw)
+        let (audioB64, audioMime, audioTruncated): (String?, String?, Bool) = readAudio(raw: raw)
         let (transcript, engine, lang): (String?, String?, String?) = await transcribeIfPossible(raw: raw)
         let summary: String? = await summarizeTranscript(transcript)
 
@@ -434,6 +430,7 @@ final class VoiceMemosSource: SourceProtocol {
             createdAt: base.createdAt,
             audioBytesBase64: audioB64,
             audioMime: audioMime,
+            audioTruncated: audioTruncated,
             transcript: transcript,
             transcriptEngine: engine,
             transcriptLang: lang,
@@ -455,13 +452,12 @@ final class VoiceMemosSource: SourceProtocol {
         }
     }
 
-    /// Returns `(audio_bytes_base64, audio_mime)` for a row, dropping
-    /// the bytes (but keeping the mime) when the file is oversize or
-    /// unreadable. The server treats nil-bytes-with-truncated-flag the
-    /// same way regardless of why we dropped them, so logs aren't tied
-    /// to any particular failure mode here.
-    private func readAudio(raw: RawVoiceMemo) -> (String?, String?) {
-        guard let url = raw.audioURL else { return (nil, nil) }
+    /// Returns `(audio_bytes_base64, audio_mime, audio_truncated)` for a row.
+    /// The explicit marker comes from the same size checks that omit bytes,
+    /// including the second check after the file read, so a growing recording
+    /// cannot be mistaken for an ordinary missing or unreadable file.
+    private func readAudio(raw: RawVoiceMemo) -> (String?, String?, Bool) {
+        guard let url = raw.audioURL else { return (nil, nil, false) }
         if raw.fileSizeBytes > maxAudioBytes {
             audioIssueCount += 1
             eventLog.info(
@@ -473,7 +469,7 @@ final class VoiceMemosSource: SourceProtocol {
                     "cap": String(maxAudioBytes)
                 ]
             )
-            return (nil, "audio/m4a")
+            return (nil, "audio/m4a", true)
         }
         let reader = audioReader
         let cap = maxAudioBytes
@@ -483,9 +479,9 @@ final class VoiceMemosSource: SourceProtocol {
             // cap between the database read and the file read.
             if Int64(data.count) > cap {
                 audioIssueCount += 1
-                return (nil, "audio/m4a")
+                return (nil, "audio/m4a", true)
             }
-            return (data.base64EncodedString(), "audio/m4a")
+            return (data.base64EncodedString(), "audio/m4a", false)
         } catch {
             audioIssueCount += 1
             eventLog.error(
@@ -496,7 +492,7 @@ final class VoiceMemosSource: SourceProtocol {
                     "error": String(describing: error)
                 ]
             )
-            return (nil, "audio/m4a")
+            return (nil, "audio/m4a", false)
         }
     }
 

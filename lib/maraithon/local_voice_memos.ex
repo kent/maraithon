@@ -210,8 +210,12 @@ defmodule Maraithon.LocalVoiceMemos do
   defp prepare_row(memo, user_id, device_id, now) when is_map(memo) do
     guid = fetch(memo, :guid)
 
-    {audio_bytes, audio_truncated} =
+    {audio_bytes, decoded_audio_truncated} =
       decode_audio(fetch(memo, :audio_bytes), user_id, device_id, guid)
+
+    audio_truncated =
+      decoded_audio_truncated ||
+        (is_nil(audio_bytes) && truthy?(fetch(memo, :audio_truncated)))
 
     attrs = %{
       user_id: user_id,

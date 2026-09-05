@@ -209,6 +209,24 @@ defmodule Maraithon.LocalVoiceMemosTest do
       assert is_nil(stored.transcript)
     end
 
+    test "honors an explicit truncation marker when the client omits oversize audio" do
+      user_id = "vm-client-trunc-#{System.unique_integer([:positive])}@example.com"
+      device_id = Ecto.UUID.generate()
+
+      {:ok, %{accepted: 1}} =
+        LocalVoiceMemos.ingest_batch(user_id, device_id, [
+          sample_memo("g-client-big", %{
+            "audio_bytes" => nil,
+            "audio_truncated" => true,
+            "file_size_bytes" => 6 * 1024 * 1024
+          })
+        ])
+
+      [stored] = memos_for(user_id, device_id)
+      assert is_nil(stored.audio_bytes)
+      assert stored.audio_truncated == true
+    end
+
     test "search/3 matches on transcript text" do
       user_id = "vm-tx-#{System.unique_integer([:positive])}@example.com"
       device_id = Ecto.UUID.generate()
