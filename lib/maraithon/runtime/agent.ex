@@ -24,6 +24,7 @@ defmodule Maraithon.Runtime.Agent do
   alias Maraithon.Repo
   alias Maraithon.Runtime.AgentDirectives
   alias Maraithon.Runtime.AgentLeases
+  alias Maraithon.Runtime.Coordination.NodeIncarnation
   alias Maraithon.Runtime.Dispatch
   alias Maraithon.Runtime.EffectRunner
   alias Maraithon.Runtime.Scheduler
@@ -1108,11 +1109,11 @@ defmodule Maraithon.Runtime.Agent do
       {:ok, directive} ->
         activate_claimed_directive(data, directive)
 
-      {:error, :partition_authority_lost} ->
-        if durable_lease_draining?(data) do
+      {:error, reason} when reason in [:node_authority_lost, :partition_authority_lost] ->
+        if durable_authority_draining?(data) do
           {:stop, :normal, data}
         else
-          stop_after_directive_failure(:claim, :partition_authority_lost, data)
+          stop_after_directive_failure(:claim, reason, data)
         end
 
       {:error, reason} ->
@@ -1164,11 +1165,11 @@ defmodule Maraithon.Runtime.Agent do
       {:error, :invalid_directive_payload} ->
         dead_letter_invalid_directive(claimed_data)
 
-      {:error, :partition_authority_lost} ->
-        if durable_lease_draining?(claimed_data) do
+      {:error, reason} when reason in [:node_authority_lost, :partition_authority_lost] ->
+        if durable_authority_draining?(claimed_data) do
           {:stop, :normal, claimed_data}
         else
-          stop_after_directive_failure(:activation, :partition_authority_lost, claimed_data)
+          stop_after_directive_failure(:activation, reason, claimed_data)
         end
 
       {:error, reason} ->
@@ -2523,16 +2524,11 @@ defmodule Maraithon.Runtime.Agent do
           | sequence_num: Events.latest_sequence_num(data.agent_id)
         }
 
-      {:error, :partition_authority_lost} ->
-        if durable_lease_draining?(data) do
+      {:error, reason} when reason in [:node_authority_lost, :partition_authority_lost] ->
+        if durable_authority_draining?(data) do
           exit(:normal)
         else
-          log_current_run_settlement_failure(
-            data,
-            run_id,
-            directive_id,
-            :partition_authority_lost
-          )
+          log_current_run_settlement_failure(data, run_id, directive_id, reason)
 
           data
         end
@@ -3389,11 +3385,11 @@ defmodule Maraithon.Runtime.Agent do
       {:ok, _draining_lease} ->
         stop_agent("runtime_authority_revoked", data)
 
-      {:error, :partition_authority_lost} ->
-        if durable_lease_draining?(data) do
+      {:error, reason} when reason in [:node_authority_lost, :partition_authority_lost] ->
+        if durable_authority_draining?(data) do
           {:stop, :normal, data}
         else
-          stop_after_exact_lease_renewal_failure(:partition_authority_lost, data)
+          stop_after_exact_lease_renewal_failure(reason, data)
         end
 
       {:error, reason} ->
@@ -3413,11 +3409,22 @@ defmodule Maraithon.Runtime.Agent do
 
   defp renew_effect_admission_authority(_data), do: :ok
 
-  defp durable_lease_draining?(data) do
+  defp durable_authority_draining?(data) do
     case AgentLeases.get(data.agent_id) do
       %{owner_token: owner_token, draining_at: draining_at}
       when owner_token == data.owner_token and not is_nil(draining_at) ->
         true
+
+      %{
+        owner_token: owner_token,
+        coordination_activation_epoch: activation_epoch,
+        coordination_node_incarnation_id: node_id
+      }
+      when owner_token == data.owner_token and is_binary(activation_epoch) and is_binary(node_id) ->
+        match?(
+          %NodeIncarnation{activation_epoch: ^activation_epoch, state: "draining"},
+          Repo.get(NodeIncarnation, node_id)
+        )
 
       _missing_or_active_lease ->
         false
