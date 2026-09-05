@@ -279,6 +279,7 @@ gcloud run deploy "${service}" \
   --set-env-vars "${common_env},MARAITHON_PROCESS_ROLE=combined,POOL_SIZE=16,PHX_SERVER=true,DURABLE_PAYLOAD_BINDING_CURRENT_TAG=HMAC.SHA256.V1,OPENROUTER_HTTP_REFERER=https://maraithon.com,OPENROUTER_APP_TITLE=Maraithon" \
   --set-secrets "${runtime_secrets}" \
   --allow-unauthenticated \
+  --execution-environment gen2 \
   --port 8080 \
   --cpu 2 \
   --memory 2Gi \

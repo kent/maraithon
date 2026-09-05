@@ -2569,6 +2569,7 @@ deploy_runtime_candidate() {
     --no-allow-unauthenticated \
     --invoker-iam-check \
     --ingress all \
+    --execution-environment gen2 \
     --port 8080 \
     --cpu 2 \
     --memory 2Gi \
@@ -2604,6 +2605,7 @@ deploy_web_candidate() {
     --allow-unauthenticated \
     --invoker-iam-check \
     --ingress all \
+    --execution-environment gen2 \
     --port 8080 \
     --cpu 2 \
     --memory 2Gi \
