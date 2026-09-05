@@ -1055,12 +1055,12 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
                   entered_assignment
                 )
 
-              _ ->
-                :ok
+              {:error, _authority_lost} ->
+                report_coordinated_start_loss(parent, job)
             end
 
-          _ ->
-            :ok
+          {:error, _authority_lost} ->
+            report_coordinated_start_loss(parent, job)
         end
       end)
 
@@ -1089,6 +1089,11 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
         :ok
     end
 
+    :ok
+  end
+
+  defp report_coordinated_start_loss(parent, job) do
+    send(parent, {:background_job_done, job.id, job.claim_token, {:error, :claim_lost}})
     :ok
   end
 
