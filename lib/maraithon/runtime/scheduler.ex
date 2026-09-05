@@ -6,9 +6,11 @@ defmodule Maraithon.Runtime.Scheduler do
   use GenServer
 
   import Ecto.Query
+  alias Maraithon.AgentIsolation.Binding
   alias Maraithon.Agents.Agent
   alias Maraithon.DurablePayload
   alias Maraithon.Effects.ProtocolCutover, as: EffectProtocol
+  alias Maraithon.PrivacyErasure.WriteFence
   alias Maraithon.Repo
   alias Maraithon.Runtime.AgentDirectives
   alias Maraithon.Runtime.Config, as: RuntimeConfig
@@ -22,6 +24,7 @@ defmodule Maraithon.Runtime.Scheduler do
 
   @default_poll_interval_ms 5_000
   @default_dispatch_timeout_ms 60_000
+  @runnable_agent_statuses ~w(running degraded)
   # After this many dispatch attempts that were never acknowledged, a job is
   # dead-lettered instead of being reclaimed and re-dispatched forever. With
   # PubSub acknowledging mailbox delivery, a job that keeps going stale is
@@ -635,15 +638,131 @@ defmodule Maraithon.Runtime.Scheduler do
       {:error, :scheduled_job_already_terminal} ->
         :ok
 
-      {:error, reason} ->
-        Logger.warning("Scheduled job durable acceptance deferred",
-          job_reference: Maraithon.Redaction.fingerprint(job.id),
-          agent_reference: Maraithon.Redaction.fingerprint(job.agent_id),
-          failure_code: Maraithon.Redaction.error_class(reason)
-        )
+      {:error, reason} when reason in [:agent_not_runnable, :agent_binding_not_active] ->
+        case cancel_if_still_ineligible(job, reason) do
+          {:ok, :cancelled} ->
+            Logger.info("Cancelled scheduled job for ineligible agent",
+              job_reference: Maraithon.Redaction.fingerprint(job.id),
+              agent_reference: Maraithon.Redaction.fingerprint(job.agent_id),
+              failure_code: Maraithon.Redaction.error_class(reason)
+            )
 
+            :ok
+
+          {:ok, :already_terminal} ->
+            :ok
+
+          {:error, cancel_reason} ->
+            log_deferred_acceptance(job, cancel_reason)
+            {:error, cancel_reason}
+        end
+
+      {:error, reason} ->
+        log_deferred_acceptance(job, reason)
         {:error, reason}
     end
+  end
+
+  # Lifecycle operations normally cancel timers while moving an Agent out of
+  # service. A crash-loop trip can make the Agent non-runnable without passing
+  # through that operation, however, and older timers must not be retried every
+  # poll forever. Re-prove the exact partition and re-lock User -> Agent ->
+  # Binding -> ScheduledJob before cancelling so a concurrent resume wins
+  # cleanly and no stale BEAM observation can persist the decision.
+  defp cancel_if_still_ineligible(job, reason) do
+    user_id =
+      Repo.one(from(agent in Agent, where: agent.id == ^job.agent_id, select: agent.user_id))
+
+    with true <- is_binary(user_id),
+         {:ok, session, partition} <- Scope.partition_for_user(user_id) do
+      Repo.transaction(fn ->
+        Authority.fence_partition!(
+          session,
+          partition.partition_id,
+          partition.ownership_epoch,
+          :ready
+        )
+
+        :ok = DurablePayload.require_current_mutation!()
+        _user = WriteFence.lock_user_writable!(user_id)
+
+        agent =
+          Agent
+          |> where([stored], stored.id == ^job.agent_id)
+          |> lock("FOR UPDATE")
+          |> Repo.one()
+
+        binding =
+          Binding
+          |> where([stored], stored.agent_id == ^job.agent_id and stored.user_id == ^user_id)
+          |> lock("FOR UPDATE")
+          |> Repo.one()
+
+        locked_job =
+          ScheduledJob
+          |> where([stored], stored.id == ^job.id)
+          |> lock("FOR UPDATE")
+          |> Repo.one()
+
+        cond do
+          match?(
+            %ScheduledJob{status: status} when status in ["delivered", "cancelled", "failed"],
+            locked_job
+          ) ->
+            :already_terminal
+
+          not match?(%ScheduledJob{status: "pending"}, locked_job) ->
+            Repo.rollback(:scheduled_job_not_pending)
+
+          ineligible_for_reason?(agent, binding, user_id, reason) ->
+            {1, _rows} =
+              private_update_all(
+                from(stored in ScheduledJob,
+                  where: stored.id == ^job.id and stored.status == "pending"
+                ),
+                set: [
+                  status: "cancelled",
+                  claimed_by: nil,
+                  claimed_at: nil,
+                  dispatched_at: nil
+                ]
+              )
+
+            :cancelled
+
+          true ->
+            Repo.rollback(:scheduled_job_agent_became_eligible)
+        end
+      end)
+    else
+      false -> {:error, :scheduled_job_agent_not_found}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp ineligible_for_reason?(%Agent{} = agent, _binding, user_id, :agent_not_runnable) do
+    agent.user_id == user_id and
+      not (agent.install_status == "enabled" and agent.status in @runnable_agent_statuses)
+  end
+
+  defp ineligible_for_reason?(
+         %Agent{user_id: user_id, install_status: "enabled", status: status},
+         binding,
+         user_id,
+         :agent_binding_not_active
+       )
+       when status in @runnable_agent_statuses do
+    not match?(%Binding{user_id: ^user_id, status: "active"}, binding)
+  end
+
+  defp ineligible_for_reason?(_agent, _binding, _user_id, _reason), do: false
+
+  defp log_deferred_acceptance(job, reason) do
+    Logger.warning("Scheduled job durable acceptance deferred",
+      job_reference: Maraithon.Redaction.fingerprint(job.id),
+      agent_reference: Maraithon.Redaction.fingerprint(job.agent_id),
+      failure_code: Maraithon.Redaction.error_class(reason)
+    )
   end
 
   defp deliver_job_legacy(job) do

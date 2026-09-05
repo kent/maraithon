@@ -2,12 +2,19 @@ defmodule MaraithonWeb.HealthController do
   use MaraithonWeb, :controller
 
   alias Maraithon.Health
+  alias Maraithon.Runtime.Config, as: RuntimeConfig
+  alias Maraithon.Runtime.Coordination.Authority
 
   @doc """
   Simple health check for load balancers.
   """
   def index(conn, _params) do
-    json(conn, %{status: "ok", service: "maraithon"})
+    json(conn, %{
+      status: "ok",
+      service: "maraithon",
+      process_role: Atom.to_string(RuntimeConfig.process_role()),
+      deployment_generation: Authority.deployment_generation()
+    })
   end
 
   @doc """

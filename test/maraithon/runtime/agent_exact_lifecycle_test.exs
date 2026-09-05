@@ -682,6 +682,33 @@ defmodule Maraithon.Runtime.AgentExactLifecycleTest do
     assert :ok = stop_supervised(Scheduler)
   end
 
+  test "an exact scheduler cancels overdue timers after an agent becomes non-runnable" do
+    agent = running_agent("scheduled-ineligible")
+
+    {:ok, job_id} =
+      Scheduler.schedule_at(
+        agent.id,
+        "checkpoint",
+        DateTime.add(DateTime.utc_now(), -1, :second),
+        %{"source" => "focused_test"}
+      )
+
+    agent
+    |> Ecto.Changeset.change(%{
+      status: "stopped",
+      stopped_at: DatabaseClock.now!(),
+      updated_at: DatabaseClock.now!()
+    })
+    |> Repo.update!()
+
+    scheduler = start_supervised!({Scheduler, []})
+    send(scheduler, {:fire, job_id})
+    _ = :sys.get_state(scheduler, 30_000)
+
+    assert Repo.get!(ScheduledJob, job_id).status == "cancelled"
+    refute Repo.get_by(AgentDirective, dedupe_key: "scheduled_job:#{job_id}")
+  end
+
   test "checkpoint Event and Snapshot are atomic against an exact monitored loss" do
     agent = running_agent("checkpoint-loss")
     {supervisor, watcher} = exact_runtime(recover?: false)

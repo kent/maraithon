@@ -108,12 +108,20 @@ defmodule Maraithon.Effects.Cancellation do
 
   @doc false
   def fence_effect_admission!(agent_id, runtime_owner_generation) do
+    _lease_until =
+      fence_effect_admission_lease_until!(agent_id, runtime_owner_generation)
+
+    :ok
+  end
+
+  @doc false
+  def fence_effect_admission_lease_until!(agent_id, runtime_owner_generation) do
     require_transaction!()
 
     with {:ok, agent_id} <- cast_uuid(agent_id),
          {:ok, runtime_owner_generation} <- cast_uuid(runtime_owner_generation) do
       require_active_effect_pair!()
-      AgentLeases.fence_ready!(agent_id, runtime_owner_generation)
+      AgentLeases.fence_ready_lease_until!(agent_id, runtime_owner_generation)
     else
       {:error, reason} -> Repo.rollback(reason)
     end

@@ -88,6 +88,40 @@ defmodule Maraithon.Runtime.Coordination.WakeScopeTest do
     assert summary.admissions == []
   end
 
+  test "deployment handoff keeps the replacement Session dormant without crashing" do
+    target_generation = "maraithon-d260904151500-c3d4e5f6"
+    image_digest = "sha256:" <> String.duplicate("c", 64)
+    previous_generation = System.get_env("K_REVISION")
+
+    on_exit(fn ->
+      if previous_generation,
+        do: System.put_env("K_REVISION", previous_generation),
+        else: System.delete_env("K_REVISION")
+    end)
+
+    System.put_env("K_REVISION", target_generation)
+    activate_protocols!()
+    set_role!("maraithon_migrator")
+
+    assert {:ok, :armed} =
+             Authority.arm_deployment_handoff(target_generation, image_digest)
+
+    assert {:ok, :proven} =
+             Authority.prove_deployment_handoff(target_generation, image_digest)
+
+    set_role!("maraithon_runtime")
+    session = Process.whereis(Session)
+    monitor = Process.monitor(session)
+
+    send(session, :coordinate)
+    state = :sys.get_state(session)
+
+    assert state.phase == :dormant
+    assert state.session == nil
+    assert Process.whereis(Session) == session
+    refute_receive {:DOWN, ^monitor, :process, ^session, _reason}
+  end
+
   test "proof-bound lifecycle DOWN converges every intentional action without crash recovery" do
     {user_a, user_b} = distinct_partition_users("expected-lifecycle")
     %{node_a: node_a} = active_two_node_authority!(user_a, user_b)
@@ -639,6 +673,7 @@ defmodule Maraithon.Runtime.Coordination.WakeScopeTest do
   defp set_role!(role)
        when role in [
               "maraithon_runtime",
+              "maraithon_migrator",
               "maraithon_activation_operator",
               "maraithon_incident_operator"
             ] do

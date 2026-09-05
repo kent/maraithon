@@ -1120,10 +1120,18 @@ defmodule Maraithon.Runtime.EffectRunner do
 
             locked = lock_pending_effect_for_claim!(effect)
             ensure_pending_coordination_scope!(locked, session, partition)
-            Cancellation.fence_effect_admission!(locked.agent_id, locked.runtime_owner_generation)
+
+            authority_lease_cap =
+              Cancellation.fence_effect_admission_lease_until!(
+                locked.agent_id,
+                locked.runtime_owner_generation
+              )
 
             assignment =
-              case TaskClaims.reserve(session, partition, identity, ttl_ms: ttl_ms) do
+              case TaskClaims.reserve(session, partition, identity,
+                     ttl_ms: ttl_ms,
+                     authority_lease_cap: authority_lease_cap
+                   ) do
                 {:ok,
                  %TaskAssignment{state: "reserved", provider_boundary: "not_entered"} = value} ->
                   value

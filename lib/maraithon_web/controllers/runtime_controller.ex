@@ -13,7 +13,15 @@ defmodule MaraithonWeb.RuntimeController do
 
   alias Maraithon.Repo
   alias Maraithon.Runtime.AgentRuntimeLease
-  alias Maraithon.Runtime.Coordination.{Partition, Session, TaskAssignment}
+  alias Maraithon.Runtime.Config, as: RuntimeConfig
+
+  alias Maraithon.Runtime.Coordination.{
+    Authority,
+    NodeIncarnation,
+    Partition,
+    Session,
+    TaskAssignment
+  }
 
   def drain(conn, _params) do
     :ok = Session.request_drain()
@@ -40,11 +48,28 @@ defmodule MaraithonWeb.RuntimeController do
     %{
       phase: Atom.to_string(phase),
       node_incarnation_id: node_id,
+      process_role: Atom.to_string(RuntimeConfig.process_role()),
+      deployment_generation: Authority.deployment_generation(),
+      deployment_gate: Authority.deployment_gate_status(),
+      # The Session's ETS phase is only an availability hint. Prove the
+      # monotone PostgreSQL node fence independently for deploy decisions.
+      node_fenced: node_fenced?(node_id),
+      # This global count closes the gap where a replacement registration races
+      # a local-only drain report. The database deployment gate repeats the
+      # same proof while holding the protocol serialization lock.
+      admitting_nodes: count_live_nodes(),
+      # A drained singleton retains ownership until the successor planner can
+      # release these rows. The deploy-safe invariant is that no partition in
+      # this non-fleet-ready service can still admit work, not that ownership
+      # is already gone.
+      admitting_partitions: count_live_partitions(),
+      unready_partitions: count_unready_partitions(),
       owned_partitions:
         count_owned(node_id, Partition, :owner_node_incarnation_id, [
           "preparing",
           "ready",
-          "draining"
+          "draining",
+          "blocked"
         ]),
       open_tasks:
         count_owned(node_id, TaskAssignment, :node_incarnation_id, [
@@ -58,8 +83,26 @@ defmodule MaraithonWeb.RuntimeController do
       # when this node is otherwise clean. Surface that global fence so deploy
       # tooling cannot mistake a local drain for a safe handover.
       unproven_tasks: count_unproven_tasks(),
-      local_agent_leases: count_leases(node_id)
+      local_agent_leases: count_leases(node_id),
+      # Rejoining creates a fresh node incarnation, so a local-only count can
+      # miss a lease left behind by an older incarnation. Any Agent lease is a
+      # partition-release barrier and must be gone before singleton replacement.
+      agent_leases: count_all(AgentRuntimeLease)
     }
+  end
+
+  defp node_fenced?(nil), do: false
+
+  defp node_fenced?(node_id) do
+    Repo.exists?(
+      from(node in NodeIncarnation,
+        where: node.id == ^node_id,
+        where: node.state in ["draining", "revoked"],
+        where: is_nil(node.ready_at)
+      )
+    )
+  rescue
+    _error -> nil
   end
 
   defp count_owned(nil, _schema, _field, _states), do: 0
@@ -93,6 +136,55 @@ defmodule MaraithonWeb.RuntimeController do
     Repo.one(
       from(lease in AgentRuntimeLease,
         where: lease.coordination_node_incarnation_id == ^node_id,
+        select: count()
+      )
+    )
+  rescue
+    _error -> nil
+  end
+
+  defp count_all(schema) do
+    Repo.one(from(row in schema, select: count()))
+  rescue
+    _error -> nil
+  end
+
+  defp count_live_nodes do
+    Repo.one(
+      from(node in NodeIncarnation,
+        where: node.state in ["joining", "ready"],
+        where:
+          node.lease_expires_at >
+            fragment("timezone('UTC', clock_timestamp())"),
+        select: count()
+      )
+    )
+  rescue
+    _error -> nil
+  end
+
+  defp count_unready_partitions do
+    Repo.one(
+      from(partition in Partition,
+        where:
+          partition.state != "ready" or is_nil(partition.lease_expires_at) or
+            partition.lease_expires_at <=
+              fragment("timezone('UTC', clock_timestamp())"),
+        select: count()
+      )
+    )
+  rescue
+    _error -> nil
+  end
+
+  defp count_live_partitions do
+    Repo.one(
+      from(partition in Partition,
+        where: partition.state in ["preparing", "ready"],
+        where:
+          is_nil(partition.lease_expires_at) or
+            partition.lease_expires_at >
+              fragment("timezone('UTC', clock_timestamp())"),
         select: count()
       )
     )

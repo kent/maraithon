@@ -1565,6 +1565,62 @@ defmodule Maraithon.Runtime.EffectGenerationFenceTest do
     send(worker, :release)
   end
 
+  test "coordinated claim honors its exact Agent lease cap before the first heartbeat" do
+    assert {:ok, :activated} = activate_exact()
+    {agent, owner_generation} = exact_agent("effect-heartbeat-initial-agent-cap")
+    configure_blocking_provider()
+    BootGate.open()
+    LLMRateLimiter.reset()
+
+    assert {:ok, capped_lease} =
+             AgentLeases.renew(agent.id, owner_generation, ttl_ms: 30_000)
+
+    assert {:ok, effect_id} =
+             Effects.request(
+               agent.id,
+               :llm_call,
+               nil,
+               %{
+                 "model" => "blocking-v1",
+                 "messages" => [%{"role" => "user", "content" => "initial Agent cap"}]
+               },
+               runtime_owner_generation: owner_generation
+             )
+
+    stop_existing_runner()
+    runner = start_supervised!({EffectRunner, []})
+    Ecto.Adapters.SQL.Sandbox.allow(Repo, self(), runner)
+    send(runner, :poll)
+
+    _ = :sys.get_state(runner, 15_000)
+    assert_receive {:exact_provider_entered, worker, _params}, 10_000
+    worker_ref = Process.monitor(worker)
+
+    effect = Repo.get!(Effect, effect_id)
+    assignment = TaskClaims.get(effect.coordination_task_assignment_id)
+
+    assert assignment.state == "running"
+    assert assignment.lease_expires_at == capped_lease.lease_until
+    assert effect.claim_expires_at == capped_lease.lease_until
+
+    renewer = Process.whereis(EffectClaimRenewer)
+    Ecto.Adapters.SQL.Sandbox.allow(Repo, self(), renewer)
+
+    assert {:ok, %{active: 1, lost: 0}} = EffectClaimRenewer.renew_now()
+    assert TaskClaims.get(assignment.id).lease_expires_at == capped_lease.lease_until
+    assert Repo.get!(Effect, effect_id).claim_expires_at == capped_lease.lease_until
+    assert Process.alive?(worker)
+    refute_receive {:DOWN, ^worker_ref, :process, ^worker, _reason}, 0
+
+    send(worker, :release)
+    assert_receive {:DOWN, ^worker_ref, :process, ^worker, _reason}, 10_000
+    _ = :sys.get_state(runner, 15_000)
+
+    assert TaskClaims.get(assignment.id).state == "settled"
+    assert Repo.get!(Effect, effect_id).status == "completed"
+    assert {:ok, []} = EffectTaskSupervisor.active_identities()
+  end
+
   test "generic cancellation cannot forge a pre-provider outcome intent" do
     assert {:ok, :activated} = activate_exact()
     {agent, owner_generation} = exact_agent("effect-preflight-intent-forgery")
@@ -3411,7 +3467,12 @@ defmodule Maraithon.Runtime.EffectGenerationFenceTest do
               local_task_id: task_id,
               termination_capability_digest: termination_capability_digest
             },
-            ttl_ms: 60_000
+            ttl_ms: 60_000,
+            authority_lease_cap:
+              Repo.get_by!(Maraithon.Runtime.AgentRuntimeLease,
+                agent_id: agent.id,
+                owner_token: owner_generation
+              ).lease_until
           )
 
         claim_expires_at =

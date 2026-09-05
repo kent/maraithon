@@ -11,6 +11,40 @@ admin_username = System.get_env("ADMIN_USERNAME", "")
 admin_password = System.get_env("ADMIN_PASSWORD", "")
 api_bearer_token = System.get_env("API_BEARER_TOKEN", "")
 primary_admin_email = System.get_env("PRIMARY_ADMIN_EMAIL", "")
+runtime_environment = config_env()
+
+process_role =
+  case System.get_env("MARAITHON_PROCESS_ROLE", "") |> String.trim() |> String.downcase() do
+    "web" ->
+      :web
+
+    "runtime" ->
+      :runtime
+
+    "maintenance" ->
+      :maintenance
+
+    "combined" ->
+      :combined
+
+    "" ->
+      :combined
+
+    invalid ->
+      raise """
+      Invalid MARAITHON_PROCESS_ROLE=#{inspect(invalid)}.
+      Expected one of: web, runtime, maintenance, combined.
+      """
+  end
+
+config :maraithon, process_role: process_role
+
+# Production process ownership follows the selected role. A blank role keeps
+# the single-service default; development and test retain their explicit worker
+# setting (including the test suite's disabled workers).
+if runtime_environment == :prod do
+  config :maraithon, start_background_workers: process_role in [:runtime, :combined]
+end
 
 if config_env() == :prod do
   if primary_admin_email == "" do
@@ -113,7 +147,15 @@ end
 
 port = String.to_integer(System.get_env("PORT", "4000"))
 
-config :maraithon, MaraithonWeb.Endpoint, http: [ip: {0, 0, 0, 0}, port: port]
+config :maraithon, MaraithonWeb.Endpoint,
+  http: [
+    ip: {0, 0, 0, 0},
+    port: port,
+    websocket_options: [
+      max_frame_size: 8_000_000,
+      max_fragmented_message_size: 8_000_000
+    ]
+  ]
 
 # =============================================================================
 # Maraithon Runtime Configuration

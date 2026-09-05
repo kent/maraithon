@@ -15,6 +15,14 @@ defmodule Maraithon.Runtime.Supervisor do
 
   @impl true
   def init(_init_arg) do
+    if Config.runtime_process?() do
+      init_runtime_children()
+    else
+      {:stop, :runtime_process_required}
+    end
+  end
+
+  defp init_runtime_children do
     background_workers? = Application.get_env(:maraithon, :start_background_workers, true)
     if background_workers?, do: BootGate.close(), else: BootGate.open()
 

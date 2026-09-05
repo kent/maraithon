@@ -17,7 +17,15 @@ defmodule MaraithonWeb.HealthControllerTest do
     test "returns ok status", %{conn: conn} do
       conn = get(conn, "/health")
 
-      assert json_response(conn, 200) == %{"status" => "ok", "service" => "maraithon"}
+      response = json_response(conn, 200)
+
+      assert response == %{
+               "status" => "ok",
+               "service" => "maraithon",
+               "process_role" => Maraithon.Runtime.Config.process_role() |> Atom.to_string(),
+               "deployment_generation" =>
+                 Maraithon.Runtime.Coordination.Authority.deployment_generation()
+             }
     end
   end
 

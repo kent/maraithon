@@ -11,6 +11,7 @@ defmodule Maraithon.Runtime.Coordination.AuthorityTest do
     Authority,
     FairScheduler,
     Partitioning,
+    Planner,
     Protocol,
     TaskAuthority,
     TaskClaims,
@@ -224,6 +225,566 @@ defmodule Maraithon.Runtime.Coordination.AuthorityTest do
     refute Config.exact_agent_runtime_ready?()
   end
 
+  test "durable deployment gate serializes drain, replacement, and successor admission" do
+    target_generation = "maraithon-d260904150500-a1b2c3d4"
+    image_digest = "sha256:" <> String.duplicate("b", 64)
+    recovery_generation = "maraithon-d260904151000-e5f6a7b8"
+    recovery_image_digest = "sha256:" <> String.duplicate("d", 64)
+
+    attest_effect_protocol!()
+    activate_effect_protocol!()
+    finalize_partition_catalog!()
+    assert {:ok, :activated} = activate_coordination!()
+
+    current =
+      Authority.register_node(
+        revision: @revision,
+        node_name: "deployment-current",
+        ttl_ms: 300_000
+      )
+      |> ok!()
+
+    current = Authority.mark_node_ready(current) |> ok!()
+
+    waiting =
+      Authority.register_node(
+        revision: @revision,
+        node_name: "deployment-waiting",
+        ttl_ms: 300_000
+      )
+      |> ok!()
+
+    assert {:ok, :armed} =
+             in_role!("maraithon_migrator", fn ->
+               Authority.arm_deployment_handoff(target_generation, image_digest)
+             end)
+
+    forged_marker_id = Ecto.UUID.generate()
+
+    in_role!("maraithon_migrator", fn ->
+      Repo.query!(
+        """
+        DO $deployment_gate_probe$
+        DECLARE rejected boolean := false;
+        BEGIN
+          PERFORM set_config(
+            'maraithon.runtime_deployment_action', '#{forged_marker_id}', true
+          );
+
+          BEGIN
+            INSERT INTO public.runtime_node_incarnations
+              (id, activation_epoch, node_name, revision, state, lease_expires_at,
+               revoked_at, metadata, inserted_at, updated_at)
+            SELECT '#{forged_marker_id}'::uuid, protocol.activation_epoch,
+                   '__maraithon_deployment_gate__', protocol.exact_revision, 'revoked',
+                   timezone('UTC', clock_timestamp()),
+                   timezone('UTC', clock_timestamp()),
+                   pg_catalog.jsonb_build_object(
+                     'kind', 'deployment_gate',
+                     'sequence', 2,
+                     'state', 'deploying',
+                     'target_generation', '#{target_generation}',
+                     'stable_generation', 'legacy',
+                     'previous_generation', 'legacy',
+                     'image_digest', '#{image_digest}'
+                   ),
+                   timezone('UTC', clock_timestamp()),
+                   timezone('UTC', clock_timestamp())
+            FROM public.runtime_coordination_protocols AS protocol
+            WHERE protocol.name = 'runtime';
+          EXCEPTION WHEN check_violation THEN
+            rejected := true;
+          END;
+
+          IF NOT rejected THEN
+            RAISE EXCEPTION 'non-quiescent deployment proof unexpectedly succeeded';
+          END IF;
+        END;
+        $deployment_gate_probe$;
+        """,
+        []
+      )
+    end)
+
+    assert [["handoff"]] =
+             Repo.query!(
+               """
+               SELECT metadata ->> 'state'
+               FROM public.runtime_node_incarnations
+               WHERE node_name = '__maraithon_deployment_gate__'
+               ORDER BY (metadata ->> 'sequence')::bigint DESC
+               LIMIT 1
+               """,
+               []
+             ).rows
+
+    assert {:error, :deployment_admission_closed} =
+             Authority.register_node(
+               revision: @revision,
+               node_name: "deployment-late-legacy",
+               ttl_ms: 300_000
+             )
+
+    assert {:error, :deployment_admission_closed} = Authority.mark_node_ready(waiting)
+
+    assert {:ok, :draining} = Authority.begin_node_drain(current)
+    assert {:ok, :draining} = Authority.begin_node_drain(waiting)
+
+    assert {:ok, :proven} =
+             in_role!("maraithon_migrator", fn ->
+               Authority.prove_deployment_handoff(target_generation, image_digest)
+             end)
+
+    assert {:error, :deployment_admission_closed} =
+             Authority.register_node(
+               revision: @revision,
+               node_name: "deployment-early-successor",
+               ttl_ms: 300_000,
+               metadata: %{"deployment_generation" => target_generation}
+             )
+
+    assert Authority.deployment_gate_status() == %{
+             state: "deploying",
+             target_generation: target_generation,
+             stable_generation: "legacy",
+             image_digest: image_digest
+           }
+
+    assert {:error, {:deployment_generation_not_activating, "deploying"}} =
+             with_session_role!("maraithon_migrator", fn ->
+               Authority.stabilize_deployment_generation(target_generation, image_digest)
+             end)
+
+    assert {:ok, :activated} =
+             in_role!("maraithon_migrator", fn ->
+               Authority.activate_deployment_generation(target_generation, image_digest)
+             end)
+
+    assert {:ok, :already_activating} =
+             in_role!("maraithon_migrator", fn ->
+               Authority.activate_deployment_generation(target_generation, image_digest)
+             end)
+
+    assert Authority.deployment_gate_status() == %{
+             state: "activating",
+             target_generation: target_generation,
+             stable_generation: "legacy",
+             image_digest: image_digest
+           }
+
+    forged_stable_marker_id = Ecto.UUID.generate()
+
+    in_role!("maraithon_migrator", fn ->
+      Repo.query!(
+        """
+        DO $deployment_stable_probe$
+        DECLARE rejected boolean := false;
+        BEGIN
+          PERFORM set_config(
+            'maraithon.runtime_deployment_action', '#{forged_stable_marker_id}', true
+          );
+
+          BEGIN
+            INSERT INTO public.runtime_node_incarnations
+              (id, activation_epoch, node_name, revision, state, lease_expires_at,
+               revoked_at, metadata, inserted_at, updated_at)
+            SELECT '#{forged_stable_marker_id}'::uuid, protocol.activation_epoch,
+                   '__maraithon_deployment_gate__', protocol.exact_revision, 'revoked',
+                   timezone('UTC', clock_timestamp()),
+                   timezone('UTC', clock_timestamp()),
+                   pg_catalog.jsonb_build_object(
+                     'kind', 'deployment_gate',
+                     'sequence', 4,
+                     'state', 'stable',
+                     'target_generation', '#{target_generation}',
+                     'stable_generation', '#{target_generation}',
+                     'previous_generation', 'legacy',
+                     'image_digest', '#{image_digest}'
+                   ),
+                   timezone('UTC', clock_timestamp()),
+                   timezone('UTC', clock_timestamp())
+            FROM public.runtime_coordination_protocols AS protocol
+            WHERE protocol.name = 'runtime';
+          EXCEPTION WHEN check_violation THEN
+            rejected := true;
+          END;
+
+          IF NOT rejected THEN
+            RAISE EXCEPTION 'unready deployment stabilization unexpectedly succeeded';
+          END IF;
+        END;
+        $deployment_stable_probe$;
+        """,
+        []
+      )
+    end)
+
+    assert {:error, :deployment_generation_not_ready} =
+             with_session_role!("maraithon_migrator", fn ->
+               Authority.stabilize_deployment_generation(target_generation, image_digest)
+             end)
+
+    activating =
+      Authority.register_node(
+        revision: @revision,
+        node_name: "deployment-activating",
+        ttl_ms: 300_000,
+        metadata: %{"deployment_generation" => target_generation}
+      )
+      |> ok!()
+
+    activating = Authority.mark_node_ready(activating) |> ok!()
+
+    assert {:error, :deployment_generation_not_ready} =
+             with_session_role!("maraithon_migrator", fn ->
+               Authority.stabilize_deployment_generation(target_generation, image_digest)
+             end)
+
+    assert {:error, :deployment_admission_closed} =
+             Authority.register_node(
+               revision: @revision,
+               node_name: "deployment-activating-legacy",
+               ttl_ms: 300_000
+             )
+
+    assert {:error, {:deployment_handoff_not_quiescent, %{"no_live_nodes" => false}}} =
+             with_session_role!("maraithon_migrator", fn ->
+               Authority.retarget_deployment_handoff(
+                 target_generation,
+                 image_digest,
+                 recovery_generation,
+                 recovery_image_digest
+               )
+             end)
+
+    assert {:ok, :draining} = Authority.begin_node_drain(activating)
+
+    assert {:ok, :retargeted} =
+             in_role!("maraithon_migrator", fn ->
+               Authority.retarget_deployment_handoff(
+                 target_generation,
+                 image_digest,
+                 recovery_generation,
+                 recovery_image_digest
+               )
+             end)
+
+    assert {:ok, :already_retargeted} =
+             in_role!("maraithon_migrator", fn ->
+               Authority.retarget_deployment_handoff(
+                 target_generation,
+                 image_digest,
+                 recovery_generation,
+                 recovery_image_digest
+               )
+             end)
+
+    assert {:error, :deployment_handoff_irreversible} =
+             with_session_role!("maraithon_migrator", fn ->
+               Authority.abort_deployment_handoff(recovery_generation, recovery_image_digest)
+             end)
+
+    assert {:error, :deployment_admission_closed} =
+             Authority.register_node(
+               revision: @revision,
+               node_name: "deployment-early-recovery",
+               ttl_ms: 300_000,
+               metadata: %{"deployment_generation" => recovery_generation}
+             )
+
+    assert {:ok, :activated} =
+             in_role!("maraithon_migrator", fn ->
+               Authority.activate_deployment_generation(
+                 recovery_generation,
+                 recovery_image_digest
+               )
+             end)
+
+    recovery =
+      Authority.register_node(
+        revision: @revision,
+        node_name: "deployment-activating-recovery",
+        ttl_ms: 300_000,
+        metadata: %{"deployment_generation" => recovery_generation}
+      )
+      |> ok!()
+
+    recovery = Authority.mark_node_ready(recovery) |> ok!()
+    assert %Maraithon.Runtime.Coordination.NodeIncarnation{state: "ready"} = recovery
+
+    ready_all_partitions!(recovery)
+
+    assert {:ok, :stabilized} =
+             in_role!("maraithon_migrator", fn ->
+               Authority.stabilize_deployment_generation(
+                 recovery_generation,
+                 recovery_image_digest
+               )
+             end)
+
+    assert Authority.deployment_gate_status() == %{
+             state: "stable",
+             target_generation: recovery_generation,
+             stable_generation: recovery_generation,
+             image_digest: recovery_image_digest
+           }
+
+    assert %Maraithon.Runtime.Coordination.NodeIncarnation{} =
+             Authority.register_node(
+               revision: @revision,
+               node_name: "deployment-successor",
+               ttl_ms: 300_000,
+               metadata: %{"deployment_generation" => recovery_generation}
+             )
+             |> ok!()
+
+    assert {:error, :deployment_admission_closed} =
+             Authority.register_node(
+               revision: @revision,
+               node_name: "deployment-stale-legacy",
+               ttl_ms: 300_000
+             )
+
+    assert {:error, :deployment_generation_already_used} =
+             with_session_role!("maraithon_migrator", fn ->
+               Authority.arm_deployment_handoff(target_generation, image_digest)
+             end)
+
+    assert {:error, :deployment_generation_already_used} =
+             with_session_role!("maraithon_migrator", fn ->
+               Authority.arm_deployment_handoff(
+                 recovery_generation,
+                 recovery_image_digest
+               )
+             end)
+  end
+
+  test "aborting a handoff preserves the failed target while reopening the stable generation" do
+    failed_generation = "maraithon-d260904152000-a1b2c3d4"
+    failed_image_digest = "sha256:" <> String.duplicate("e", 64)
+    next_generation = "maraithon-d260904152500-e5f6a7b8"
+    next_image_digest = "sha256:" <> String.duplicate("f", 64)
+
+    attest_effect_protocol!()
+    activate_effect_protocol!()
+    finalize_partition_catalog!()
+    assert {:ok, :activated} = activate_coordination!()
+
+    assert {:ok, :armed} =
+             in_role!("maraithon_migrator", fn ->
+               Authority.arm_deployment_handoff(failed_generation, failed_image_digest)
+             end)
+
+    assert {:ok, :aborted} =
+             in_role!("maraithon_migrator", fn ->
+               Authority.abort_deployment_handoff(failed_generation, failed_image_digest)
+             end)
+
+    assert [[metadata]] =
+             Repo.query!(
+               """
+               SELECT metadata
+               FROM public.runtime_node_incarnations
+               WHERE node_name = '__maraithon_deployment_gate__'
+               ORDER BY (metadata ->> 'sequence')::bigint DESC
+               LIMIT 1
+               """,
+               []
+             ).rows
+
+    assert metadata == %{
+             "image_digest" => failed_image_digest,
+             "kind" => "deployment_gate",
+             "previous_generation" => "legacy",
+             "sequence" => 2,
+             "stable_generation" => "legacy",
+             "state" => "aborted",
+             "target_generation" => failed_generation
+           }
+
+    assert {:ok, :already_aborted} =
+             in_role!("maraithon_migrator", fn ->
+               Authority.abort_deployment_handoff(failed_generation, failed_image_digest)
+             end)
+
+    assert %Maraithon.Runtime.Coordination.NodeIncarnation{} =
+             Authority.register_node(
+               revision: @revision,
+               node_name: "deployment-restored-legacy",
+               ttl_ms: 300_000
+             )
+             |> ok!()
+
+    assert {:error, :deployment_generation_already_used} =
+             with_session_role!("maraithon_migrator", fn ->
+               Authority.arm_deployment_handoff(failed_generation, failed_image_digest)
+             end)
+
+    assert {:ok, :armed} =
+             in_role!("maraithon_migrator", fn ->
+               Authority.arm_deployment_handoff(next_generation, next_image_digest)
+             end)
+  end
+
+  test "handoff recovery reclaims expired ready and preparing authority" do
+    target_generation = "maraithon-d260904153000-a1b2c3d4"
+    image_digest = "sha256:" <> String.duplicate("9", 64)
+
+    attest_effect_protocol!()
+    activate_effect_protocol!()
+    finalize_partition_catalog!()
+    assert {:ok, :activated} = activate_coordination!()
+
+    source =
+      Authority.register_node(
+        revision: @revision,
+        node_name: "deployment-vanished-source",
+        ttl_ms: 300_000
+      )
+      |> ok!()
+      |> Authority.mark_node_ready()
+      |> ok!()
+
+    source_leader = Authority.acquire_leader(source, 300_000) |> ok!()
+    source_leader = Authority.mark_leader_ready(source_leader) |> ok!()
+    ready_partition_id = 0
+    preparing_partition_id = 1
+
+    Authority.assign_partition(source_leader, source, ready_partition_id, ttl_ms: 300_000)
+    |> ok!()
+
+    Authority.mark_partition_ready(source, ready_partition_id) |> ok!()
+
+    assert %Maraithon.Runtime.Coordination.Partition{state: "preparing"} =
+             Authority.assign_partition(
+               source_leader,
+               source,
+               preparing_partition_id,
+               ttl_ms: 300_000
+             )
+             |> ok!()
+
+    forged_leader_token = Ecto.UUID.generate()
+    forged_node_token = Ecto.UUID.generate()
+
+    in_role!("maraithon_runtime", fn ->
+      Repo.query!(
+        """
+        DO $preparing_drain_probe$
+        DECLARE
+          attempted_state text;
+          rejected boolean;
+          rejection_message text;
+        BEGIN
+          PERFORM set_config(
+            'maraithon.runtime_leader_action', '#{forged_leader_token}', true
+          );
+          PERFORM set_config(
+            'maraithon.runtime_node_action', '#{forged_node_token}', true
+          );
+
+          FOREACH attempted_state IN ARRAY ARRAY['draining', 'blocked'] LOOP
+            rejected := false;
+            rejection_message := NULL;
+
+            BEGIN
+              UPDATE public.runtime_partitions
+              SET state = attempted_state, ready_at = NULL,
+                  draining_at = timezone('UTC', clock_timestamp()),
+                  updated_at = timezone('UTC', clock_timestamp())
+              WHERE partition_id = #{preparing_partition_id};
+            EXCEPTION WHEN check_violation THEN
+              GET STACKED DIAGNOSTICS rejection_message = MESSAGE_TEXT;
+              rejected := true;
+            END;
+
+            IF NOT rejected THEN
+              RAISE EXCEPTION
+                'unfenced preparing partition transition to % unexpectedly succeeded',
+                attempted_state;
+            ELSIF rejection_message IS DISTINCT FROM
+                    'partition drain requires exact leader or owner incarnation' THEN
+              RAISE EXCEPTION
+                'unfenced preparing partition transition to % was rejected for the wrong reason: %',
+                attempted_state, rejection_message;
+            END IF;
+          END LOOP;
+        END;
+        $preparing_drain_probe$;
+        """,
+        []
+      )
+    end)
+
+    assert [["preparing"]] =
+             Repo.query!(
+               "SELECT state FROM public.runtime_partitions WHERE partition_id = $1",
+               [preparing_partition_id]
+             ).rows
+
+    assert {:ok, :armed} =
+             in_role!("maraithon_migrator", fn ->
+               Authority.arm_deployment_handoff(target_generation, image_digest)
+             end)
+
+    assert {:error,
+            {:deployment_handoff_not_quiescent,
+             %{
+               "no_live_nodes" => false,
+               "no_live_leader" => false,
+               "no_admitting_partitions" => false
+             }}} =
+             with_session_role!("maraithon_migrator", fn ->
+               Authority.prove_deployment_handoff(target_generation, image_digest)
+             end)
+
+    expire_deployment_topology!(
+      source,
+      source_leader,
+      [ready_partition_id, preparing_partition_id]
+    )
+
+    assert {:ok, :proven} =
+             in_role!("maraithon_migrator", fn ->
+               Authority.prove_deployment_handoff(target_generation, image_digest)
+             end)
+
+    assert {:ok, :activated} =
+             in_role!("maraithon_migrator", fn ->
+               Authority.activate_deployment_generation(target_generation, image_digest)
+             end)
+
+    recovery =
+      Authority.register_node(
+        revision: @revision,
+        node_name: "deployment-expired-authority-recovery",
+        ttl_ms: 300_000,
+        metadata: %{"deployment_generation" => target_generation}
+      )
+      |> ok!()
+      |> Authority.mark_node_ready()
+      |> ok!()
+
+    recovery_leader = Authority.acquire_leader(recovery, 300_000) |> ok!()
+    recovery_leader = Authority.mark_leader_ready(recovery_leader) |> ok!()
+
+    assert {:ok, %{expired: 2}} = Planner.plan_once(recovery_leader, limit: 2)
+    assert {:ok, %{finalized: 2}} = Planner.plan_once(recovery_leader, limit: 2)
+
+    for partition_id <- [ready_partition_id, preparing_partition_id] do
+      Authority.assign_partition(
+        recovery_leader,
+        recovery,
+        partition_id,
+        ttl_ms: 300_000
+      )
+      |> ok!()
+
+      assert %Maraithon.Runtime.Coordination.Partition{state: "ready"} =
+               Authority.mark_partition_ready(recovery, partition_id) |> ok!()
+    end
+  end
+
   test "tenant concurrency is fair and deterministic under concurrent backlog" do
     %{node: node, partitions: partitions} = active_authority!(~w(tenant-a tenant-b))
     insert_user!("tenant-a")
@@ -316,6 +877,25 @@ defmodule Maraithon.Runtime.Coordination.AuthorityTest do
     assert {:ok, :uncommitted} = TaskAuthority.terminate_exact(identity)
     assert TaskClaims.get(assignment_id) == nil
     assert Repo.get!(BackgroundJob, job.id).claim_token == nil
+  end
+
+  test "task reservation is capped by the earlier node lease" do
+    %{node: node, partitions: [partition]} = active_authority!(["tenant-a"])
+    claim_token = Ecto.UUID.generate()
+    assignment_id = Ecto.UUID.generate()
+    work_id = Ecto.UUID.generate()
+
+    assert DateTime.compare(node.lease_expires_at, partition.lease_expires_at) == :lt
+
+    assert {:ok, identity} =
+             TaskSupervisor.reserve("background_job", work_id, claim_token, assignment_id)
+
+    assert {:ok, assignment} =
+             TaskClaims.reserve(node, partition, identity, ttl_ms: 300_000)
+
+    assert assignment.lease_expires_at == node.lease_expires_at
+    assert DateTime.compare(assignment.lease_expires_at, partition.lease_expires_at) == :lt
+    assert {:ok, :never_activated} = TaskAuthority.terminate_exact(identity)
   end
 
   test "delayed commit-unknown cleanup accepts a clearly different background claim" do
@@ -1582,6 +2162,54 @@ defmodule Maraithon.Runtime.Coordination.AuthorityTest do
     %{node: node, leader: leader, partitions: partitions}
   end
 
+  defp ready_all_partitions!(node) do
+    leader = Authority.acquire_leader(node, 300_000) |> ok!()
+    leader = Authority.mark_leader_ready(leader) |> ok!()
+
+    Repo.query!("SELECT partition_id FROM public.runtime_partitions ORDER BY partition_id", []).rows
+    |> Enum.each(fn [partition_id] ->
+      Authority.assign_partition(leader, node, partition_id, ttl_ms: 300_000) |> ok!()
+      Authority.mark_partition_ready(node, partition_id) |> ok!()
+    end)
+  end
+
+  defp expire_deployment_topology!(node, leader, partition_ids) do
+    Repo.transaction(fn ->
+      Repo.query!("SET LOCAL ROLE NONE", [])
+      Repo.query!("SET LOCAL session_replication_role = replica", [])
+
+      Repo.query!(
+        """
+        UPDATE public.runtime_node_incarnations
+        SET lease_expires_at = timezone('UTC', clock_timestamp()) - interval '1 second'
+        WHERE id = $1::uuid
+        """,
+        [Ecto.UUID.dump!(node.id)]
+      )
+
+      Repo.query!(
+        """
+        UPDATE public.runtime_leader_authorities
+        SET lease_expires_at = timezone('UTC', clock_timestamp()) - interval '1 second'
+        WHERE role = 'partition_planner' AND action_token = $1::uuid
+        """,
+        [Ecto.UUID.dump!(leader.action_token)]
+      )
+
+      Repo.query!(
+        """
+        UPDATE public.runtime_partitions
+        SET lease_expires_at = timezone('UTC', clock_timestamp()) - interval '1 second'
+        WHERE partition_id = ANY($1::smallint[])
+        """,
+        [partition_ids]
+      )
+
+      Repo.query!("SET LOCAL session_replication_role = origin", [])
+      Repo.query!("SET LOCAL ROLE maraithon_runtime", [])
+    end)
+  end
+
   defp activate_effect_protocol! do
     status =
       in_role!("maraithon_activation_operator", fn ->
@@ -1767,6 +2395,23 @@ defmodule Maraithon.Runtime.Coordination.AuthorityTest do
          end) do
       {:ok, value} -> value
       {:error, reason} -> flunk("role-scoped transaction failed: #{inspect(reason)}")
+    end
+  end
+
+  defp with_session_role!(role, fun)
+       when role in [
+              "maraithon_migrator",
+              "maraithon_runtime",
+              "maraithon_payload_verifier",
+              "maraithon_incident_operator",
+              "maraithon_activation_operator"
+            ] and is_function(fun, 0) do
+    Repo.query!("SET ROLE " <> role, [])
+
+    try do
+      fun.()
+    after
+      Repo.query!("SET ROLE maraithon_runtime", [])
     end
   end
 

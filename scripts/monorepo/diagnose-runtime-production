@@ -9,8 +9,8 @@ service="${MARAITHON_GCP_SERVICE:-maraithon}"
 
 require_command gcloud
 
-if [[ "${project}" != "maraithon" ]]; then
-  echo "Refusing to diagnose an unpinned GCP project: ${project}" >&2
+if [[ "${project}" != "maraithon" || "${service}" != "maraithon" ]]; then
+  echo "Refusing to diagnose outside the pinned Maraithon production topology" >&2
   exit 64
 fi
 

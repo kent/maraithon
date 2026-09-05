@@ -43,6 +43,7 @@ defmodule Maraithon.Runtime.Coordination.TaskClaims do
     assignment_id = Map.get(identity, :assignment_id, Ecto.UUID.generate())
     ttl_ms = Keyword.get(opts, :ttl_ms, 30_000)
     work_kind = to_string(identity.work_kind)
+    authority_lease_cap = Keyword.get(opts, :authority_lease_cap)
 
     with {:ok, assignment_id} <- cast_uuid(assignment_id),
          {:ok, work_id} <- cast_uuid(identity.work_id),
@@ -53,6 +54,7 @@ defmodule Maraithon.Runtime.Coordination.TaskClaims do
            Map.get(identity, :termination_capability_digest),
          true <- byte_size(termination_capability_digest) == 32,
          true <- work_kind in ~w(background_job effect),
+         true <- valid_authority_lease_cap?(work_kind, authority_lease_cap),
          true <- is_integer(ttl_ms) and ttl_ms in 1_000..300_000 do
       Repo.transaction(fn ->
         Authority.fence_partition!(
@@ -76,10 +78,19 @@ defmodule Maraithon.Runtime.Coordination.TaskClaims do
             VALUES ($1::uuid, $2::uuid, $3, $4::uuid, $5::uuid,
                     $6, $7, $8::uuid, $9::uuid, $10::uuid, $11,
                     'reserved', 'not_entered',
+                    -- The first heartbeat must never discover an earlier
+                    -- upstream authority deadline than the one recorded at
+                    -- reservation time. Cap the task by every authority row
+                    -- already fenced and locked in this transaction.
                     LEAST(
                       timezone('UTC', clock_timestamp()) + ($12::bigint * interval '1 millisecond'),
+                      (SELECT lease_expires_at FROM public.runtime_node_incarnations
+                       WHERE id = $8::uuid AND activation_epoch = $2::uuid),
                       (SELECT lease_expires_at FROM public.runtime_partitions
-                       WHERE partition_id = $6)
+                       WHERE partition_id = $6 AND activation_epoch = $2::uuid
+                         AND ownership_epoch = $7
+                         AND owner_node_incarnation_id = $8::uuid),
+                      COALESCE($13::timestamp, 'infinity'::timestamp)
                     ), timezone('UTC', clock_timestamp()), timezone('UTC', clock_timestamp()))
             RETURNING id, activation_epoch, work_kind, work_id, claim_token,
                       partition_id, partition_epoch, node_incarnation_id,
@@ -100,7 +111,8 @@ defmodule Maraithon.Runtime.Coordination.TaskClaims do
               Ecto.UUID.dump!(supervisor_id),
               Ecto.UUID.dump!(local_task_id),
               termination_capability_digest,
-              ttl_ms
+              ttl_ms,
+              authority_lease_cap_param(authority_lease_cap)
             ]
           )
 
@@ -112,6 +124,13 @@ defmodule Maraithon.Runtime.Coordination.TaskClaims do
       _invalid_capability_digest -> {:error, :invalid_task_assignment}
     end
   end
+
+  defp valid_authority_lease_cap?("effect", %DateTime{utc_offset: 0, std_offset: 0}), do: true
+  defp valid_authority_lease_cap?("effect", _lease_cap), do: false
+  defp valid_authority_lease_cap?("background_job", nil), do: true
+
+  defp authority_lease_cap_param(%DateTime{} = lease_cap), do: DateTime.to_naive(lease_cap)
+  defp authority_lease_cap_param(nil), do: nil
 
   def activate(%TaskAssignment{work_kind: "effect"}),
     do: {:error, :effect_requires_canonical_effect_transaction}

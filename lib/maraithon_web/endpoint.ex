@@ -1,6 +1,13 @@
 defmodule MaraithonWeb.Endpoint do
   use Phoenix.Endpoint, otp_app: :maraithon
 
+  # Companion releases predating byte-budget batching can emit a single
+  # realtime Files envelope near 55 MB. CompanionSocket authenticates the
+  # device token before WebSock upgrade, so keep this bounded compatibility
+  # allowance on that socket only; the public LiveView socket retains
+  # Bandit's explicit 8 MB frame and fragmented-message ceilings.
+  @legacy_companion_max_frame_bytes 68_000_000
+
   # The session will be stored in the cookie and signed,
   # this means its contents can be read but not tampered with.
   # Set :encryption_salt if you would also like to encrypt it.
@@ -12,7 +19,7 @@ defmodule MaraithonWeb.Endpoint do
     max_age: 60 * 24 * 60 * 60
   ]
 
-  socket "/live", Phoenix.LiveView.Socket,
+  socket "/live", MaraithonWeb.LiveSocket,
     websocket: [connect_info: [session: @session_options]],
     longpoll: [connect_info: [session: @session_options]]
 
@@ -21,8 +28,16 @@ defmodule MaraithonWeb.Endpoint do
   # via the bearer token supplied as the `"token"` connect param — the
   # same plaintext token clients use against `/api/v1/companion/*`.
   socket "/companion/socket", MaraithonWeb.CompanionSocket,
-    websocket: [connect_info: [peer_data: true, user_agent: true]],
+    websocket: [
+      connect_info: [peer_data: true, user_agent: true],
+      max_frame_size: @legacy_companion_max_frame_bytes
+    ],
     longpoll: false
+
+  # The fixed runtime service has an HTTP listener only for Cloud Run health
+  # and exact deployment control. Never expose the browser/API/socket surface
+  # through its generated service URL.
+  plug MaraithonWeb.Plugs.ProcessRoleGate
 
   # Reject unsafe HTTP/1 request framing before any endpoint plug can read or
   # drain a body. Telegram authentication remains first within its route gate.

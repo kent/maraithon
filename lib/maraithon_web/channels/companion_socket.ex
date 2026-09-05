@@ -17,11 +17,16 @@ defmodule MaraithonWeb.CompanionSocket do
   use Phoenix.Socket
 
   alias Maraithon.Companion.Devices
+  alias Maraithon.Runtime.Config, as: RuntimeConfig
 
   channel "companion:device:*", MaraithonWeb.CompanionChannel
 
   @impl true
   def connect(params, socket, _connect_info) do
+    if RuntimeConfig.web_process?(), do: connect_web(params, socket), else: :error
+  end
+
+  defp connect_web(params, socket) do
     with {:ok, token} <- extract_token(params),
          %{} = device <- Devices.verify_token(token) do
       device = Devices.touch_last_seen(device)

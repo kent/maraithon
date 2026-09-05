@@ -7,7 +7,10 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 project="${MARAITHON_GCP_PROJECT:-maraithon}"
 region="${MARAITHON_GCP_REGION:-us-central1}"
 service="${MARAITHON_GCP_SERVICE:-maraithon}"
+runtime_service="${MARAITHON_GCP_RUNTIME_SERVICE:-maraithon-runtime}"
 runtime_service_account="${MARAITHON_GCP_RUNTIME_SERVICE_ACCOUNT:-maraithon-runtime@${project}.iam.gserviceaccount.com}"
+web_service_account="${MARAITHON_GCP_WEB_SERVICE_ACCOUNT:-${runtime_service_account}}"
+deployer_service_account="${MARAITHON_GCP_DEPLOYER_SERVICE_ACCOUNT:-admin-deployer@${project}.iam.gserviceaccount.com}"
 repository="${MARAITHON_GCP_ARTIFACT_REPOSITORY:-maraithon}"
 database_instance="${MARAITHON_GCP_DATABASE_INSTANCE:-maraithon-db}"
 exact_runtime_enabled="${MARAITHON_EXACT_RUNTIME_ENABLED:-true}"
@@ -15,19 +18,104 @@ coordination_enabled="${MARAITHON_MULTINODE_COORDINATION_ENABLED:-true}"
 protocol_revision="${MARAITHON_RUNTIME_PROTOCOL_REVISION:-5e0aa5a19e968f7bf026a926f77550707d59d41a}"
 todo_validation_user="${MARAITHON_VALIDATE_TODO_LAUNCH_USER:-}"
 agent_termination_attestation_public_key="${MARAITHON_AGENT_TERMINATION_ATTESTATION_PUBLIC_KEY:-}"
+deployment_resume_phase="${MARAITHON_DEPLOYMENT_RESUME_PHASE:-new}"
+revision_suffix="${MARAITHON_GCP_REVISION_SUFFIX:-}"
+resume_image_digest="${MARAITHON_DEPLOYMENT_IMAGE_DIGEST:-}"
+resume_secret_versions="${MARAITHON_DEPLOYMENT_SECRET_VERSIONS:-}"
+resume_config_manifest="${MARAITHON_DEPLOYMENT_CONFIG_MANIFEST:-}"
+expected_controller_revision="${MARAITHON_DEPLOYMENT_CONTROLLER_REVISION:-}"
+predecessor_controller_token="${MARAITHON_DEPLOYMENT_LOCK_PREDECESSOR_TOKEN:-}"
+lock_recovery_confirmation="${MARAITHON_CONFIRM_DEPLOYMENT_LOCK_RECOVERY:-}"
+unavailable_stable_generation="${MARAITHON_DEPLOYMENT_UNAVAILABLE_STABLE_GENERATION:-}"
+unavailable_stable_image_digest="${MARAITHON_DEPLOYMENT_UNAVAILABLE_STABLE_IMAGE_DIGEST:-}"
+unavailable_stable_confirmation="${MARAITHON_CONFIRM_STABLE_SOURCE_UNAVAILABLE:-}"
+unavailable_legacy_web_generation="${MARAITHON_DEPLOYMENT_UNAVAILABLE_LEGACY_WEB_GENERATION:-}"
+unavailable_legacy_web_image_digest="${MARAITHON_DEPLOYMENT_UNAVAILABLE_LEGACY_WEB_IMAGE_DIGEST:-}"
+unavailable_legacy_web_confirmation="${MARAITHON_CONFIRM_LEGACY_WEB_SOURCE_UNAVAILABLE:-}"
+retarget_from_generation="${MARAITHON_DEPLOYMENT_PREVIOUS_GENERATION:-}"
+retarget_from_image_digest="${MARAITHON_DEPLOYMENT_PREVIOUS_IMAGE_DIGEST:-}"
+retarget_from_phase="${MARAITHON_DEPLOYMENT_PREVIOUS_PHASE:-}"
+retarget_confirmation="${MARAITHON_CONFIRM_RETARGET:-}"
+deployment_gate_migration_version=20260904190000
 
 require_command gcloud
 require_command git
 require_command curl
+require_command jq
+require_command comm
+require_command sed
+require_command sort
 
-if [[ "${project}" != "maraithon" ]]; then
-  echo "Refusing to deploy an unpinned GCP project: ${project}" >&2
+if [[ "${project}" != "maraithon" ||
+      "${region}" != "us-central1" ||
+      "${service}" != "maraithon" ||
+      "${runtime_service}" != "maraithon-runtime" ||
+      "${repository}" != "maraithon" ||
+      "${database_instance}" != "maraithon-db" ||
+      "${runtime_service_account}" != "maraithon-runtime@maraithon.iam.gserviceaccount.com" ||
+      "${web_service_account}" != "maraithon-runtime@maraithon.iam.gserviceaccount.com" ||
+      "${deployer_service_account}" != "admin-deployer@maraithon.iam.gserviceaccount.com" ||
+      "${exact_runtime_enabled}" != "true" ||
+      "${coordination_enabled}" != "true" ]]; then
+  echo "Refusing to deploy with identities or runtime settings outside the pinned production topology" >&2
+  echo "Expected project=maraithon region=us-central1 web-service=maraithon runtime-service=maraithon-runtime repository=maraithon database=maraithon-db web/runtime-service-account=maraithon-runtime@maraithon.iam.gserviceaccount.com deployer-service-account=admin-deployer@maraithon.iam.gserviceaccount.com exact-runtime=true coordination=true" >&2
   exit 64
 fi
 
-if [[ "${exact_runtime_enabled}" == "true" && "${coordination_enabled}" != "true" ]]; then
-  echo "Refusing exact runtime without coordination; durable workers would remain fenced" >&2
+if [[ ! "${protocol_revision}" =~ ^[0-9a-f]{40}([0-9a-f]{24})?$ ]]; then
+  echo "Refusing an invalid runtime protocol revision: ${protocol_revision}" >&2
+  echo "MARAITHON_RUNTIME_PROTOCOL_REVISION must be exactly 40 or 64 lowercase hexadecimal characters" >&2
   exit 64
+fi
+
+# CI supplies this explicitly; local deploys reuse the current public key so
+# they do not require a separately persisted operator environment variable.
+if [[ -z "${agent_termination_attestation_public_key}" ]]; then
+  if ! deployed_runtime_service_json="$(
+    gcloud run services describe "${runtime_service}" \
+      --project "${project}" \
+      --region "${region}" \
+      --format=json
+  )"; then
+    echo "Unable to inspect the deployed runtime service for its Agent termination attestation public key" >&2
+    exit 64
+  fi
+
+  if ! deployed_runtime_serving_revision="$(
+    jq -er '
+      [.status.traffic[]? | select((.percent // 0) > 0)] as $active |
+      select(($active | length) == 1 and $active[0].percent == 100) |
+      $active[0].revisionName | select(type == "string" and length > 0)
+    ' <<<"${deployed_runtime_service_json}"
+  )"; then
+    echo "Unable to reuse the Agent termination attestation public key without one exact 100% serving runtime revision" >&2
+    exit 64
+  fi
+
+  if ! deployed_runtime_revision_json="$(
+    gcloud run revisions describe "${deployed_runtime_serving_revision}" \
+      --project "${project}" \
+      --region "${region}" \
+      --format=json
+  )"; then
+    echo "Unable to inspect the 100% serving runtime revision for its Agent termination attestation public key" >&2
+    exit 64
+  fi
+
+  if ! agent_termination_attestation_public_key="$(
+    jq -er --arg name AGENT_TERMINATION_ATTESTATION_PUBLIC_KEY '
+      [
+        .spec.containers[]?.env[]?
+        | select(.name == $name)
+        | .value
+        | select(type == "string")
+      ]
+      | if length == 1 then .[0] else empty end
+    ' <<<"${deployed_runtime_revision_json}"
+  )"; then
+    echo "Unable to reuse the Agent termination attestation public key from the 100% serving runtime revision" >&2
+    exit 64
+  fi
 fi
 
 if [[ "${exact_runtime_enabled}" == "true" && ! "${agent_termination_attestation_public_key}" =~ ^[[:xdigit:]]{64}$ ]]; then
@@ -36,111 +124,3217 @@ if [[ "${exact_runtime_enabled}" == "true" && ! "${agent_termination_attestation
 fi
 
 revision="$(git -C "${ROOT_DIR}" rev-parse HEAD)"
+
+if [[ -n "${expected_controller_revision}" &&
+      ( ! "${expected_controller_revision}" =~ ^[0-9a-f]{40}$ ||
+        "${revision}" != "${expected_controller_revision}" ) ]]; then
+  echo "The checked-out deploy controller does not match MARAITHON_DEPLOYMENT_CONTROLLER_REVISION" >&2
+  echo "Expected: ${expected_controller_revision}; checked out: ${revision}" >&2
+  exit 64
+fi
+
 project_number="$(gcloud projects describe "${project}" --format='value(projectNumber)')"
 connection="${project}:${region}:${database_instance}"
 socket_dir="/cloudsql/${connection}"
-image="${region}-docker.pkg.dev/${project}/${repository}/${service}:${revision}"
-host="${service}-${project_number}.${region}.run.app"
+image_repository="${region}-docker.pkg.dev/${project}/${repository}/${service}"
+web_host="${service}-${project_number}.${region}.run.app"
 gmail_pubsub_project="${MARAITHON_GMAIL_PUBSUB_PROJECT:-orchestrator-483621}"
 gmail_topic_id="${MARAITHON_GMAIL_PUBSUB_TOPIC_ID:-maraithon-gmail-push}"
 gmail_subscription_id="${MARAITHON_GMAIL_PUBSUB_SUBSCRIPTION_ID:-maraithon-gmail-push-webhook}"
 gmail_topic="projects/${gmail_pubsub_project}/topics/${gmail_topic_id}"
 gmail_push_endpoint="https://maraithon.com/webhooks/google/gmail"
 
-# Gmail requires the watch topic to live in the Google OAuth client's project.
-# Provision it here only when that is the deployment project. Cross-project
-# topics are pre-provisioned by their owning project and remain stable across
-# Maraithon deploys.
-if [[ "${gmail_pubsub_project}" == "${project}" ]]; then
-  run_in "${ROOT_DIR}" gcloud builds submit   --project "${project}"   --region "${region}"   --no-source   --config "scripts/monorepo/cloudbuild-provision-gmail.yaml"   --substitutions "_TOPIC_ID=${gmail_topic_id},_SUBSCRIPTION_ID=${gmail_subscription_id},_PUSH_ENDPOINT=${gmail_push_endpoint}"   --timeout 300s   --quiet
-else
-  echo "Using pre-provisioned external Gmail Pub/Sub topic: ${gmail_topic}"
+common_env="CLOUD_SQL_SOCKET_DIR=${socket_dir},DATABASE_TLS_MODE=private_network_override,DATABASE_TLS_INSECURE_CONFIRMATION=I_ACKNOWLEDGE_DATABASE_TLS_IS_NOT_VERIFIED,DATABASE_TLS_INSECURE_REASON=gcp_cloud_sql_unix_socket,PHX_HOST=maraithon.com,PRIMARY_ADMIN_EMAIL=kent@voteagora.com,LLM_PROVIDER=openrouter,LLM_MODEL=moonshotai/kimi-k3,OPENROUTER_CHAT_MODEL=moonshotai/kimi-k3,OPENROUTER_FAST_MODEL=moonshotai/kimi-k3,OPENROUTER_ROUTING_MODEL=moonshotai/kimi-k3,OPENROUTER_REASONING_EFFORT=high,LLM_BRIEF_REASONING_EFFORT=high,LLM_MAX_CONCURRENCY=3,LLM_REASONING_MAX_CONCURRENCY=3,SOURCE_FANOUT_TENANT_MAX_CONCURRENCY=3,GOOGLE_REDIRECT_URI=https://maraithon.com/auth/google/callback,GOOGLE_CALENDAR_WEBHOOK_URL=https://maraithon.com/webhooks/google/calendar,GOOGLE_PUBSUB_TOPIC=${gmail_topic},GITHUB_REDIRECT_URI=https://maraithon.com/auth/github/callback,SLACK_REDIRECT_URI=https://maraithon.com/auth/slack/callback,NOTAUI_REDIRECT_URI=https://maraithon.com/auth/notaui/callback,EXACT_AGENT_RUNTIME_ENABLED=${exact_runtime_enabled},MULTINODE_COORDINATION_ENABLED=${coordination_enabled},AGENT_TERMINATION_ATTESTATION_PUBLIC_KEY=${agent_termination_attestation_public_key},GIT_SHA=${protocol_revision},DB_QUERY_TIMEOUT_MS=30000,DATABASE_POOL_MODE=session"
+maintenance_env="${common_env},MARAITHON_PROCESS_ROLE=maintenance,POOL_SIZE=2"
+runtime_env="${common_env},MARAITHON_PROCESS_ROLE=runtime,POOL_SIZE=16,PHX_SERVER=true,DURABLE_PAYLOAD_BINDING_CURRENT_TAG=HMAC.SHA256.V1,OPENROUTER_HTTP_REFERER=https://maraithon.com,OPENROUTER_APP_TITLE=Maraithon"
+web_env="${common_env},MARAITHON_PROCESS_ROLE=web,POOL_SIZE=8,PHX_SERVER=true,DURABLE_PAYLOAD_BINDING_CURRENT_TAG=HMAC.SHA256.V1,OPENROUTER_HTTP_REFERER=https://maraithon.com,OPENROUTER_APP_TITLE=Maraithon"
+
+case "${deployment_resume_phase}" in
+  new | handoff | deploying | activating | retarget | stable)
+    ;;
+  *)
+    echo "Invalid MARAITHON_DEPLOYMENT_RESUME_PHASE: ${deployment_resume_phase}" >&2
+    echo "Expected one of: new, handoff, deploying, activating, retarget, stable" >&2
+    exit 64
+    ;;
+esac
+
+revision_suffix_generated=false
+
+if [[ -z "${revision_suffix}" ]]; then
+  if [[ "${deployment_resume_phase}" != "new" &&
+        "${deployment_resume_phase}" != "retarget" ]]; then
+    echo "A resumed deployment requires MARAITHON_GCP_REVISION_SUFFIX" >&2
+    exit 64
+  fi
+
+  if [[ -n "${GITHUB_RUN_ID:-}" && "${GITHUB_RUN_ID}" =~ ^[0-9]+$ ]]; then
+    github_run_attempt="${GITHUB_RUN_ATTEMPT:-1}"
+    if [[ ! "${github_run_attempt}" =~ ^[0-9]+$ ]]; then
+      echo "Invalid GITHUB_RUN_ATTEMPT: ${github_run_attempt}" >&2
+      exit 64
+    fi
+    revision_suffix="d-${revision:0:8}-g${GITHUB_RUN_ID}-a${github_run_attempt}"
+  else
+    deployment_nonce="$(
+      printf '%s' "${revision}-$(date -u +%Y%m%d%H%M%S)-$$-${RANDOM}" |
+        git -C "${ROOT_DIR}" hash-object --stdin
+    )"
+    revision_suffix="d-${revision:0:8}-${deployment_nonce:0:12}"
+  fi
+  revision_suffix_generated=true
 fi
+
+case "${deployment_resume_phase}" in
+  handoff | deploying | activating | stable)
+    if [[ -z "${resume_secret_versions}" ||
+          -z "${resume_config_manifest}" ||
+          -z "${expected_controller_revision}" ]]; then
+      echo "Recovery phase ${deployment_resume_phase} requires the original controller revision, secret snapshot, and deployment config manifest" >&2
+      exit 64
+    fi
+    ;;
+esac
+
+if [[ "${deployment_resume_phase}" != "new" &&
+      ! "${resume_image_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+  echo "A resumed deployment requires MARAITHON_DEPLOYMENT_IMAGE_DIGEST=sha256:<64 lowercase hex characters>" >&2
+  exit 64
+fi
+
+# Secret environment variables are resolved when a Cloud Run instance starts.
+# Resolve every alias once and bind a numeric version so a stable revision or
+# retained migration job cannot silently change credentials after a restart.
+resolve_secret_version() {
+  local secret_name="$1"
+  local secret_json
+  local resource_name
+  local version
+  local expected_suffix
+
+  if ! secret_json="$(
+    gcloud secrets versions describe latest \
+      --secret "${secret_name}" \
+      --project "${project}" \
+      --format=json
+  )"; then
+    echo "Unable to resolve the current Secret Manager version for ${secret_name}" >&2
+    return 1
+  fi
+
+  if ! resource_name="$(
+    jq -er 'select(.state == "ENABLED") | .name | select(type == "string")' \
+      <<<"${secret_json}"
+  )"; then
+    echo "The latest Secret Manager version for ${secret_name} is not enabled" >&2
+    return 1
+  fi
+
+  version="${resource_name##*/}"
+  expected_suffix="/secrets/${secret_name}/versions/${version}"
+
+  if [[ ! "${version}" =~ ^[1-9][0-9]*$ ||
+        "${resource_name}" != *"${expected_suffix}" ]]; then
+    echo "Secret Manager returned an invalid version identity for ${secret_name}" >&2
+    return 1
+  fi
+
+  printf '%s\n' "${version}"
+}
+
+secret_version_from_snapshot() {
+  local secret_name="$1"
+  local snapshot_entry
+  local entry_name
+  local entry_version
+  local matched_version=""
+  local match_count=0
+  local snapshot_entries=()
+
+  IFS=',' read -r -a snapshot_entries <<<"${resume_secret_versions}"
+
+  for snapshot_entry in "${snapshot_entries[@]}"; do
+    entry_name="${snapshot_entry%%=*}"
+    entry_version="${snapshot_entry#*=}"
+
+    if [[ "${entry_name}" == "${secret_name}" ]]; then
+      matched_version="${entry_version}"
+      match_count=$((match_count + 1))
+    fi
+  done
+
+  if [[ "${match_count}" -ne 1 || ! "${matched_version}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Recovery secret snapshot must name ${secret_name} exactly once with a numeric version" >&2
+    return 1
+  fi
+
+  if [[ "$(
+    gcloud secrets versions describe "${matched_version}" \
+      --secret "${secret_name}" \
+      --project "${project}" \
+      --format='value(state)'
+  )" != "ENABLED" ]]; then
+    echo "Recovery secret ${secret_name}:${matched_version} is not enabled" >&2
+    return 1
+  fi
+
+  printf '%s\n' "${matched_version}"
+}
+
+deployment_secret_version() {
+  local secret_name="$1"
+
+  if [[ -n "${resume_secret_versions}" ]]; then
+    secret_version_from_snapshot "${secret_name}"
+  else
+    resolve_secret_version "${secret_name}"
+  fi
+}
+
+verify_cloud_build_upload_boundary() {
+  local upload_files
+  local ignored_files
+  local ignored_uploads
+  local required_path
+  local required_paths=(
+    .gcloudignore
+    .gitignore
+    Dockerfile
+    mix.exs
+    mix.lock
+    entrypoint.sh
+    config/config.exs
+    config/prod.exs
+    config/runtime.exs
+    lib/maraithon/runtime/coordination/authority.ex
+    priv/repo/migrations/20260904190000_add_runtime_deployment_admission_gate.exs
+    assets/css/app.css
+    assets/js/app.js
+    priv/static/offline.html
+    priv/static/sw.js
+    priv/static/favicon.ico
+    priv/static/fonts/inter/InterVariable.woff2
+    priv/static/fonts/inter/InterVariable-Italic.woff2
+    priv/static/fonts/instrument-serif/InstrumentSerif-Regular.woff2
+    priv/static/fonts/instrument-serif/InstrumentSerif-Italic.woff2
+  )
+
+  if ! upload_files="$(
+    cd "${ROOT_DIR}" &&
+      gcloud meta list-files-for-upload . |
+        sed -e 's#^\./##' -e '/^$/d' |
+        LC_ALL=C sort -u
+  )"; then
+    echo "Unable to enumerate the Cloud Build source upload" >&2
+    return 1
+  fi
+
+  if ! ignored_files="$(
+    git -c core.quotePath=false -C "${ROOT_DIR}" \
+      ls-files --others --ignored --exclude-standard |
+      sed -e 's#^\./##' -e '/^$/d' |
+      LC_ALL=C sort -u
+  )"; then
+    echo "Unable to enumerate Git-ignored local files before Cloud Build" >&2
+    return 1
+  fi
+
+  ignored_uploads="$(
+    comm -12 \
+      <(printf '%s\n' "${upload_files}") \
+      <(printf '%s\n' "${ignored_files}")
+  )"
+
+  if [[ -n "${ignored_uploads}" ]]; then
+    # Do not print names: ignored paths can themselves disclose credential or
+    # incident content. The operator can compare the two read-only lists.
+    echo "Refusing Cloud Build: its source upload contains Git-ignored local files" >&2
+    return 1
+  fi
+
+  for required_path in "${required_paths[@]}"; do
+    if [[ $'\n'"${upload_files}"$'\n' != *$'\n'"${required_path}"$'\n'* ]]; then
+      echo "Refusing Cloud Build: required source path is absent from upload: ${required_path}" >&2
+      return 1
+    fi
+  done
+
+  echo "Cloud Build upload boundary verified: no ignored local files and all required sources present"
+}
+
+runtime_secret_specs=(
+  "DATABASE_URL=maraithon-runtime-db-url"
+  "SECRET_KEY_BASE=maraithon-secret-key-base"
+  "API_BEARER_TOKEN=maraithon-api-bearer-token"
+  "ADMIN_PASSWORD=maraithon-admin-password"
+  "OPENROUTER_API_KEY=maraithon-openrouter-api-key"
+  "CLOAK_KEY=maraithon-cloak-key"
+  "DURABLE_PAYLOAD_BINDING_CURRENT_KEY=maraithon-payload-binding-key"
+  "RELEASE_COOKIE=maraithon-release-cookie"
+  "POSTMARK_SERVER_TOKEN=maraithon-postmark-server-token"
+  "AUTH_EMAIL_FROM=maraithon-auth-email-from"
+  "GOOGLE_CLIENT_ID=maraithon-google-client-id"
+  "GOOGLE_CLIENT_SECRET=maraithon-google-client-secret"
+  "GITHUB_CLIENT_ID=maraithon-github-client-id"
+  "GITHUB_CLIENT_SECRET=maraithon-github-client-secret"
+  "GITHUB_WEBHOOK_SECRET=maraithon-github-webhook-secret"
+  "SLACK_CLIENT_ID=maraithon-slack-client-id"
+  "SLACK_CLIENT_SECRET=maraithon-slack-client-secret"
+  "SLACK_SIGNING_SECRET=maraithon-slack-signing-secret"
+  "NOTAUI_CLIENT_ID=maraithon-notaui-client-id"
+  "NOTAUI_CLIENT_SECRET=maraithon-notaui-client-secret"
+)
+
+runtime_secrets=""
+migration_shared_secrets=""
+runtime_database_secret_version=""
+api_token_secret_version=""
+secret_version_snapshot=""
+
+for secret_spec in "${runtime_secret_specs[@]}"; do
+  secret_env="${secret_spec%%=*}"
+  secret_name="${secret_spec#*=}"
+  secret_version="$(deployment_secret_version "${secret_name}")"
+  secret_version_snapshot+="${secret_version_snapshot:+,}${secret_name}=${secret_version}"
+  runtime_secrets+="${runtime_secrets:+,}${secret_env}=${secret_name}:${secret_version}"
+
+  case "${secret_env}" in
+    SECRET_KEY_BASE | API_BEARER_TOKEN | ADMIN_PASSWORD | OPENROUTER_API_KEY | CLOAK_KEY | DURABLE_PAYLOAD_BINDING_CURRENT_KEY | RELEASE_COOKIE)
+      migration_shared_secrets+="${migration_shared_secrets:+,}${secret_env}=${secret_name}:${secret_version}"
+      ;;
+  esac
+
+  case "${secret_env}" in
+    DATABASE_URL)
+      runtime_database_secret_version="${secret_version}"
+      ;;
+    API_BEARER_TOKEN)
+      api_token_secret_version="${secret_version}"
+      ;;
+  esac
+done
+
+migrator_database_secret_version="$(deployment_secret_version maraithon-migrator-db-url)"
+secret_version_snapshot+=",maraithon-migrator-db-url=${migrator_database_secret_version}"
+migration_secrets="DATABASE_URL=maraithon-migrator-db-url:${migrator_database_secret_version},DIRECT_DATABASE_URL=maraithon-migrator-db-url:${migrator_database_secret_version},${migration_shared_secrets}"
+
+if [[ -n "${resume_secret_versions}" &&
+      "${resume_secret_versions}" != "${secret_version_snapshot}" ]]; then
+  echo "Recovery secret snapshot is non-canonical or contains missing, reordered, or extra entries" >&2
+  exit 64
+fi
+
+# A local deploy may run from a dirty worktree, so Git HEAD alone is not a
+# controller identity. Bind the bytes that select, configure, and launch the
+# rollout into the canonical manifest and therefore into both revision names.
+deploy_script_hash="$(git -C "${ROOT_DIR}" hash-object scripts/monorepo/deploy)"
+deploy_lib_hash="$(git -C "${ROOT_DIR}" hash-object scripts/monorepo/lib.sh)"
+deploy_workflow_hash="$(git -C "${ROOT_DIR}" hash-object .github/workflows/deploy-gcp.yml)"
+gcloudignore_hash="$(git -C "${ROOT_DIR}" hash-object .gcloudignore)"
+gitignore_hash="$(git -C "${ROOT_DIR}" hash-object .gitignore)"
+makefile_hash="$(git -C "${ROOT_DIR}" hash-object Makefile)"
+config_hash="$(git -C "${ROOT_DIR}" hash-object config/config.exs)"
+runtime_config_hash="$(git -C "${ROOT_DIR}" hash-object config/runtime.exs)"
+
+deployment_config_manifest="$(
+  jq -cnS \
+    --arg schema "maraithon-split-deploy-v1" \
+    --arg controller_revision "${revision}" \
+    --arg project "${project}" \
+    --arg region "${region}" \
+    --arg web_service "${service}" \
+    --arg runtime_service "${runtime_service}" \
+    --arg runtime_service_account "${runtime_service_account}" \
+    --arg web_service_account "${web_service_account}" \
+    --arg deployer_service_account "${deployer_service_account}" \
+    --arg connection "${connection}" \
+    --arg protocol_revision "${protocol_revision}" \
+    --arg gate_migration_version "${deployment_gate_migration_version}" \
+    --arg deploy_script_hash "${deploy_script_hash}" \
+    --arg deploy_lib_hash "${deploy_lib_hash}" \
+    --arg deploy_workflow_hash "${deploy_workflow_hash}" \
+    --arg gcloudignore_hash "${gcloudignore_hash}" \
+    --arg gitignore_hash "${gitignore_hash}" \
+    --arg makefile_hash "${makefile_hash}" \
+    --arg config_hash "${config_hash}" \
+    --arg runtime_config_hash "${runtime_config_hash}" \
+    --arg maintenance_env "${maintenance_env}" \
+    --arg runtime_env "${runtime_env}" \
+    --arg web_env "${web_env}" \
+    --arg migration_secrets "${migration_secrets}" \
+    --arg runtime_secrets "${runtime_secrets}" \
+    --arg secret_versions "${secret_version_snapshot}" '
+      {
+        schema: $schema,
+        controller_revision: $controller_revision,
+        controller_content: {
+          deploy_script: $deploy_script_hash,
+          deploy_lib: $deploy_lib_hash,
+          workflow: $deploy_workflow_hash,
+          gcloudignore: $gcloudignore_hash,
+          gitignore: $gitignore_hash,
+          makefile: $makefile_hash,
+          config: $config_hash,
+          runtime_config: $runtime_config_hash
+        },
+        topology: {
+          project: $project,
+          region: $region,
+          web_service: $web_service,
+          runtime_service: $runtime_service,
+          runtime_service_account: $runtime_service_account,
+          web_service_account: $web_service_account,
+          deployer_service_account: $deployer_service_account,
+          cloud_sql_connection: $connection
+        },
+        protocol: {
+          exact_revision: $protocol_revision,
+          gate_migration_version: $gate_migration_version
+        },
+        migration_job: {
+          env: $maintenance_env,
+          secrets: $migration_secrets,
+          cpu: "1",
+          memory: "2Gi",
+          tasks: 1,
+          parallelism: 1,
+          timeout_seconds: 1800,
+          max_retries: 0
+        },
+        runtime: {
+          env: $runtime_env,
+          secrets: $runtime_secrets,
+          cpu: "2",
+          memory: "2Gi",
+          instances: 1,
+          concurrency: 16,
+          timeout_seconds: 3600,
+          cpu_throttling: false,
+          ingress: "all",
+          invoker_iam: true
+        },
+        web: {
+          env: $web_env,
+          secrets: $runtime_secrets,
+          cpu: "2",
+          memory: "2Gi",
+          min_instances: 1,
+          max_instances: 5,
+          concurrency: 40,
+          timeout_seconds: 3600,
+          cpu_throttling: false,
+          ingress: "all",
+          session_affinity: true,
+          public_invoker: true
+        },
+        secret_versions: $secret_versions
+      }
+    '
+)"
+
+if [[ -n "${resume_config_manifest}" ]]; then
+  if ! canonical_resume_config_manifest="$(jq -ceS . <<<"${resume_config_manifest}")"; then
+    echo "MARAITHON_DEPLOYMENT_CONFIG_MANIFEST is not valid JSON" >&2
+    exit 64
+  fi
+
+  if [[ "${canonical_resume_config_manifest}" != "${deployment_config_manifest}" ]]; then
+    echo "The checked-out controller/configuration does not match the original deployment manifest" >&2
+    exit 64
+  fi
+fi
+
+deployment_config_hash="$(printf '%s' "${deployment_config_manifest}" | git -C "${ROOT_DIR}" hash-object --stdin)"
+deployment_config_suffix="c${deployment_config_hash:0:12}"
+
+if [[ "${revision_suffix_generated}" == "true" ]]; then
+  revision_suffix="${revision_suffix}-${deployment_config_suffix}"
+elif [[ "${revision_suffix}" != *"-${deployment_config_suffix}" ]]; then
+  echo "Revision suffix does not bind the selected deployment configuration" >&2
+  echo "Expected suffix ending: -${deployment_config_suffix}" >&2
+  echo "For recovery, supply the original controller revision, secret snapshot, and configuration manifest" >&2
+  exit 64
+fi
+
+expected_revision="${runtime_service}-${revision_suffix}"
+expected_web_revision="${service}-${revision_suffix}"
+
+if [[ ! "${revision_suffix}" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ||
+      ! "${expected_revision}" =~ ^[a-z]([a-z0-9-]*[a-z0-9])?$ ||
+      ${#expected_revision} -gt 63 ||
+      ! "${expected_web_revision}" =~ ^[a-z]([a-z0-9-]*[a-z0-9])?$ ||
+      ${#expected_web_revision} -gt 63 ]]; then
+  echo "Invalid Cloud Run revision suffix '${revision_suffix}' for services '${service}' and '${runtime_service}'" >&2
+  echo "Both full revisions '${expected_web_revision}' and '${expected_revision}' must be lowercase DNS labels of at most 63 characters" >&2
+  exit 64
+fi
+
+if [[ "${deployment_resume_phase}" == "retarget" ]]; then
+  if [[ ! "${retarget_from_generation}" =~ ^[a-z]([a-z0-9-]*[a-z0-9])?$ ||
+        ${#retarget_from_generation} -gt 63 ||
+        "${retarget_from_generation}" != "${runtime_service}-"* ||
+        ! "${retarget_from_image_digest}" =~ ^sha256:[0-9a-f]{64}$ ||
+        ( "${retarget_from_phase}" != "deploying" &&
+          "${retarget_from_phase}" != "activating" ) ]]; then
+    echo "Retarget recovery requires a valid full previous generation, image digest, and previous phase (deploying or activating)" >&2
+    exit 64
+  fi
+
+  if [[ "${retarget_from_generation}" == "${expected_revision}" ]]; then
+    echo "Retarget recovery requires a fresh revision suffix" >&2
+    exit 64
+  fi
+
+  if [[ "${retarget_confirmation}" != "PREDECESSOR_CONTROLLER_JOBS_AND_SERVICE_OPERATIONS_STOPPED" ]]; then
+    echo "Retarget recovery requires MARAITHON_CONFIRM_RETARGET=PREDECESSOR_CONTROLLER_JOBS_AND_SERVICE_OPERATIONS_STOPPED" >&2
+    echo "Confirm the predecessor deploy controller and deployment jobs are stopped and all Cloud Run service operations are settled" >&2
+    exit 64
+  fi
+fi
+
+stable_source_unavailable_recovery=false
+
+if [[ -n "${unavailable_stable_generation}" ||
+      -n "${unavailable_stable_image_digest}" ||
+      -n "${unavailable_stable_confirmation}" ]]; then
+  if [[ ( "${deployment_resume_phase}" != "new" &&
+          "${deployment_resume_phase}" != "handoff" ) ||
+        ! "${unavailable_stable_generation}" =~ ^${runtime_service}-[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ||
+        ${#unavailable_stable_generation} -gt 63 ||
+        ! "${unavailable_stable_image_digest}" =~ ^sha256:[0-9a-f]{64}$ ||
+        "${unavailable_stable_confirmation}" != "STABLE_RUNTIME_SOURCE_UNAVAILABLE_AND_PREDECESSOR_STOPPED" ]]; then
+    echo "Stable-source-unavailable recovery is only valid for a fresh new target or its exact handoff recovery and requires the prior runtime generation/digest plus confirmation" >&2
+    exit 64
+  fi
+
+  stable_source_unavailable_recovery=true
+fi
+
+legacy_web_source_unavailable_recovery=false
+
+if [[ -n "${unavailable_legacy_web_generation}" ||
+      -n "${unavailable_legacy_web_image_digest}" ||
+      -n "${unavailable_legacy_web_confirmation}" ]]; then
+  if [[ "${deployment_resume_phase}" != "handoff" ||
+        ! "${unavailable_legacy_web_generation}" =~ ^${service}-[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ||
+        "${unavailable_legacy_web_generation}" == "${runtime_service}-"* ||
+        ${#unavailable_legacy_web_generation} -gt 63 ||
+        ! "${unavailable_legacy_web_image_digest}" =~ ^sha256:[0-9a-f]{64}$ ||
+        "${unavailable_legacy_web_confirmation}" != "LEGACY_WEB_RUNTIME_SOURCE_UNAVAILABLE_AND_PREDECESSOR_STOPPED" ]]; then
+    echo "Legacy web-runtime unavailable recovery is only valid for the one-time handoff recovery and requires the exact prior web revision/digest plus confirmation" >&2
+    exit 64
+  fi
+
+  if [[ "${stable_source_unavailable_recovery}" == "true" ]]; then
+    echo "Stable-runtime and legacy-web unavailable recovery inputs are mutually exclusive" >&2
+    exit 64
+  fi
+
+  legacy_web_source_unavailable_recovery=true
+fi
+
+echo "Cloud Run runtime deployment generation: ${expected_revision}"
+echo "Cloud Run web deployment revision: ${expected_web_revision}"
+echo "Recovery controller revision: MARAITHON_DEPLOYMENT_CONTROLLER_REVISION=${revision}"
+echo "Recovery secret snapshot: MARAITHON_DEPLOYMENT_SECRET_VERSIONS=${secret_version_snapshot}"
+echo "Recovery config manifest: MARAITHON_DEPLOYMENT_CONFIG_MANIFEST=${deployment_config_manifest}"
 
 # Drain the serving revision's coordination runtime before replacing it.
 # Cloud Run only grants ~10s after SIGTERM, which is shorter than a drain under
 # load; a stranded task keeps its partition draining until a human attests.
-# Best effort: older revisions have no endpoint and the token may be unreadable.
-service_host="https://${host}"
-api_token="$(gcloud secrets versions access latest --secret maraithon-api-bearer-token --project "${project}" 2>/dev/null || true)"
-drain_requested=false
+# Fail closed if the serving revision cannot prove a clean drain. Replacing an
+# exact-runtime revision without that proof can strand leased work permanently.
+if ! target_api_token="$(gcloud secrets versions access "${api_token_secret_version}" --secret maraithon-api-bearer-token --project "${project}" 2>/dev/null)"; then
+  echo "Unable to read the API bearer token required for the runtime drain" >&2
+  exit 1
+fi
 
-runtime_status() {
-  curl --silent --fail --max-time 15 -H "Authorization: Bearer ${api_token}" "${service_host}/api/v1/runtime/status" 2>/dev/null || true
-}
+if [[ -z "${target_api_token}" ]]; then
+  echo "The API bearer token required for the runtime drain is empty" >&2
+  exit 1
+fi
 
-runtime_rejoin() {
-  if [[ "${drain_requested}" == "true" && -n "${api_token}" ]]; then
-    curl --silent --max-time 15 -X POST -H "Authorization: Bearer ${api_token}" "${service_host}/api/v1/runtime/rejoin" >/dev/null 2>&1 || true
+api_token="${target_api_token}"
+
+cloud_run_service_exists=false
+deployment_controller_lock="${service}-deployment-controller-lock"
+deployment_controller_token=""
+deployment_controller_lock_uid=""
+deployment_controller_lock_owned=false
+deployment_controller_lock_json=""
+deployment_controller_lock_http_status=""
+
+fetch_deployment_controller_lock() {
+  local access_token
+  local response
+  local lock_url="https://run.googleapis.com/v2/projects/${project}/locations/${region}/jobs/${deployment_controller_lock}"
+
+  if ! access_token="$(gcloud auth print-access-token --project "${project}")" ||
+    [[ -z "${access_token}" ]]; then
+    echo "Unable to mint an access token for the Cloud Run deployment-controller lock" >&2
+    return 1
+  fi
+
+  if ! response="$(
+    curl --silent --show-error \
+      --header "Authorization: Bearer ${access_token}" \
+      --write-out $'\n%{http_code}' \
+      "${lock_url}"
+  )"; then
+    echo "Unable to query the Cloud Run deployment-controller lock" >&2
+    return 1
+  fi
+
+  deployment_controller_lock_http_status="${response##*$'\n'}"
+  deployment_controller_lock_json="${response%$'\n'*}"
+
+  if [[ "${deployment_controller_lock_http_status}" != "200" &&
+        "${deployment_controller_lock_http_status}" != "404" ]]; then
+    echo "Cloud Run returned HTTP ${deployment_controller_lock_http_status} for the deployment-controller lock" >&2
+    return 1
   fi
 }
+
+patch_deployment_controller_lock() {
+  local expected_state="$1"
+  local expected_token="$2"
+  local expected_uid="$3"
+  local desired_state="$4"
+  local desired_token="$5"
+  local access_token
+  local request_body
+  local response
+  local response_body
+  local response_status
+  local lock_url="https://run.googleapis.com/v2/projects/${project}/locations/${region}/jobs/${deployment_controller_lock}"
+
+  fetch_deployment_controller_lock || return 1
+
+  if [[ "${deployment_controller_lock_http_status}" != "200" ]] ||
+    ! jq -e \
+      --arg project_id "${project}" \
+      --arg project_number "${project_number}" \
+      --arg region "${region}" \
+      --arg job "${deployment_controller_lock}" \
+      --arg state "${expected_state}" \
+      --arg token "${expected_token}" \
+      --arg uid "${expected_uid}" '
+        (.name == "projects/\($project_id)/locations/\($region)/jobs/\($job)" or
+         .name == "projects/\($project_number)/locations/\($region)/jobs/\($job)") and
+        .uid == $uid and
+        (.reconciling // false) == false and
+        .observedGeneration == .generation and
+        .terminalCondition.state == "CONDITION_SUCCEEDED" and
+        .labels["maraithon-controller-lock"] == "true" and
+        .labels["maraithon-controller-state"] == $state and
+        (if $token == "" then
+           (.labels | has("maraithon-controller-token") | not)
+         else
+           .labels["maraithon-controller-token"] == $token
+         end) and
+        (.etag | type == "string" and length > 0)
+      ' >/dev/null 2>&1 <<<"${deployment_controller_lock_json}"; then
+    echo "The deployment-controller lock changed; refusing its compare-and-swap update" >&2
+    return 1
+  fi
+
+  if ! request_body="$(
+    jq -ce \
+      --arg state "${desired_state}" \
+      --arg token "${desired_token}" '
+        {
+          name,
+          labels: (
+            .labels + {"maraithon-controller-state": $state} |
+            if $token == "" then del(."maraithon-controller-token")
+            else . + {"maraithon-controller-token": $token}
+            end
+          ),
+          annotations,
+          launchStage,
+          binaryAuthorization,
+          template,
+          etag
+        } |
+        with_entries(select(.value != null))
+      ' <<<"${deployment_controller_lock_json}"
+  )"; then
+    echo "Unable to construct the exact-etag controller-lock update" >&2
+    return 1
+  fi
+
+  # Cloud Run v2 Jobs.Patch exposes no updateMask parameter. Preserve the
+  # current full mutable Job configuration and change only lock labels; the
+  # body etag is the server-side compare-and-swap precondition.
+
+  if ! access_token="$(gcloud auth print-access-token --project "${project}")" ||
+    [[ -z "${access_token}" ]]; then
+    echo "Unable to mint an access token to update the Cloud Run deployment-controller lock" >&2
+    return 1
+  fi
+
+  if ! response="$(
+    curl --silent --show-error \
+      --request PATCH \
+      --header "Authorization: Bearer ${access_token}" \
+      --header 'Content-Type: application/json' \
+      --data "${request_body}" \
+      --write-out $'\n%{http_code}' \
+      "${lock_url}"
+  )"; then
+    echo "The exact-etag compare-and-swap update of the controller lock failed" >&2
+    return 1
+  fi
+
+  response_status="${response##*$'\n'}"
+  response_body="${response%$'\n'*}"
+
+  if [[ "${response_status}" != "200" ]] ||
+    ! jq -e '.name | type == "string" and length > 0' \
+      >/dev/null 2>&1 <<<"${response_body}"; then
+    echo "Cloud Run rejected the exact-etag controller-lock compare-and-swap (HTTP ${response_status})" >&2
+    return 1
+  fi
+
+  for _attempt in $(seq 1 24); do
+    fetch_deployment_controller_lock || return 1
+
+    if [[ "${deployment_controller_lock_http_status}" == "200" ]] &&
+      jq -e \
+        --arg state "${desired_state}" \
+        --arg token "${desired_token}" \
+        --arg uid "${expected_uid}" '
+          .uid == $uid and
+          (.reconciling // false) == false and
+          .observedGeneration == .generation and
+          .terminalCondition.state == "CONDITION_SUCCEEDED" and
+          .labels["maraithon-controller-lock"] == "true" and
+          .labels["maraithon-controller-state"] == $state and
+          (if $token == "" then
+             (.labels | has("maraithon-controller-token") | not)
+           else
+             .labels["maraithon-controller-token"] == $token
+           end)
+        ' >/dev/null 2>&1 <<<"${deployment_controller_lock_json}"; then
+      return 0
+    fi
+
+    sleep 2
+  done
+
+  echo "Timed out waiting for the deployment-controller lock compare-and-swap" >&2
+  return 1
+}
+
+verify_deployment_controller_lock() {
+  if [[ "${deployment_controller_lock_owned}" != "true" ||
+        ! "${deployment_controller_token}" =~ ^[0-9a-f]{40}$ ||
+        -z "${deployment_controller_lock_uid}" ]]; then
+    echo "This process has no verified deployment-controller lock" >&2
+    return 1
+  fi
+
+  fetch_deployment_controller_lock || return 1
+
+  if [[ "${deployment_controller_lock_http_status}" != "200" ]] ||
+    ! jq -e \
+      --arg project_id "${project}" \
+      --arg project_number "${project_number}" \
+      --arg region "${region}" \
+      --arg job "${deployment_controller_lock}" \
+      --arg token "${deployment_controller_token}" \
+      --arg uid "${deployment_controller_lock_uid}" '
+        (.name == "projects/\($project_id)/locations/\($region)/jobs/\($job)" or
+         .name == "projects/\($project_number)/locations/\($region)/jobs/\($job)") and
+        .uid == $uid and
+        (.reconciling // false) == false and
+        .observedGeneration == .generation and
+        .terminalCondition.state == "CONDITION_SUCCEEDED" and
+        .labels["maraithon-controller-lock"] == "true" and
+        .labels["maraithon-controller-state"] == "held" and
+        .labels["maraithon-controller-token"] == $token and
+        (.etag | type == "string" and length > 0)
+      ' >/dev/null 2>&1 <<<"${deployment_controller_lock_json}"; then
+    echo "This process no longer owns the exact Cloud Run deployment-controller lock" >&2
+    return 1
+  fi
+}
+
+acquire_deployment_controller_lock() {
+  local existing_token
+  local existing_uid
+  local token_seed
+
+  fetch_deployment_controller_lock || return 1
+
+  token_seed="${expected_revision}-${image_digest}-${revision}-$(date -u +%Y%m%d%H%M%S%N)-$$-${RANDOM}"
+  deployment_controller_token="$(printf '%s' "${token_seed}" | git -C "${ROOT_DIR}" hash-object --stdin)"
+  echo "Crash-sticky controller token: MARAITHON_DEPLOYMENT_LOCK_PREDECESSOR_TOKEN=${deployment_controller_token}"
+
+  if [[ "${deployment_controller_lock_http_status}" == "200" ]]; then
+    if ! jq -e '
+      .labels["maraithon-controller-lock"] == "true" and
+      ((.labels["maraithon-controller-state"] == "free" and
+        (.labels | has("maraithon-controller-token") | not)) or
+       (.labels["maraithon-controller-state"] == "held" and
+        (.labels["maraithon-controller-token"] | type == "string" and test("^[0-9a-f]{40}$")))) and
+      (.uid | type == "string" and length > 0) and
+      (.etag | type == "string" and length > 0) and
+      (.reconciling // false) == false and
+      .observedGeneration == .generation and
+      .terminalCondition.state == "CONDITION_SUCCEEDED"
+    ' >/dev/null 2>&1 <<<"${deployment_controller_lock_json}"; then
+      echo "The fixed Cloud Run controller-lock resource is malformed or has unknown state" >&2
+      return 1
+    fi
+
+    existing_uid="$(jq -er '.uid | select(type == "string" and length > 0)' <<<"${deployment_controller_lock_json}")"
+
+    if jq -e '
+      .labels["maraithon-controller-lock"] == "true" and
+      .labels["maraithon-controller-state"] == "free" and
+      (.labels | has("maraithon-controller-token") | not)
+    ' >/dev/null 2>&1 <<<"${deployment_controller_lock_json}"; then
+      if [[ -n "${predecessor_controller_token}" || -n "${lock_recovery_confirmation}" ]]; then
+        echo "Lock-recovery credentials were supplied, but the persistent controller lock is free" >&2
+        return 1
+      fi
+
+      patch_deployment_controller_lock \
+        free "" "${existing_uid}" held "${deployment_controller_token}" || return 1
+      deployment_controller_lock_uid="${existing_uid}"
+      deployment_controller_lock_owned=true
+      verify_deployment_controller_lock
+      return
+    fi
+
+    if [[ ! "${predecessor_controller_token}" =~ ^[0-9a-f]{40}$ ||
+          "${lock_recovery_confirmation}" != "PREDECESSOR_CONTROLLER_STOPPED_AND_CLOUD_RUN_OPERATIONS_SETTLED" ]]; then
+      echo "A crash-sticky production deployment-controller lock is held" >&2
+      echo "Only after proving the predecessor controller is stopped and all Cloud Run operations have settled, recover with its exact printed token and confirmation phrase" >&2
+      return 1
+    fi
+
+    if ! existing_token="$(
+      jq -er '
+        select(
+          .labels["maraithon-controller-lock"] == "true" and
+          .labels["maraithon-controller-state"] == "held"
+        ) |
+        .labels["maraithon-controller-token"] |
+        select(type == "string")
+      ' <<<"${deployment_controller_lock_json}"
+    )" || [[ "${existing_token}" != "${predecessor_controller_token}" ]]; then
+      echo "The supplied predecessor token does not exactly match the sticky controller lock" >&2
+      return 1
+    fi
+
+    echo "Atomically replacing the exact predecessor token after explicit stopped/settled confirmation"
+    patch_deployment_controller_lock \
+      held "${existing_token}" "${existing_uid}" held "${deployment_controller_token}" || return 1
+    deployment_controller_lock_uid="${existing_uid}"
+    deployment_controller_lock_owned=true
+    verify_deployment_controller_lock
+    return
+  elif [[ -n "${predecessor_controller_token}" || -n "${lock_recovery_confirmation}" ]]; then
+    echo "Lock-recovery credentials were supplied, but the predecessor lock is absent" >&2
+    echo "Refusing because absence cannot prove that the predecessor controller has stopped" >&2
+    return 1
+  fi
+
+  # `jobs create` is an atomic create-if-absent operation. Never use deploy or
+  # update here: an overlapping controller must fail instead of replacing the
+  # token that fences every database-gate and traffic mutation below.
+  if ! gcloud run jobs create "${deployment_controller_lock}" \
+    --project "${project}" \
+    --region "${region}" \
+    --image "${pinned_image}" \
+    --service-account "${runtime_service_account}" \
+    --labels "maraithon-controller-lock=true,maraithon-controller-state=held,maraithon-controller-token=${deployment_controller_token}" \
+    --command /bin/sh \
+    --args=-c,true \
+    --tasks 1 \
+    --parallelism 1 \
+    --task-timeout 1m \
+    --max-retries 0 \
+    --quiet; then
+    echo "Atomic acquisition of the deployment-controller lock failed; another controller may own it" >&2
+    return 1
+  fi
+
+  for _attempt in $(seq 1 24); do
+    fetch_deployment_controller_lock || return 1
+
+    if [[ "${deployment_controller_lock_http_status}" == "200" ]] &&
+      jq -e --arg token "${deployment_controller_token}" '
+        (.reconciling // false) == false and
+        .observedGeneration == .generation and
+        .terminalCondition.state == "CONDITION_SUCCEEDED" and
+        .labels["maraithon-controller-lock"] == "true" and
+        .labels["maraithon-controller-state"] == "held" and
+        .labels["maraithon-controller-token"] == $token
+      ' >/dev/null 2>&1 <<<"${deployment_controller_lock_json}"; then
+      break
+    fi
+
+    sleep 2
+  done
+
+  if [[ "${deployment_controller_lock_http_status}" != "200" ]] ||
+    ! deployment_controller_lock_uid="$(
+      jq -er \
+        --arg token "${deployment_controller_token}" '
+          select(
+            (.reconciling // false) == false and
+            .observedGeneration == .generation and
+            .terminalCondition.state == "CONDITION_SUCCEEDED" and
+            .labels["maraithon-controller-lock"] == "true" and
+            .labels["maraithon-controller-state"] == "held" and
+            .labels["maraithon-controller-token"] == $token and
+            (.etag | type == "string" and length > 0)
+          ) |
+          .uid | select(type == "string" and length > 0)
+        ' <<<"${deployment_controller_lock_json}"
+    )"; then
+    echo "Cloud Run did not return the newly acquired controller lock identity" >&2
+    return 1
+  fi
+
+  deployment_controller_lock_owned=true
+  verify_deployment_controller_lock
+}
+
+release_deployment_controller_lock() {
+  verify_deployment_controller_lock || return 1
+  patch_deployment_controller_lock \
+    held "${deployment_controller_token}" "${deployment_controller_lock_uid}" free "" || return 1
+  deployment_controller_lock_owned=false
+  echo "Released exact persistent deployment-controller lock ${deployment_controller_lock}"
+}
+
+cloud_run_service_not_found() {
+  local output="$1"
+  local service_name="$2"
+
+  [[ "${output}" == *"Cannot find service [${service_name}]"* ||
+    "${output}" == *"Service [${service_name}] could not be found."* ||
+    "${output}" == *"Service '${service_name}' not found"* ||
+    "${output}" == *"Resource '${service_name}' was not found"* ]]
+}
+
+probe_cloud_run_service() {
+  local service_name="$1"
+  local output
+
+  if output="$(
+    gcloud --verbosity=error run services describe "${service_name}" \
+      --project "${project}" \
+      --region "${region}" \
+      --format='value(metadata.name)' 2>&1
+  )"; then
+    if [[ "${output}" != "${service_name}" ]]; then
+      echo "Cloud Run returned an unexpected service identity: ${output}" >&2
+      return 1
+    fi
+
+    cloud_run_service_exists=true
+  elif cloud_run_service_not_found "${output}" "${service_name}"; then
+    cloud_run_service_exists=false
+  else
+    echo "Unable to determine whether Cloud Run service ${service_name} exists" >&2
+    echo "${output}" >&2
+    return 1
+  fi
+}
+
+cloud_run_service_url() {
+  local service_name="$1"
+  local url
+
+  if ! url="$(
+    gcloud run services describe "${service_name}" \
+      --project "${project}" \
+      --region "${region}" \
+      --format='value(status.url)'
+  )" || [[ ! "${url}" =~ ^https://[a-z0-9.-]+\.run\.app$ ]]; then
+    echo "Unable to resolve the authoritative Cloud Run URL for ${service_name}" >&2
+    return 1
+  fi
+
+  printf '%s\n' "${url}"
+}
+
+set_api_token_from_serving_revision() {
+  local service_name="$1"
+  local service_json
+  local serving_revision
+  local revision_json
+  local secret_ref
+  local source_secret_name
+  local source_secret_version
+
+  service_json="$(
+    gcloud run services describe "${service_name}" \
+      --project "${project}" \
+      --region "${region}" \
+      --format=json
+  )"
+
+  if ! serving_revision="$(
+    jq -er '
+      [.status.traffic[]? | select((.percent // 0) > 0)] as $active |
+      select(($active | length) == 1 and $active[0].percent == 100) |
+      $active[0].revisionName | select(type == "string" and length > 0)
+    ' <<<"${service_json}"
+  )"; then
+    echo "Runtime source ${service_name} does not have one exact 100% serving revision" >&2
+    return 1
+  fi
+
+  revision_json="$(
+    gcloud run revisions describe "${serving_revision}" \
+      --project "${project}" \
+      --region "${region}" \
+      --format=json
+  )"
+
+  if ! secret_ref="$(
+    jq -er '
+      [.spec.containers[0].env[]? |
+        select(.name == "API_BEARER_TOKEN") |
+        .valueFrom.secretKeyRef] |
+      select(length == 1) | .[0] |
+      [.name, .key] | @tsv
+    ' <<<"${revision_json}"
+  )"; then
+    echo "Serving revision ${serving_revision} does not have one Secret Manager API bearer binding" >&2
+    return 1
+  fi
+
+  IFS=$'\t' read -r source_secret_name source_secret_version <<<"${secret_ref}"
+
+  if [[ "${source_secret_name}" != "maraithon-api-bearer-token" ||
+        ("${source_secret_version}" != "latest" &&
+         ! "${source_secret_version}" =~ ^[1-9][0-9]*$) ]]; then
+    echo "Serving revision ${serving_revision} has an invalid API bearer secret identity" >&2
+    return 1
+  fi
+
+  if ! api_token="$(
+    gcloud secrets versions access "${source_secret_version}" \
+      --secret "${source_secret_name}" \
+      --project "${project}" 2>/dev/null
+  )" || [[ -z "${api_token}" ]]; then
+    echo "Unable to read the API bearer version used by ${serving_revision}" >&2
+    return 1
+  fi
+
+  echo "Runtime source credential revision: ${serving_revision}"
+}
+
+runtime_control_url=""
+runtime_identity_token=""
+
+configure_runtime_control() {
+  local service_name="$1"
+
+  runtime_control_url="$(cloud_run_service_url "${service_name}")"
+  runtime_identity_token=""
+
+  if [[ "${service_name}" == "${runtime_service}" ]]; then
+    if ! runtime_identity_token="$(
+      gcloud auth print-identity-token \
+        --impersonate-service-account "${deployer_service_account}" \
+        --audiences "${runtime_control_url}" \
+        --include-email \
+        --project "${project}"
+    )" || [[ -z "${runtime_identity_token}" ]]; then
+      echo "Unable to mint the Google-signed ID token required to invoke ${runtime_service}" >&2
+      return 1
+    fi
+  fi
+}
+
+runtime_request() {
+  local method="$1"
+  local path="$2"
+  local headers=(-H "Authorization: Bearer ${api_token}")
+
+  if [[ -n "${runtime_identity_token}" ]]; then
+    # Cloud Run consumes this header for IAM while the application consumes
+    # Authorization for its own API bearer-token check.
+    headers+=(-H "X-Serverless-Authorization: Bearer ${runtime_identity_token}")
+  fi
+
+  curl --silent --show-error --fail --max-time 15 \
+    -X "${method}" \
+    "${headers[@]}" \
+    "${runtime_control_url}${path}"
+}
+
+request_runtime_drain() {
+  # Drain mutates the exact runtime. Fence it at the call boundary so a
+  # controller replaced by the lock CAS cannot drain the current owner after
+  # doing otherwise read-only source discovery or token setup.
+  verify_deployment_controller_lock || return 1
+  runtime_request POST /api/v1/runtime/drain
+}
+
+runtime_status() {
+  runtime_request GET /api/v1/runtime/status 2>/dev/null || true
+}
+
+runtime_status_matches_strong_drain() {
+  jq -e '
+    type == "object" and
+    .phase == "draining" and
+    .node_fenced == true and
+    .admitting_nodes == 0 and
+    .admitting_partitions == 0 and
+    .open_tasks == 0 and
+    .unproven_tasks == 0 and
+    .local_agent_leases == 0 and
+    .agent_leases == 0
+  ' >/dev/null 2>&1 <<<"$1"
+}
+
+runtime_status_matches_dormant_global_drain() {
+  jq -e '
+    type == "object" and
+    .phase == "dormant" and
+    has("node_incarnation_id") and
+    .node_incarnation_id == null and
+    .node_fenced == false and
+    .admitting_nodes == 0 and
+    .admitting_partitions == 0 and
+    .owned_partitions == 0 and
+    .open_tasks == 0 and
+    .unproven_tasks == 0 and
+    .local_agent_leases == 0 and
+    .agent_leases == 0
+  ' >/dev/null 2>&1 <<<"$1"
+}
+
+runtime_status_matches_legacy_drain() {
+  jq -e '
+    type == "object" and
+    (has("admitting_partitions") | not) and
+    .phase == "draining" and
+    .open_tasks == 0 and
+    .unproven_tasks == 0 and
+    .local_agent_leases == 0
+  ' >/dev/null 2>&1 <<<"$1"
+}
+
+runtime_status_matches_legacy_dormant() {
+  jq -e '
+    type == "object" and
+    (has("admitting_partitions") | not) and
+    .phase == "dormant" and
+    .node_incarnation_id == null and
+    .open_tasks == 0 and
+    .unproven_tasks == 0 and
+    .local_agent_leases == 0
+  ' >/dev/null 2>&1 <<<"$1"
+}
+
+runtime_status_has_legacy_contract() {
+  jq -e '
+    type == "object" and
+    (.phase | type) == "string" and
+    (has("admitting_partitions") | not)
+  ' >/dev/null 2>&1 <<<"$1"
+}
+
+runtime_status_matches_dormant_generation() {
+  jq -e --arg generation "$2" --arg digest "$3" '
+    type == "object" and
+    .process_role == "runtime" and
+    .deployment_generation == $generation and
+    .phase == "dormant" and
+    .node_incarnation_id == null and
+    .node_fenced == false and
+    .admitting_nodes == 0 and
+    .admitting_partitions == 0 and
+    .owned_partitions == 0 and
+    .open_tasks == 0 and
+    .unproven_tasks == 0 and
+    .local_agent_leases == 0 and
+    .agent_leases == 0 and
+    .deployment_gate.state == "deploying" and
+    .deployment_gate.target_generation == $generation and
+    .deployment_gate.image_digest == $digest
+  ' >/dev/null 2>&1 <<<"$1"
+}
+
+runtime_status_matches_ready_activating_generation() {
+  jq -e --arg generation "$2" --arg digest "$3" '
+    type == "object" and
+    .process_role == "runtime" and
+    .deployment_generation == $generation and
+    .phase == "ready" and
+    .node_fenced == false and
+    .admitting_nodes == 1 and
+    .unready_partitions == 0 and
+    .deployment_gate.state == "activating" and
+    .deployment_gate.target_generation == $generation and
+    .deployment_gate.image_digest == $digest
+  ' >/dev/null 2>&1 <<<"$1"
+}
+
+runtime_status_matches_ready_stable_generation() {
+  jq -e --arg generation "$2" --arg digest "$3" '
+    type == "object" and
+    .process_role == "runtime" and
+    .deployment_generation == $generation and
+    .phase == "ready" and
+    .node_fenced == false and
+    .admitting_nodes == 1 and
+    .unready_partitions == 0 and
+    .deployment_gate.state == "stable" and
+    .deployment_gate.target_generation == $generation and
+    .deployment_gate.stable_generation == $generation and
+    .deployment_gate.image_digest == $digest
+  ' >/dev/null 2>&1 <<<"$1"
+}
+
+verify_deployment_job() {
+  local job_json
+
+  if ! job_json="$(
+    gcloud run jobs describe "${deployment_job}" \
+      --project "${project}" \
+      --region "${region}" \
+      --format=json
+  )"; then
+    echo "Unable to describe deployment job ${deployment_job}" >&2
+    return 1
+  fi
+
+  if ! jq -e \
+    --arg job "${deployment_job}" \
+    --arg image "${pinned_image}" \
+    --arg service_account "${runtime_service_account}" \
+    --arg cloud_sql_connection "${connection}" \
+    --arg protocol_revision "${protocol_revision}" \
+    --arg migrator_database_secret_version "${migrator_database_secret_version}" \
+    --arg api_token_secret_version "${api_token_secret_version}" \
+    --arg secret_bindings "${migration_secrets}" \
+    --arg expected_env "${maintenance_env}" \
+    --arg default_expression 'raise("deployment job requires an explicit execution override")' '
+    def task_spec: .spec.template.spec.template.spec;
+    def container: task_spec.containers[0];
+    def env_value($name):
+      [container.env[]? | select(.name == $name) | .value] | first;
+    def secret_ref($name):
+      [container.env[]? | select(.name == $name) | .valueFrom.secretKeyRef] | first;
+    def expected_secret_refs($bindings):
+      reduce ($bindings | split(",")[]) as $binding
+        ({};
+         ($binding |
+           capture("^(?<env>[A-Z0-9_]+)=(?<name>[a-z0-9-]+):(?<key>[1-9][0-9]*)$")) as $parsed |
+         .[$parsed.env] = {name: $parsed.name, key: $parsed.key});
+    def actual_secret_refs:
+      reduce (container.env[]? | select(.valueFrom.secretKeyRef? != null)) as $env
+        ({}; .[$env.name] = $env.valueFrom.secretKeyRef);
+    def expected_plain_env($bindings):
+      reduce ($bindings | split(",")[]) as $binding
+        ({};
+         ($binding | capture("^(?<name>[A-Z0-9_]+)=(?<value>.*)$")) as $parsed |
+         .[$parsed.name] = $parsed.value);
+    def actual_plain_env:
+      reduce (container.env[]? | select(has("value"))) as $env
+        ({}; .[$env.name] = $env.value);
+
+    type == "object" and
+    .metadata.name == $job and
+    .metadata.labels["maraithon-deployment-job"] == "true" and
+    .spec.template.metadata.annotations["run.googleapis.com/cloudsql-instances"] == $cloud_sql_connection and
+    .spec.template.spec.parallelism == 1 and
+    .spec.template.spec.taskCount == 1 and
+    task_spec.serviceAccountName == $service_account and
+    task_spec.maxRetries == 0 and
+    (task_spec.timeoutSeconds | tostring) == "1800" and
+    (task_spec.containers | type == "array" and length == 1) and
+    ([container.env[]?.name] | length == (unique | length)) and
+    container.image == $image and
+    container.command == ["/app/bin/maraithon"] and
+    container.args == ["eval", $default_expression] and
+    (container.resources.limits.cpu | tostring) == "1" and
+    container.resources.limits.memory == "2Gi" and
+    env_value("MARAITHON_PROCESS_ROLE") == "maintenance" and
+    env_value("POOL_SIZE") == "2" and
+    env_value("EXACT_AGENT_RUNTIME_ENABLED") == "true" and
+    env_value("MULTINODE_COORDINATION_ENABLED") == "true" and
+    env_value("DATABASE_POOL_MODE") == "session" and
+    env_value("GIT_SHA") == $protocol_revision and
+    actual_plain_env == expected_plain_env($expected_env) and
+    secret_ref("DATABASE_URL").name == "maraithon-migrator-db-url" and
+    secret_ref("DATABASE_URL").key == $migrator_database_secret_version and
+    secret_ref("DIRECT_DATABASE_URL").name == "maraithon-migrator-db-url" and
+    secret_ref("DIRECT_DATABASE_URL").key == $migrator_database_secret_version and
+    secret_ref("API_BEARER_TOKEN").name == "maraithon-api-bearer-token" and
+    secret_ref("API_BEARER_TOKEN").key == $api_token_secret_version and
+    actual_secret_refs == expected_secret_refs($secret_bindings) and
+    ([container.env[]? | .valueFrom.secretKeyRef? | select(.)] |
+      all(.[]; (.key | type) == "string" and (.key | test("^[1-9][0-9]*$"))))
+  ' >/dev/null 2>&1 <<<"${job_json}"; then
+    echo "Deployment job ${deployment_job} failed its exact identity, database, role, image, command, or execution-limit proof" >&2
+    return 1
+  fi
+}
+
+execute_deployment_job() {
+  verify_deployment_controller_lock || return 1
+
+  if gcloud run jobs execute "${deployment_job}" \
+    --project "${project}" \
+    --region "${region}" \
+    "$@" \
+    --wait \
+    --quiet; then
+    :
+  else
+    return 1
+  fi
+}
+
+run_gate_bootstrap_migrations() {
+  verify_deployment_job || return 1
+
+  execute_deployment_job \
+    --args="^@^eval@Maraithon.Release.migrate_to(${deployment_gate_migration_version})" \
+    --update-env-vars "POOL_SIZE=2"
+}
+
+run_full_migrations() {
+  verify_deployment_job || return 1
+
+  execute_deployment_job \
+    --args="^@^eval@Maraithon.Release.migrate" \
+    --update-env-vars "POOL_SIZE=2"
+}
+
+global_quiescence_db_preflight() {
+  local expression
+
+  expression="$(cat <<'ELIXIR'
+Application.load(:maraithon)
+sql = """
+SELECT
+  NOT EXISTS (
+    SELECT 1 FROM public.runtime_node_incarnations
+    WHERE state IN ('joining', 'ready')
+      AND lease_expires_at > timezone('UTC', clock_timestamp())
+  ),
+  NOT EXISTS (
+    SELECT 1 FROM public.runtime_leader_authorities
+    WHERE state IN ('preparing', 'ready')
+      AND lease_expires_at > timezone('UTC', clock_timestamp())
+  ),
+  NOT EXISTS (
+    SELECT 1 FROM public.runtime_partitions
+    WHERE state IN ('preparing', 'ready')
+      AND (
+        lease_expires_at IS NULL OR
+        lease_expires_at > timezone('UTC', clock_timestamp())
+      )
+  ),
+  NOT EXISTS (
+    SELECT 1 FROM public.runtime_task_assignments
+    WHERE state IN ('reserved', 'running', 'termination_requested', 'termination_proven')
+  ),
+  NOT EXISTS (SELECT 1 FROM public.agent_runtime_leases)
+"""
+
+{:ok, checks, _apps} =
+  Ecto.Migrator.with_repo(Maraithon.Repo, fn repo ->
+    repo.query!(sql, []).rows |> hd()
+  end)
+
+keys = ~w(no_live_nodes no_live_leader no_admitting_partitions no_unresolved_tasks no_agent_leases)
+IO.puts("GLOBAL_RUNTIME_QUIESCENCE=" <> Jason.encode!(Map.new(Enum.zip(keys, checks))))
+unless Enum.all?(checks, &(&1 == true)), do: raise("global runtime is not quiescent")
+ELIXIR
+)"
+
+  verify_deployment_job || return 1
+
+  execute_deployment_job \
+    --args="^@^eval@${expression}" \
+    --update-env-vars "POOL_SIZE=2"
+}
+
+legacy_drain_db_preflight() {
+  local node_id="$1"
+  local expression
+
+  expression="$(cat <<'ELIXIR'
+Application.load(:maraithon)
+node_id = System.fetch_env!("LEGACY_DRAIN_NODE_ID")
+sql = """
+SELECT
+  EXISTS (
+    SELECT 1 FROM public.runtime_node_incarnations
+    WHERE id = $1::uuid AND state IN ('draining', 'revoked') AND ready_at IS NULL
+  ),
+  NOT EXISTS (
+    SELECT 1 FROM public.runtime_partitions WHERE state IN ('preparing', 'ready')
+  ),
+  NOT EXISTS (
+    SELECT 1 FROM public.runtime_task_assignments
+    WHERE state IN ('reserved', 'running', 'termination_requested', 'termination_proven')
+  ),
+  NOT EXISTS (SELECT 1 FROM public.agent_runtime_leases)
+"""
+
+{:ok, checks, _apps} =
+  Ecto.Migrator.with_repo(Maraithon.Repo, fn repo ->
+    repo.query!(sql, [Ecto.UUID.dump!(node_id)]).rows |> hd()
+  end)
+
+keys = ~w(node_fenced no_admitting_partitions no_unresolved_tasks no_agent_leases)
+IO.puts("LEGACY_DRAIN_DB_PREFLIGHT=" <> Jason.encode!(Map.new(Enum.zip(keys, checks))))
+unless Enum.all?(checks, &(&1 == true)), do: raise("legacy runtime drain DB preflight failed")
+ELIXIR
+)"
+
+  verify_deployment_job || return 1
+
+  execute_deployment_job \
+    --args="^@^eval@${expression}" \
+    --update-env-vars "POOL_SIZE=2,LEGACY_DRAIN_NODE_ID=${node_id}"
+}
+
+deployment_gate_transition() {
+  local action="$1"
+  local expression
+
+  verify_deployment_controller_lock || return 1
+
+  expression="$(cat <<'ELIXIR'
+Application.load(:maraithon)
+action = System.fetch_env!("RUNTIME_DEPLOYMENT_GATE_ACTION")
+target_generation = System.fetch_env!("RUNTIME_DEPLOYMENT_GATE_GENERATION")
+image_digest = System.fetch_env!("RUNTIME_DEPLOYMENT_GATE_IMAGE_DIGEST")
+previous_generation = System.get_env("RUNTIME_DEPLOYMENT_GATE_PREVIOUS_GENERATION")
+previous_image_digest = System.get_env("RUNTIME_DEPLOYMENT_GATE_PREVIOUS_IMAGE_DIGEST")
+previous_phase = System.get_env("RUNTIME_DEPLOYMENT_GATE_PREVIOUS_PHASE")
+unavailable_stable_generation =
+  System.get_env("RUNTIME_DEPLOYMENT_UNAVAILABLE_STABLE_GENERATION")
+
+unavailable_stable_image_digest =
+  System.get_env("RUNTIME_DEPLOYMENT_UNAVAILABLE_STABLE_IMAGE_DIGEST")
+resume_phase = System.fetch_env!("RUNTIME_DEPLOYMENT_RESUME_PHASE")
+protocol_revision = System.fetch_env!("RUNTIME_DEPLOYMENT_PROTOCOL_REVISION")
+web_service = System.fetch_env!("RUNTIME_DEPLOYMENT_WEB_SERVICE")
+runtime_service = System.fetch_env!("RUNTIME_DEPLOYMENT_RUNTIME_SERVICE")
+
+{:ok, result, _apps} =
+  Ecto.Migrator.with_repo(Maraithon.Repo, fn repo ->
+    case action do
+      "arm" ->
+        Maraithon.Runtime.Coordination.Authority.arm_deployment_handoff(
+          target_generation,
+          image_digest
+        )
+
+      "prove" ->
+        Maraithon.Runtime.Coordination.Authority.prove_deployment_handoff(
+          target_generation,
+          image_digest
+        )
+
+      "activate" ->
+        Maraithon.Runtime.Coordination.Authority.activate_deployment_generation(
+          target_generation,
+          image_digest
+        )
+
+      "stabilize" ->
+        # The authenticated runtime status can become ready just before a
+        # replaced same-revision instance's lease expires. The authority
+        # transaction rolls back with this one closed error while that overlap
+        # remains visible. Retry only that typed result inside this single job
+        # execution; every other error still fails immediately below.
+        stabilize = fn stabilize, attempt ->
+          case Maraithon.Runtime.Coordination.Authority.stabilize_deployment_generation(
+                 target_generation,
+                 image_digest
+               ) do
+            {:error, :deployment_generation_not_ready} when attempt < 13 ->
+              IO.puts(
+                "Runtime deployment generation is not transactionally ready; " <>
+                  "retrying stabilization (#{attempt}/12)"
+              )
+
+              Process.sleep(5_000)
+              stabilize.(stabilize, attempt + 1)
+
+            result ->
+              result
+          end
+        end
+
+        stabilize.(stabilize, 1)
+
+      "abort" ->
+        # Incident-only primitive: never call this from automatic cleanup. The
+        # operator must supply the exact target/digest and first confirm that
+        # no out-of-band migration execution was launched for this handoff.
+        Maraithon.Runtime.Coordination.Authority.abort_deployment_handoff(
+          target_generation,
+          image_digest
+        )
+
+      "retarget" ->
+        Maraithon.Runtime.Coordination.Authority.retarget_deployment_handoff(
+          previous_generation,
+          previous_image_digest,
+          target_generation,
+          image_digest
+        )
+
+      "preflight_migration" ->
+        protocol_table_exists =
+          repo.query!(
+            "SELECT pg_catalog.to_regclass('public.runtime_coordination_protocols') IS NOT NULL",
+            []
+          ).rows == [[true]]
+
+        runtime_protocol =
+          if protocol_table_exists do
+            case repo.query!(
+                   "SELECT mode, exact_revision FROM public.runtime_coordination_protocols WHERE name = 'runtime'",
+                   []
+                 ).rows do
+              [[mode, exact_revision]] -> %{mode: mode, exact_revision: exact_revision}
+              [] -> nil
+            end
+          end
+
+        node_table_exists =
+          repo.query!(
+            "SELECT pg_catalog.to_regclass('public.runtime_node_incarnations') IS NOT NULL",
+            []
+          ).rows == [[true]]
+
+        schema_migrations_exists =
+          repo.query!(
+            "SELECT pg_catalog.to_regclass('public.schema_migrations') IS NOT NULL",
+            []
+          ).rows == [[true]]
+
+        gate_installed =
+          schema_migrations_exists and
+            repo.query!(
+              "SELECT EXISTS (SELECT 1 FROM public.schema_migrations WHERE version = $1)",
+              [20_260_904_190_000]
+            ).rows == [[true]]
+
+        latest =
+          if node_table_exists do
+            case repo.query!(
+                   """
+                   SELECT metadata
+                   FROM public.runtime_node_incarnations
+                   WHERE node_name = '__maraithon_deployment_gate__'
+                     AND metadata ->> 'kind' = 'deployment_gate'
+                   ORDER BY (metadata ->> 'sequence')::bigint DESC
+                   LIMIT 1
+                   """,
+                   []
+                 ).rows do
+              [[metadata]] -> metadata
+              [] -> nil
+            end
+          end
+
+        target_used =
+          node_table_exists and
+            repo.query!(
+              """
+              SELECT EXISTS (
+                SELECT 1
+                FROM public.runtime_node_incarnations
+                WHERE node_name = '__maraithon_deployment_gate__'
+                  AND metadata ->> 'kind' = 'deployment_gate'
+                  AND $1 IN (
+                    metadata ->> 'target_generation',
+                    metadata ->> 'stable_generation',
+                    metadata ->> 'previous_generation'
+                  )
+              )
+              """,
+              [target_generation]
+            ).rows == [[true]]
+
+        %{
+          gate_installed: gate_installed,
+          latest: latest,
+          node_table_exists: node_table_exists,
+          runtime_protocol: runtime_protocol,
+          target_used: target_used
+        }
+
+      phase
+      when phase in [
+             "assert_deploying",
+             "assert_activating",
+             "assert_stable",
+             "assert_unavailable_stable",
+             "assert_source_runtime",
+             "assert_source_web"
+           ] ->
+        repo.query!(
+          """
+          SELECT (metadata ->> 'sequence')::bigint,
+                 metadata ->> 'state',
+                 metadata ->> 'target_generation',
+                 metadata ->> 'stable_generation',
+                 metadata ->> 'previous_generation',
+                 metadata ->> 'image_digest'
+          FROM public.runtime_node_incarnations
+          WHERE node_name = '__maraithon_deployment_gate__'
+            AND metadata ->> 'kind' = 'deployment_gate'
+          ORDER BY (metadata ->> 'sequence')::bigint DESC
+          LIMIT 1
+          """,
+          []
+        ).rows
+
+      "assert_initial_handoff" ->
+        repo.query!(
+          """
+          WITH latest AS (
+            SELECT metadata
+            FROM public.runtime_node_incarnations
+            WHERE node_name = '__maraithon_deployment_gate__'
+              AND metadata ->> 'kind' = 'deployment_gate'
+            ORDER BY (metadata ->> 'sequence')::bigint DESC
+            LIMIT 1
+          )
+          SELECT EXISTS (
+            SELECT 1
+            FROM latest
+            WHERE metadata ->> 'state' = 'handoff'
+              AND metadata ->> 'target_generation' = $1
+              AND metadata ->> 'stable_generation' = 'legacy'
+              AND metadata ->> 'previous_generation' = 'legacy'
+              AND metadata ->> 'image_digest' = $2
+              AND NOT EXISTS (
+                SELECT 1
+                FROM public.runtime_node_incarnations AS marker
+                WHERE marker.node_name = '__maraithon_deployment_gate__'
+                  AND marker.metadata ->> 'kind' = 'deployment_gate'
+                  AND marker.metadata ->> 'state' = 'stable'
+                  AND marker.metadata ->> 'stable_generation' <> 'legacy'
+              )
+          )
+          """,
+          [target_generation, image_digest]
+        ).rows
+
+      "assert_unavailable_handoff" ->
+        repo.query!(
+          """
+          WITH ordered AS (
+            SELECT metadata,
+                   row_number() OVER (
+                     ORDER BY (metadata ->> 'sequence')::bigint DESC
+                   ) AS position
+            FROM public.runtime_node_incarnations
+            WHERE node_name = '__maraithon_deployment_gate__'
+              AND metadata ->> 'kind' = 'deployment_gate'
+          )
+          SELECT EXISTS (
+            SELECT 1
+            FROM ordered AS latest
+            WHERE latest.position = 1
+              AND latest.metadata ->> 'state' = 'handoff'
+              AND latest.metadata ->> 'target_generation' = $1
+              AND latest.metadata ->> 'stable_generation' = $2
+              AND latest.metadata ->> 'previous_generation' = $2
+              AND latest.metadata ->> 'image_digest' = $3
+              AND EXISTS (
+                SELECT 1
+                FROM ordered AS prior
+                WHERE prior.position > 1
+                  AND prior.metadata ->> 'state' = 'stable'
+                  AND prior.metadata ->> 'stable_generation' = $2
+                  AND prior.metadata ->> 'image_digest' = $4
+              )
+          )
+          """,
+          [
+            target_generation,
+            unavailable_stable_generation,
+            image_digest,
+            unavailable_stable_image_digest
+          ]
+        ).rows
+
+      _ ->
+        raise "unknown runtime deployment gate action"
+    end
+  end)
+
+accepted =
+  case {action, result} do
+    {"arm", {:ok, status}} when status in [:armed, :already_armed] -> status
+    {"prove", {:ok, status}} when status in [:proven, :already_proven] -> status
+    {"activate", {:ok, status}} when status in [:activated, :already_activating] -> status
+    {"stabilize", {:ok, status}} when status in [:stabilized, :already_stable] -> status
+    {"abort", {:ok, status}} when status in [:aborted, :already_aborted] -> status
+    {"retarget", {:ok, status}} when status in [:retargeted, :already_retargeted] -> status
+
+    {"preflight_migration", gate_state} ->
+      case gate_state do
+        %{
+          runtime_protocol: %{
+            mode: "partition_fenced_v1",
+            exact_revision: ^protocol_revision
+          }
+        } ->
+          case {resume_phase, gate_state} do
+            {"new", %{latest: nil, target_used: false}} ->
+              :bootstrap
+
+            {"new",
+             %{
+               gate_installed: true,
+               latest: %{"state" => state},
+               target_used: false
+             }}
+            when state in ["stable", "aborted"] ->
+              :open
+
+            {"handoff",
+             %{
+               gate_installed: true,
+               latest: %{
+                 "state" => "handoff",
+                 "target_generation" => ^target_generation,
+                 "image_digest" => ^image_digest
+               }
+             }} ->
+              :handoff
+
+            {"deploying",
+             %{
+               gate_installed: true,
+               latest: %{
+                 "state" => "deploying",
+                 "target_generation" => ^target_generation,
+                 "image_digest" => ^image_digest
+               }
+             }} ->
+              :deploying
+
+            {"activating",
+             %{
+               gate_installed: true,
+               latest: %{
+                 "state" => "activating",
+                 "target_generation" => ^target_generation,
+                 "image_digest" => ^image_digest
+               }
+             }} ->
+              :activating
+
+            {"retarget",
+             %{
+               gate_installed: true,
+               target_used: false,
+               latest: %{
+                 "state" => state,
+                 "target_generation" => ^previous_generation,
+                 "image_digest" => ^previous_image_digest
+               }
+             }}
+            when state == previous_phase and state in ["deploying", "activating"] ->
+              :retarget
+
+            {"stable",
+             %{
+               gate_installed: true,
+               latest: %{
+                 "state" => "stable",
+                 "target_generation" => ^target_generation,
+                 "stable_generation" => ^target_generation,
+                 "image_digest" => ^image_digest
+               }
+             }} ->
+              :stable
+
+            other ->
+              raise "runtime deployment migration preflight failed: #{inspect(other)}"
+          end
+
+        other ->
+          raise "runtime deployment protocol preflight failed: #{inspect(other)}"
+      end
+
+    {"assert_deploying",
+     [[_sequence, "deploying", ^target_generation, _stable, _previous, ^image_digest]]} ->
+      :deploying
+
+    {"assert_activating",
+     [[_sequence, "activating", ^target_generation, _stable, _previous, ^image_digest]]} ->
+      :activating
+
+    {"assert_initial_handoff", [[true]]} ->
+      :initial_handoff
+
+    {"assert_unavailable_handoff", [[true]]} ->
+      :unavailable_handoff
+
+    {"assert_stable",
+     [[_sequence, "stable", ^target_generation, ^target_generation, _previous, ^image_digest]]} ->
+      :stable
+
+    {"assert_unavailable_stable",
+     [[_sequence, "stable", ^unavailable_stable_generation,
+       ^unavailable_stable_generation, _previous, ^unavailable_stable_image_digest]]} ->
+      :unavailable_stable
+
+    {"assert_source_web", []} ->
+      :web
+
+    {source_action,
+     [[_sequence, _state, _target_generation, stable_generation, _previous, _image_digest]]}
+    when source_action in ["assert_source_runtime", "assert_source_web"] ->
+      runtime_source? = String.starts_with?(stable_generation, runtime_service <> "-")
+
+      web_source? =
+        stable_generation == "legacy" or
+          (String.starts_with?(stable_generation, web_service <> "-") and not runtime_source?)
+
+      case {source_action, runtime_source?, web_source?} do
+        {"assert_source_runtime", true, _} -> :runtime
+        {"assert_source_web", _, true} -> :web
+        _ -> raise "runtime deployment source service does not match the durable stable generation"
+      end
+
+    other ->
+      raise "runtime deployment gate action failed: #{inspect(other)}"
+  end
+
+IO.puts("RUNTIME_DEPLOYMENT_GATE=#{action}:#{accepted}")
+ELIXIR
+)"
+
+  echo "Runtime deployment gate action: ${action}"
+  verify_deployment_job || return 1
+
+  execute_deployment_job \
+    --args="^@^eval@${expression}" \
+    --update-env-vars "POOL_SIZE=2,RUNTIME_DEPLOYMENT_GATE_ACTION=${action},RUNTIME_DEPLOYMENT_GATE_GENERATION=${expected_revision},RUNTIME_DEPLOYMENT_GATE_IMAGE_DIGEST=${image_digest},RUNTIME_DEPLOYMENT_GATE_PREVIOUS_GENERATION=${retarget_from_generation},RUNTIME_DEPLOYMENT_GATE_PREVIOUS_IMAGE_DIGEST=${retarget_from_image_digest},RUNTIME_DEPLOYMENT_GATE_PREVIOUS_PHASE=${retarget_from_phase},RUNTIME_DEPLOYMENT_UNAVAILABLE_STABLE_GENERATION=${unavailable_stable_generation},RUNTIME_DEPLOYMENT_UNAVAILABLE_STABLE_IMAGE_DIGEST=${unavailable_stable_image_digest},RUNTIME_DEPLOYMENT_RESUME_PHASE=${deployment_resume_phase},RUNTIME_DEPLOYMENT_PROTOCOL_REVISION=${protocol_revision},RUNTIME_DEPLOYMENT_WEB_SERVICE=${service},RUNTIME_DEPLOYMENT_RUNTIME_SERVICE=${runtime_service}"
+}
+
+select_runtime_source() {
+  probe_cloud_run_service "${runtime_service}"
+
+  if [[ "${cloud_run_service_exists}" == "true" ]] &&
+    deployment_gate_transition assert_source_runtime; then
+    source_runtime_service="${runtime_service}"
+    grant_deployer_runtime_invocation
+    verify_runtime_service_private
+  else
+    deployment_gate_transition assert_source_web
+    source_runtime_service="${service}"
+  fi
+
+  set_api_token_from_serving_revision "${source_runtime_service}"
+
+  if [[ "${source_runtime_service}" == "${runtime_service}" ]]; then
+    verify_runtime_service_rejects_unauthenticated
+  fi
+
+  configure_runtime_control "${source_runtime_service}"
+}
+
+target_revision_exists=false
+target_web_revision_exists=false
+
+revision_describe_not_found() {
+  local output="$1"
+  local generation="$2"
+
+  [[ "${output}" == *"Cannot find revision [${generation}]"* ||
+    "${output}" == *"Revision [${generation}] could not be found."* ]]
+}
+
+probe_target_revision() {
+  local output
+
+  if output="$(
+    gcloud --verbosity=error run revisions describe "${expected_revision}" \
+      --project "${project}" \
+      --region "${region}" \
+      --format='value(metadata.name)' 2>&1
+  )"; then
+    if [[ "${output}" != "${expected_revision}" ]]; then
+      echo "Cloud Run returned an unexpected revision identity: ${output}" >&2
+      return 1
+    fi
+    target_revision_exists=true
+  elif revision_describe_not_found "${output}" "${expected_revision}"; then
+    target_revision_exists=false
+  else
+    echo "Unable to determine whether Cloud Run revision ${expected_revision} exists" >&2
+    echo "${output}" >&2
+    return 1
+  fi
+}
+
+probe_target_web_revision() {
+  local output
+
+  if output="$(
+    gcloud --verbosity=error run revisions describe "${expected_web_revision}" \
+      --project "${project}" \
+      --region "${region}" \
+      --format='value(metadata.name)' 2>&1
+  )"; then
+    if [[ "${output}" != "${expected_web_revision}" ]]; then
+      echo "Cloud Run returned an unexpected web revision identity: ${output}" >&2
+      return 1
+    fi
+    target_web_revision_exists=true
+  elif revision_describe_not_found "${output}" "${expected_web_revision}"; then
+    target_web_revision_exists=false
+  else
+    echo "Unable to determine whether Cloud Run web revision ${expected_web_revision} exists" >&2
+    echo "${output}" >&2
+    return 1
+  fi
+}
+
+verify_revision() {
+  local revision_name="$1"
+  local service_name="$2"
+  local process_role="$3"
+  local service_account="$4"
+  local pool_size="$5"
+  local expected_env="$6"
+  local expected_concurrency="$7"
+  local expected_session_affinity="$8"
+  local revision_json
+
+  if ! revision_json="$(
+    gcloud run revisions describe "${revision_name}" \
+      --project "${project}" \
+      --region "${region}" \
+      --format=json
+  )"; then
+    echo "Unable to describe Cloud Run revision ${revision_name}" >&2
+    return 1
+  fi
+
+  if ! jq -e \
+    --arg revision "${revision_name}" \
+    --arg service "${service_name}" \
+    --arg image "${pinned_image}" \
+    --arg digest "${image_digest}" \
+    --arg role "${process_role}" \
+    --arg service_account "${service_account}" \
+    --arg pool_size "${pool_size}" \
+    --arg protocol_revision "${protocol_revision}" \
+    --arg cloud_sql_connection "${connection}" \
+    --arg database_secret_version "${runtime_database_secret_version}" \
+    --arg api_token_secret_version "${api_token_secret_version}" \
+    --arg secret_bindings "${runtime_secrets}" \
+    --arg expected_env "${expected_env}" \
+    --arg expected_concurrency "${expected_concurrency}" \
+    --arg expected_session_affinity "${expected_session_affinity}" '
+      def env_value($name):
+        [.spec.containers[0].env[]? | select(.name == $name) | .value] | first;
+
+      def secret_ref($name):
+        [.spec.containers[0].env[]? |
+          select(.name == $name) |
+          .valueFrom.secretKeyRef] | first;
+      def expected_secret_refs($bindings):
+        reduce ($bindings | split(",")[]) as $binding
+          ({};
+           ($binding |
+             capture("^(?<env>[A-Z0-9_]+)=(?<name>[a-z0-9-]+):(?<key>[1-9][0-9]*)$")) as $parsed |
+           .[$parsed.env] = {name: $parsed.name, key: $parsed.key});
+      def actual_secret_refs:
+        reduce (.spec.containers[0].env[]? | select(.valueFrom.secretKeyRef? != null)) as $env
+          ({}; .[$env.name] = $env.valueFrom.secretKeyRef);
+      def expected_plain_env($bindings):
+        reduce ($bindings | split(",")[]) as $binding
+          ({};
+           ($binding | capture("^(?<name>[A-Z0-9_]+)=(?<value>.*)$")) as $parsed |
+           .[$parsed.name] = $parsed.value);
+      def actual_plain_env:
+        reduce (.spec.containers[0].env[]? | select(has("value"))) as $env
+          ({}; .[$env.name] = $env.value);
+
+      type == "object" and
+      .metadata.name == $revision and
+      .metadata.labels["serving.knative.dev/service"] == $service and
+      .metadata.labels["maraithon-process-role"] == $role and
+      .spec.serviceAccountName == $service_account and
+      (.spec.containerConcurrency | tostring) == $expected_concurrency and
+      (.spec.timeoutSeconds | tostring) == "3600" and
+      (.spec.containers | type == "array" and length == 1) and
+      ([.spec.containers[0].env[]?.name] | length == (unique | length)) and
+      .spec.containers[0].image == $image and
+      (.spec.containers[0].resources.limits.cpu | tostring) == "2" and
+      .spec.containers[0].resources.limits.memory == "2Gi" and
+      (.spec.containers[0].ports | type == "array" and length == 1) and
+      (.spec.containers[0].ports[0].containerPort | tostring) == "8080" and
+      .spec.containers[0].startupProbe.httpGet.path == "/health" and
+      (.spec.containers[0].startupProbe.initialDelaySeconds | tostring) == "5" and
+      (.spec.containers[0].startupProbe.timeoutSeconds | tostring) == "5" and
+      (.spec.containers[0].startupProbe.periodSeconds | tostring) == "5" and
+      (.spec.containers[0].startupProbe.failureThreshold | tostring) == "24" and
+      env_value("MARAITHON_PROCESS_ROLE") == $role and
+      env_value("POOL_SIZE") == $pool_size and
+      env_value("EXACT_AGENT_RUNTIME_ENABLED") == "true" and
+      env_value("MULTINODE_COORDINATION_ENABLED") == "true" and
+      env_value("PHX_SERVER") == "true" and
+      env_value("DATABASE_POOL_MODE") == "session" and
+      env_value("GIT_SHA") == $protocol_revision and
+      .metadata.annotations["run.googleapis.com/cloudsql-instances"] == $cloud_sql_connection and
+      ((.metadata.annotations["run.googleapis.com/cpu-throttling"] // "true") | ascii_downcase) == "false" and
+      (if $expected_session_affinity == "true" then
+         ((.metadata.annotations["run.googleapis.com/sessionAffinity"] // "false") | ascii_downcase) == "true"
+       else
+         ((.metadata.annotations["run.googleapis.com/sessionAffinity"] // "false") | ascii_downcase) != "true"
+       end) and
+      actual_plain_env == expected_plain_env($expected_env) and
+      secret_ref("DATABASE_URL").name == "maraithon-runtime-db-url" and
+      secret_ref("DATABASE_URL").key == $database_secret_version and
+      secret_ref("API_BEARER_TOKEN").name == "maraithon-api-bearer-token" and
+      secret_ref("API_BEARER_TOKEN").key == $api_token_secret_version and
+      actual_secret_refs == expected_secret_refs($secret_bindings) and
+      ([.spec.containers[0].env[]? | .valueFrom.secretKeyRef? | select(.)] |
+        all(.[]; (.key | type) == "string" and (.key | test("^[1-9][0-9]*$")))) and
+      any(.status.conditions[]?; .type == "Ready" and .status == "True") and
+      (.status.imageDigest == $image or .status.imageDigest == $digest)
+    ' >/dev/null 2>&1 <<<"${revision_json}"; then
+    echo "Cloud Run revision ${revision_name} failed its exact identity, role, image, service-account, or Ready proof" >&2
+    return 1
+  fi
+}
+
+verify_target_revision() {
+  verify_revision \
+    "${expected_revision}" "${runtime_service}" runtime "${runtime_service_account}" 16 \
+    "${runtime_env}" 16 false
+}
+
+verify_target_web_revision() {
+  verify_revision \
+    "${expected_web_revision}" "${service}" web "${web_service_account}" 8 \
+    "${web_env}" 40 true
+}
+
+verify_unavailable_stable_revision() {
+  local output
+  local revision_json
+  local expected_image="${image_repository}@${unavailable_stable_image_digest}"
+
+  if ! output="$(
+    gcloud --verbosity=error run revisions describe "${unavailable_stable_generation}" \
+      --project "${project}" \
+      --region "${region}" \
+      --format=json 2>&1
+  )"; then
+    if revision_describe_not_found "${output}" "${unavailable_stable_generation}"; then
+      echo "Stable runtime revision is authoritatively absent: ${unavailable_stable_generation}"
+      return 0
+    fi
+
+    echo "Unable to prove the stable runtime revision absent or unusable" >&2
+    echo "${output}" >&2
+    return 1
+  fi
+
+  revision_json="${output}"
+
+  if ! jq -e \
+    --arg revision "${unavailable_stable_generation}" \
+    --arg service "${runtime_service}" \
+    --arg image "${expected_image}" \
+    --arg digest "${unavailable_stable_image_digest}" '
+      .metadata.name == $revision and
+      .metadata.labels["serving.knative.dev/service"] == $service and
+      .spec.containers[0].image == $image and
+      (.status.imageDigest == null or
+       .status.imageDigest == "" or
+       .status.imageDigest == $image or
+       .status.imageDigest == $digest) and
+      (any(.status.conditions[]?; .type == "Ready" and .status == "True") | not)
+    ' >/dev/null 2>&1 <<<"${revision_json}"; then
+    echo "The durable stable runtime revision still exists and is Ready, or its identity/image does not match" >&2
+    echo "Use the normal authenticated drain path; unavailable-source recovery is refused" >&2
+    return 1
+  fi
+
+  echo "Stable runtime revision exists but has no Ready=True condition: ${unavailable_stable_generation}"
+}
+
+verify_unavailable_legacy_web_revision() {
+  local output
+  local revision_json
+  local expected_image="${image_repository}@${unavailable_legacy_web_image_digest}"
+
+  if ! output="$(
+    gcloud --verbosity=error run revisions describe "${unavailable_legacy_web_generation}" \
+      --project "${project}" \
+      --region "${region}" \
+      --format=json 2>&1
+  )"; then
+    if revision_describe_not_found "${output}" "${unavailable_legacy_web_generation}"; then
+      echo "Legacy combined web/runtime revision is authoritatively absent: ${unavailable_legacy_web_generation}"
+      return 0
+    fi
+
+    echo "Unable to prove the legacy combined web/runtime revision absent or unusable" >&2
+    echo "${output}" >&2
+    return 1
+  fi
+
+  revision_json="${output}"
+
+  if ! jq -e \
+    --arg revision "${unavailable_legacy_web_generation}" \
+    --arg service "${service}" \
+    --arg image "${expected_image}" \
+    --arg digest "${unavailable_legacy_web_image_digest}" '
+      .metadata.name == $revision and
+      .metadata.labels["serving.knative.dev/service"] == $service and
+      .spec.containers[0].image == $image and
+      (.status.imageDigest == null or
+       .status.imageDigest == "" or
+       .status.imageDigest == $image or
+       .status.imageDigest == $digest) and
+      (any(.status.conditions[]?; .type == "Ready" and .status == "True") | not)
+    ' >/dev/null 2>&1 <<<"${revision_json}"; then
+    echo "The asserted legacy web revision still exists and is Ready, or its service/image identity does not match" >&2
+    echo "Unavailable legacy-source recovery is refused" >&2
+    return 1
+  fi
+
+  echo "Legacy combined web/runtime revision exists but has no Ready=True condition: ${unavailable_legacy_web_generation}"
+}
+
+verify_retarget_source_revision() {
+  local described_name
+  local ready_status
+  local status_image
+  local spec_image
+  local revision_json
+  local expected_image="${image_repository}@${retarget_from_image_digest}"
+
+  retarget_source_revision_exists=false
+  retarget_source_revision_ready=false
+
+  if described_name="$(
+    gcloud --verbosity=error run revisions describe "${retarget_from_generation}" \
+      --project "${project}" \
+      --region "${region}" \
+      --format='value(metadata.name)' 2>&1
+  )"; then
+    if [[ "${described_name}" != "${retarget_from_generation}" ]]; then
+      echo "Cloud Run returned an unexpected retarget source identity: ${described_name}" >&2
+      return 1
+    fi
+    retarget_source_revision_exists=true
+  elif revision_describe_not_found "${described_name}" "${retarget_from_generation}"; then
+    echo "Retarget source revision is authoritatively absent and unusable: ${retarget_from_generation}"
+    return 0
+  else
+    echo "Unable to determine whether retarget source revision ${retarget_from_generation} exists" >&2
+    echo "${described_name}" >&2
+    return 1
+  fi
+
+  if ! ready_status="$(
+    gcloud run revisions describe "${retarget_from_generation}" \
+      --project "${project}" \
+      --region "${region}" \
+      --format='value(status.conditions.filter("type=Ready").extract(status).flatten())'
+  )"; then
+    echo "Unable to read the retarget source revision's Ready condition" >&2
+    return 1
+  fi
+
+  if [[ "${ready_status}" == "True" ]]; then
+    retarget_source_revision_ready=true
+  fi
+
+  if ! status_image="$(
+    gcloud run revisions describe "${retarget_from_generation}" \
+      --project "${project}" \
+      --region "${region}" \
+      --format='value(status.imageDigest)'
+  )"; then
+    return 1
+  fi
+
+  if ! spec_image="$(
+    gcloud run revisions describe "${retarget_from_generation}" \
+      --project "${project}" \
+      --region "${region}" \
+      --format='value(spec.containers[0].image)'
+  )"; then
+    return 1
+  fi
+
+  if [[ "${spec_image}" != "${expected_image}" ]]; then
+    echo "Retarget source revision spec does not use its gated image" >&2
+    echo "Expected: ${expected_image}" >&2
+    echo "Actual:   ${spec_image:-unknown}" >&2
+    return 1
+  fi
+
+  if [[ -n "${status_image}" &&
+        "${status_image}" != "${expected_image}" &&
+        "${status_image}" != "${retarget_from_image_digest}" ]]; then
+    echo "Retarget source revision status has a different image digest" >&2
+    echo "Expected full ref or bare digest: ${expected_image} / ${retarget_from_image_digest}" >&2
+    echo "Actual: ${status_image}" >&2
+    return 1
+  fi
+
+  if ! revision_json="$(
+    gcloud run revisions describe "${retarget_from_generation}" \
+      --project "${project}" \
+      --region "${region}" \
+      --format=json
+  )" || ! jq -e \
+    --arg service "${runtime_service}" \
+    --arg service_account "${runtime_service_account}" '
+      def env_value($name):
+        [.spec.containers[0].env[]? | select(.name == $name) | .value] | first;
+
+      .metadata.labels["serving.knative.dev/service"] == $service and
+      .spec.serviceAccountName == $service_account and
+      env_value("MARAITHON_PROCESS_ROLE") == "runtime" and
+      env_value("EXACT_AGENT_RUNTIME_ENABLED") == "true" and
+      env_value("MULTINODE_COORDINATION_ENABLED") == "true"
+    ' >/dev/null 2>&1 <<<"${revision_json}"; then
+    echo "Retarget source revision is not an exact runtime-service revision" >&2
+    return 1
+  fi
+
+  echo "WARNING: explicitly retargeting operator-declared unusable revision ${retarget_from_generation} (Ready=${ready_status:-unknown})" >&2
+}
+
+verify_revision_traffic() {
+  local service_name="$1"
+  local revision_name="$2"
+  local latest_ready_revision
+  local target_percent
+
+  if ! latest_ready_revision="$(
+    gcloud run services describe "${service_name}" \
+      --project "${project}" \
+      --region "${region}" \
+      --format='value(status.latestReadyRevisionName)'
+  )" || [[ "${latest_ready_revision}" != "${revision_name}" ]]; then
+    echo "Cloud Run service ${service_name} latest Ready revision is not ${revision_name}" >&2
+    echo "Actual: ${latest_ready_revision:-unknown}" >&2
+    return 1
+  fi
+
+  if ! target_percent="$(
+    gcloud run services describe "${service_name}" \
+      --project "${project}" \
+      --region "${region}" \
+      --format="value(status.traffic.filter(\"revisionName=${revision_name}\").extract(percent).flatten())"
+  )" || [[ "${target_percent}" != "100" ]]; then
+    echo "Cloud Run revision ${revision_name} does not have exactly 100% traffic for ${service_name}" >&2
+    echo "Actual target traffic: ${target_percent:-unknown}" >&2
+    return 1
+  fi
+}
+
+verify_target_traffic() {
+  verify_revision_traffic "${runtime_service}" "${expected_revision}"
+}
+
+verify_target_web_traffic() {
+  verify_revision_traffic "${service}" "${expected_web_revision}"
+}
+
+print_revision_diagnostics() {
+  local service_name="$1"
+  local revision_name="$2"
+
+  echo "Cloud Run revision diagnostics: ${revision_name}" >&2
+  gcloud run revisions describe "${revision_name}" \
+    --project "${project}" \
+    --region "${region}" \
+    --format='yaml(status.conditions,status.imageDigest,status.logUrl)' >&2 || true
+  gcloud logging read \
+    "resource.type=cloud_run_revision AND resource.labels.service_name=${service_name} AND resource.labels.revision_name=${revision_name}" \
+    --project "${project}" \
+    --freshness=30m \
+    --limit=100 \
+    --order=asc \
+    --format='value(timestamp,severity,textPayload,jsonPayload.message)' >&2 || true
+}
+
+print_target_diagnostics() {
+  print_revision_diagnostics "${runtime_service}" "${expected_revision}"
+}
+
+print_target_web_diagnostics() {
+  print_revision_diagnostics "${service}" "${expected_web_revision}"
+}
+
+verify_runtime_service_private() {
+  local policy_json
+  local service_json
+
+  if ! policy_json="$(
+    gcloud run services get-iam-policy "${runtime_service}" \
+      --project "${project}" \
+      --region "${region}" \
+      --format=json
+  )"; then
+    echo "Unable to read the IAM policy for ${runtime_service}" >&2
+    return 1
+  fi
+
+  if ! jq -e --arg deployer "serviceAccount:${deployer_service_account}" '
+    [.bindings[]?.members[]?] as $members |
+    [.bindings[]? | select(.role == "roles/run.invoker") | .members[]?] as $invokers |
+    ($members | index("allUsers")) == null and
+    ($members | index("allAuthenticatedUsers")) == null and
+    ($invokers | index($deployer)) != null
+  ' >/dev/null 2>&1 <<<"${policy_json}"; then
+    echo "Runtime service ${runtime_service} is public or lacks the pinned deployer invoker binding" >&2
+    return 1
+  fi
+
+  service_json="$(
+    gcloud run services describe "${runtime_service}" \
+      --project "${project}" \
+      --region "${region}" \
+      --format=json
+  )"
+
+  if ! jq -e '
+    ((.metadata.annotations["run.googleapis.com/invoker-iam-disabled"] // "false") |
+      ascii_downcase) != "true"
+  ' >/dev/null 2>&1 <<<"${service_json}"; then
+    echo "Runtime service ${runtime_service} has the Cloud Run Invoker IAM check disabled" >&2
+    return 1
+  fi
+}
+
+verify_runtime_service_rejects_unauthenticated() {
+  local runtime_url
+  local status_code
+
+  runtime_url="$(cloud_run_service_url "${runtime_service}")"
+
+  if ! status_code="$(
+    curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+      --max-time 15 \
+      -H "Authorization: Bearer ${api_token}" \
+      "${runtime_url}/api/v1/runtime/status"
+  )"; then
+    echo "Unable to complete the unauthenticated invocation proof for ${runtime_service}" >&2
+    return 1
+  fi
+
+  if [[ "${status_code}" != "401" && "${status_code}" != "403" ]]; then
+    echo "Runtime service ${runtime_service} did not reject an unauthenticated request (HTTP ${status_code})" >&2
+    return 1
+  fi
+}
+
+verify_web_service_public() {
+  local policy_json
+  local service_json
+
+  if ! policy_json="$(
+    gcloud run services get-iam-policy "${service}" \
+      --project "${project}" \
+      --region "${region}" \
+      --format=json
+  )"; then
+    echo "Unable to read the IAM policy for ${service}" >&2
+    return 1
+  fi
+
+  if ! jq -e '
+    [.bindings[]? | select(.role == "roles/run.invoker") | .members[]?] |
+    index("allUsers") != null
+  ' >/dev/null 2>&1 <<<"${policy_json}"; then
+    echo "Web service ${service} does not permit public invocation" >&2
+    return 1
+  fi
+
+  service_json="$(
+    gcloud run services describe "${service}" \
+      --project "${project}" \
+      --region "${region}" \
+      --format=json
+  )"
+
+  if ! jq -e '
+    ((.metadata.annotations["run.googleapis.com/invoker-iam-disabled"] // "false") |
+      ascii_downcase) != "true"
+  ' >/dev/null 2>&1 <<<"${service_json}"; then
+    echo "Web service ${service} is not using the pinned IAM-backed public invocation mode" >&2
+    return 1
+  fi
+}
+
+verify_service_scaling() {
+  local service_name="$1"
+  local expected_mode="$2"
+  local expected_min="$3"
+  local expected_max="$4"
+  local expected_manual="$5"
+  local service_json
+
+  if ! service_json="$(
+    gcloud run services describe "${service_name}" \
+      --project "${project}" \
+      --region "${region}" \
+      --format=json
+  )"; then
+    echo "Unable to describe Cloud Run service configuration for ${service_name}" >&2
+    return 1
+  fi
+
+  if ! jq -e \
+    --arg mode "${expected_mode}" \
+    --arg min "${expected_min}" \
+    --arg max "${expected_max}" \
+    --arg manual "${expected_manual}" '
+      ((.metadata.annotations["run.googleapis.com/ingress"] // "all") == "all") and
+      ((.metadata.annotations["run.googleapis.com/scalingMode"] // "automatic") | ascii_downcase) == $mode and
+      (($min == "") or .metadata.annotations["run.googleapis.com/minScale"] == $min) and
+      (($max == "") or .metadata.annotations["run.googleapis.com/maxScale"] == $max) and
+      (($manual == "") or .metadata.annotations["run.googleapis.com/manualInstanceCount"] == $manual)
+    ' >/dev/null 2>&1 <<<"${service_json}"; then
+    echo "Cloud Run service ${service_name} failed its ingress or service-level scaling proof" >&2
+    return 1
+  fi
+}
+
+grant_deployer_runtime_invocation() {
+  verify_deployment_controller_lock || return 1
+
+  gcloud run services add-iam-policy-binding "${runtime_service}" \
+    --project "${project}" \
+    --region "${region}" \
+    --member "serviceAccount:${deployer_service_account}" \
+    --role roles/run.invoker \
+    --quiet >/dev/null
+}
+
+grant_public_web_invocation() {
+  verify_deployment_controller_lock || return 1
+
+  gcloud run services add-iam-policy-binding "${service}" \
+    --project "${project}" \
+    --region "${region}" \
+    --member allUsers \
+    --role roles/run.invoker \
+    --quiet >/dev/null
+}
+
+deploy_runtime_candidate() {
+  local service_preexisting="$1"
+  local traffic_args=()
+
+  verify_deployment_controller_lock || return 1
+
+  if [[ "${service_preexisting}" == "true" ]]; then
+    traffic_args+=(--no-traffic)
+  fi
+
+  if ! gcloud run deploy "${runtime_service}" \
+    --project "${project}" \
+    --region "${region}" \
+    --image "${pinned_image}" \
+    --revision-suffix "${revision_suffix}" \
+    --service-account "${runtime_service_account}" \
+    --set-cloudsql-instances "${connection}" \
+    --set-env-vars "${runtime_env}" \
+    --set-secrets "${runtime_secrets}" \
+    --no-allow-unauthenticated \
+    --invoker-iam-check \
+    --ingress all \
+    --port 8080 \
+    --cpu 2 \
+    --memory 2Gi \
+    --scaling 1 \
+    --concurrency 16 \
+    --timeout 3600 \
+    --no-cpu-throttling \
+    --no-session-affinity \
+    --startup-probe 'httpGet.path=/health,initialDelaySeconds=5,timeoutSeconds=5,periodSeconds=5,failureThreshold=24' \
+    --labels 'maraithon-process-role=runtime' \
+    "${traffic_args[@]}" \
+    --quiet; then
+    print_target_diagnostics
+    return 1
+  fi
+
+  grant_deployer_runtime_invocation || return 1
+  verify_runtime_service_private || return 1
+}
+
+deploy_web_candidate() {
+  verify_deployment_controller_lock || return 1
+
+  if ! gcloud run deploy "${service}" \
+    --project "${project}" \
+    --region "${region}" \
+    --image "${pinned_image}" \
+    --revision-suffix "${revision_suffix}" \
+    --service-account "${web_service_account}" \
+    --set-cloudsql-instances "${connection}" \
+    --set-env-vars "${web_env}" \
+    --set-secrets "${runtime_secrets}" \
+    --allow-unauthenticated \
+    --invoker-iam-check \
+    --ingress all \
+    --port 8080 \
+    --cpu 2 \
+    --memory 2Gi \
+    --scaling auto \
+    --min 1 \
+    --max 5 \
+    --concurrency 40 \
+    --timeout 3600 \
+    --no-cpu-throttling \
+    --session-affinity \
+    --startup-probe 'httpGet.path=/health,initialDelaySeconds=5,timeoutSeconds=5,periodSeconds=5,failureThreshold=24' \
+    --labels 'maraithon-process-role=web' \
+    --no-traffic \
+    --quiet; then
+    print_target_web_diagnostics
+    return 1
+  fi
+}
+
+assert_target_gate_phase() {
+  case "${deployment_resume_phase}" in
+    activating)
+      deployment_gate_transition assert_activating
+      ;;
+
+    stable)
+      deployment_gate_transition assert_stable
+      ;;
+
+    new | handoff | deploying | retarget)
+      deployment_gate_transition assert_deploying
+      ;;
+  esac
+}
+
+deployment_job=""
+
+case "${deployment_resume_phase}" in
+  handoff | deploying | activating | retarget)
+    deployment_gate_may_be_closed=true
+    ;;
+
+  new | stable)
+    deployment_gate_may_be_closed=false
+    ;;
+esac
+
+cleanup_deployment() {
+  local exit_status="$?"
+  trap - EXIT INT TERM
+
+  if [[ "${exit_status}" -ne 0 && "${deployment_gate_may_be_closed}" == "true" ]]; then
+    echo "Deployment stopped after the durable gate may have closed; no automatic abort or rejoin was attempted" >&2
+    echo "Inspect the durable phase, then use an exact handoff, deploying, activating, retarget, or stable recovery with the printed identities" >&2
+
+    if [[ "${deployment_resume_phase}" == "new" ||
+          "${deployment_resume_phase}" == "handoff" ]]; then
+      echo "If the durable phase is still handoff, abandonment requires the incident-only abort primitive with the exact target/digest after proving no out-of-band migration execution was launched" >&2
+    fi
+  fi
+
+  if [[ "${exit_status}" -ne 0 && "${deployment_controller_lock_owned}" == "true" ]]; then
+    echo "The crash-sticky controller lock was intentionally retained" >&2
+    echo "Recovery requires MARAITHON_DEPLOYMENT_LOCK_PREDECESSOR_TOKEN=${deployment_controller_token}" >&2
+    echo "Remove/reacquire it only with explicit predecessor-stopped and Cloud-Run-operations-settled confirmation" >&2
+  fi
+
+  exit "${exit_status}"
+}
+
+trap cleanup_deployment EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 # Cloud Build keeps Docker tooling and registry credentials out of the deployer.
 # The regional public pool can queue indefinitely (2026-08-28: 60+ minutes in
 # us-central1 while global started at once). Build on the global pool; the
 # image still lands in the regional Artifact Registry.
 build_region="${MARAITHON_GCP_BUILD_REGION:-global}"
-run_in "${ROOT_DIR}" gcloud builds submit   --project "${project}"   --region "${build_region}"   --tag "${image}"   --timeout 1800s   --quiet .
 
-common_env="CLOUD_SQL_SOCKET_DIR=${socket_dir},DATABASE_TLS_MODE=private_network_override,DATABASE_TLS_INSECURE_CONFIRMATION=I_ACKNOWLEDGE_DATABASE_TLS_IS_NOT_VERIFIED,DATABASE_TLS_INSECURE_REASON=gcp_cloud_sql_unix_socket,PHX_HOST=maraithon.com,PRIMARY_ADMIN_EMAIL=kent@voteagora.com,LLM_PROVIDER=openrouter,LLM_MODEL=moonshotai/kimi-k3,OPENROUTER_CHAT_MODEL=moonshotai/kimi-k3,OPENROUTER_FAST_MODEL=moonshotai/kimi-k3,OPENROUTER_ROUTING_MODEL=moonshotai/kimi-k3,OPENROUTER_REASONING_EFFORT=high,LLM_BRIEF_REASONING_EFFORT=high,LLM_MAX_CONCURRENCY=3,LLM_REASONING_MAX_CONCURRENCY=3,SOURCE_FANOUT_TENANT_MAX_CONCURRENCY=3,GOOGLE_REDIRECT_URI=https://maraithon.com/auth/google/callback,GOOGLE_CALENDAR_WEBHOOK_URL=https://maraithon.com/webhooks/google/calendar,GOOGLE_PUBSUB_TOPIC=${gmail_topic},GITHUB_REDIRECT_URI=https://maraithon.com/auth/github/callback,SLACK_REDIRECT_URI=https://maraithon.com/auth/slack/callback,NOTAUI_REDIRECT_URI=https://maraithon.com/auth/notaui/callback,EXACT_AGENT_RUNTIME_ENABLED=${exact_runtime_enabled},MULTINODE_COORDINATION_ENABLED=${coordination_enabled},AGENT_TERMINATION_ATTESTATION_PUBLIC_KEY=${agent_termination_attestation_public_key},GIT_SHA=${protocol_revision},POOL_SIZE=16,DB_QUERY_TIMEOUT_MS=30000,DATABASE_POOL_MODE=session"
+if [[ "${deployment_resume_phase}" == "new" ]]; then
+  verify_cloud_build_upload_boundary
 
-migration_secrets="DATABASE_URL=maraithon-migrator-db-url:latest,DIRECT_DATABASE_URL=maraithon-migrator-db-url:latest,SECRET_KEY_BASE=maraithon-secret-key-base:latest,API_BEARER_TOKEN=maraithon-api-bearer-token:latest,ADMIN_PASSWORD=maraithon-admin-password:latest,OPENROUTER_API_KEY=maraithon-openrouter-api-key:latest,CLOAK_KEY=maraithon-cloak-key:latest,DURABLE_PAYLOAD_BINDING_CURRENT_KEY=maraithon-payload-binding-key:latest,RELEASE_COOKIE=maraithon-release-cookie:latest"
+  build_tag_nonce="$(
+    printf '%s' \
+      "${expected_revision}-${revision}-$(date -u +%Y%m%d%H%M%S)-$$-${RANDOM}" |
+      git -C "${ROOT_DIR}" hash-object --stdin
+  )"
+  image_tag="${image_repository}:deploy-${revision:0:12}-${build_tag_nonce:0:20}"
 
-gcloud run jobs deploy "${service}-migrate"   --project "${project}"   --region "${region}"   --image "${image}"   --service-account "${runtime_service_account}"   --set-cloudsql-instances "${connection}"   --set-env-vars "${common_env}"   --set-secrets "${migration_secrets}"   --command /app/bin/maraithon   --args eval,Maraithon.Release.migrate   --cpu 1   --memory 2Gi   --task-timeout 30m   --max-retries 0   --quiet
+  run_in "${ROOT_DIR}" gcloud builds submit \
+    --project "${project}" \
+    --region "${build_region}" \
+    --tag "${image_tag}" \
+    --timeout 1800s \
+    --quiet .
 
-gcloud run jobs execute "${service}-migrate"   --project "${project}"   --region "${region}"   --wait   --quiet
+  image_digest="$(
+    gcloud artifacts docker images describe "${image_tag}" \
+      --project "${project}" \
+      --format='value(image_summary.digest)'
+  )"
 
-runtime_secrets="DATABASE_URL=maraithon-runtime-db-url:latest,SECRET_KEY_BASE=maraithon-secret-key-base:latest,API_BEARER_TOKEN=maraithon-api-bearer-token:latest,ADMIN_PASSWORD=maraithon-admin-password:latest,OPENROUTER_API_KEY=maraithon-openrouter-api-key:latest,CLOAK_KEY=maraithon-cloak-key:latest,DURABLE_PAYLOAD_BINDING_CURRENT_KEY=maraithon-payload-binding-key:latest,RELEASE_COOKIE=maraithon-release-cookie:latest,POSTMARK_SERVER_TOKEN=maraithon-postmark-server-token:latest,AUTH_EMAIL_FROM=maraithon-auth-email-from:latest,GOOGLE_CLIENT_ID=maraithon-google-client-id:latest,GOOGLE_CLIENT_SECRET=maraithon-google-client-secret:latest,GITHUB_CLIENT_ID=maraithon-github-client-id:latest,GITHUB_CLIENT_SECRET=maraithon-github-client-secret:latest,GITHUB_WEBHOOK_SECRET=maraithon-github-webhook-secret:latest,SLACK_CLIENT_ID=maraithon-slack-client-id:latest,SLACK_CLIENT_SECRET=maraithon-slack-client-secret:latest,SLACK_SIGNING_SECRET=maraithon-slack-signing-secret:latest,NOTAUI_CLIENT_ID=maraithon-notaui-client-id:latest,NOTAUI_CLIENT_SECRET=maraithon-notaui-client-secret:latest"
-
-# Drain only once the new image and migrations are ready, so coordination
-# pauses for the revision switch alone.
-if [[ -n "${api_token}" ]]; then
-  if curl --silent --fail --max-time 30 -X POST -H "Authorization: Bearer ${api_token}" "${service_host}/api/v1/runtime/drain" >/dev/null 2>&1; then
-    drain_requested=true
-    echo "Draining the serving revision's runtime before replacement"
-
-    runtime_drained=false
-
-    for _attempt in $(seq 1 48); do
-      status_json="$(runtime_status)"
-      if [[ "${status_json}" == *'"phase":"draining"'* && "${status_json}" == *'"open_tasks":0'* && "${status_json}" == *'"unproven_tasks":0'* ]]; then
-        echo "Runtime drained cleanly"
-        runtime_drained=true
-        break
-      fi
-      sleep 5
-    done
-
-    echo "Runtime status before replacement: ${status_json:-unknown}"
-
-    if [[ "${runtime_drained}" != "true" ]]; then
-      echo "Refusing revision replacement while exact runtime work remains unproven" >&2
-      runtime_rejoin
-      exit 1
-    fi
-  else
-    echo "Serving revision has no drain endpoint yet; deploying without a pre-drain"
+  if [[ ! "${image_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+    echo "Artifact Registry did not resolve ${image_tag} to one immutable sha256 digest" >&2
+    echo "Resolved value: ${image_digest:-empty}" >&2
+    exit 1
   fi
 else
-  echo "API token unavailable to the deployer; deploying without a pre-drain"
+  image_digest="${resume_image_digest}"
+  echo "Resuming with the previously gated image digest; Cloud Build is intentionally skipped"
 fi
 
-if ! gcloud run deploy "${service}"   --project "${project}"   --region "${region}"   --image "${image}"   --service-account "${runtime_service_account}"   --set-cloudsql-instances "${connection}"   --set-env-vars "${common_env},PHX_SERVER=true,DURABLE_PAYLOAD_BINDING_CURRENT_TAG=HMAC.SHA256.V1,OPENROUTER_HTTP_REFERER=https://maraithon.com,OPENROUTER_APP_TITLE=Maraithon"   --set-secrets "${runtime_secrets}"   --allow-unauthenticated   --port 8080   --cpu 1   --memory 2Gi   --min 1   --max 1   --concurrency 80   --timeout 300   --no-cpu-throttling   --startup-probe 'httpGet.path=/health,initialDelaySeconds=5,timeoutSeconds=5,periodSeconds=5,failureThreshold=24'   --quiet; then
-  failed_revision="$(gcloud run revisions list     --project "${project}"     --region "${region}"     --service "${service}"     --sort-by='~metadata.creationTimestamp'     --limit=1     --format='value(metadata.name)' 2>/dev/null || true)"
+pinned_image="${image_repository}@${image_digest}"
 
-  if [[ -n "${failed_revision}" ]]; then
-    echo "Cloud Run revision startup diagnostics: ${failed_revision}" >&2
-    gcloud run revisions describe "${failed_revision}"       --project "${project}"       --region "${region}"       --format='yaml(status.conditions,status.logUrl)' >&2 || true
-    gcloud logging read       "resource.type=cloud_run_revision AND resource.labels.service_name=${service} AND resource.labels.revision_name=${failed_revision}"       --project "${project}"       --freshness=30m       --limit=100       --order=asc       --format='value(timestamp,severity,textPayload,jsonPayload.message)' >&2 || true
+if [[ -n "${GITHUB_RUN_ID:-}" ]]; then
+  deployment_job_run_attempt="${GITHUB_RUN_ATTEMPT:-1}"
+
+  if [[ ! "${GITHUB_RUN_ID}" =~ ^[0-9]+$ ||
+        ! "${deployment_job_run_attempt}" =~ ^[0-9]+$ ]]; then
+    echo "Unable to derive a deployment job identity from the GitHub run metadata" >&2
+    exit 64
   fi
 
-  runtime_rejoin
+  deployment_job_invocation="github:${GITHUB_RUN_ID}:${deployment_job_run_attempt}"
+else
+  deployment_job_nonce="$(
+    printf '%s' "${expected_revision}-${image_digest}-$(date -u +%Y%m%d%H%M%S%N)-$$-${RANDOM}" |
+      git -C "${ROOT_DIR}" hash-object --stdin
+  )"
+  deployment_job_invocation="local:${deployment_job_nonce}"
+fi
+
+deployment_job_key="$(
+  printf 'target_generation=%s\nimage_digest=%s\ninvocation=%s\n' \
+    "${expected_revision}" "${image_digest}" "${deployment_job_invocation}" |
+    git -C "${ROOT_DIR}" hash-object --stdin
+)"
+deployment_job="migrate-${deployment_job_key}"
+
+if [[ ! "${deployment_job_key}" =~ ^[0-9a-f]{40}$ ||
+      ! "${deployment_job}" =~ ^[a-z]([a-z0-9-]*[a-z0-9])?$ ||
+      ${#deployment_job} -gt 49 ]]; then
+  echo "Unable to derive a valid per-deployment Cloud Run job name" >&2
+  echo "Derived name: ${deployment_job}" >&2
   exit 1
 fi
 
-health_url="https://${host}/health"
-curl --fail --silent --show-error "${health_url}" >/dev/null
-echo "Deploy health check passed: ${health_url}"
+echo "Pinned deployment image: ${pinned_image}"
+echo "Pinned deployment job: ${deployment_job}"
+echo "Recovery identity: MARAITHON_GCP_REVISION_SUFFIX=${revision_suffix} MARAITHON_DEPLOYMENT_IMAGE_DIGEST=${image_digest}"
+
+acquire_deployment_controller_lock
+
+# Gmail requires the watch topic to live in the Google OAuth client's project.
+# Provision it only while this controller owns the deployment mutex. The
+# default cross-project topic is pre-provisioned by its owning project and is
+# intentionally left unchanged by Maraithon deploys.
+verify_deployment_controller_lock
+
+if [[ "${gmail_pubsub_project}" == "${project}" ]]; then
+  run_in "${ROOT_DIR}" gcloud builds submit   --project "${project}"   --region "${region}"   --no-source   --config "scripts/monorepo/cloudbuild-provision-gmail.yaml"   --substitutions "_TOPIC_ID=${gmail_topic_id},_SUBSCRIPTION_ID=${gmail_subscription_id},_PUSH_ENDPOINT=${gmail_push_endpoint}"   --timeout 300s   --quiet
+else
+  echo "Using pre-provisioned external Gmail Pub/Sub topic: ${gmail_topic}"
+fi
+
+# Each script invocation owns a distinct job. Do not delete it on EXIT: the
+# RunJob API has no idempotency token, so the Cloud SDK may have retried an
+# accepted request whose execution is still active even after another retry
+# completed. Cloud Run job deletion would terminate that execution. Stale jobs
+# must be garbage-collected separately only after their executions are known
+# terminal and old enough to exceed the configured task timeout; the
+# `maraithon-deployment-job=true` label gives that collector a narrow scope.
+
+verify_deployment_controller_lock
+
+if ! gcloud run jobs deploy "${deployment_job}" \
+  --project "${project}" \
+  --region "${region}" \
+  --image "${pinned_image}" \
+  --service-account "${runtime_service_account}" \
+  --set-cloudsql-instances "${connection}" \
+  --set-env-vars "${maintenance_env}" \
+  --set-secrets "${migration_secrets}" \
+  --labels "maraithon-deployment-job=true" \
+  --command /app/bin/maraithon \
+  --args="^@^eval@raise(\"deployment job requires an explicit execution override\")" \
+  --cpu 1 \
+  --memory 2Gi \
+  --tasks 1 \
+  --parallelism 1 \
+  --task-timeout 30m \
+  --max-retries 0 \
+  --quiet; then
+  exit 1
+fi
+
+verify_deployment_job
+
+probe_target_revision
+probe_target_web_revision
+
+case "${deployment_resume_phase}" in
+  new | handoff | retarget)
+    if [[ "${target_revision_exists}" == "true" ||
+          "${target_web_revision_exists}" == "true" ]]; then
+      echo "A target revision already exists; refusing database migration before its exact recovery phase is selected" >&2
+      echo "Runtime target exists: ${target_revision_exists} (${expected_revision})" >&2
+      echo "Web target exists: ${target_web_revision_exists} (${expected_web_revision})" >&2
+      exit 1
+    fi
+    ;;
+
+  activating | stable)
+    if [[ "${target_revision_exists}" != "true" ]]; then
+      echo "${deployment_resume_phase} recovery runtime revision does not exist: ${expected_revision}" >&2
+      exit 1
+    fi
+    verify_target_revision
+    ;;
+
+  deploying)
+    ;;
+esac
+
+deployment_gate_transition preflight_migration
+handoff_already_proven=false
+
+# Select the durable target before draining. New and handoff phases defer every
+# migration newer than the gate until the exact runtime is quiescent and the
+# handoff is irreversibly deploying. The persistent Cloud Run CAS mutex admits
+# only this controller before any migration or durable gate transition.
+case "${deployment_resume_phase}" in
+  new)
+    run_gate_bootstrap_migrations
+
+    if [[ "${stable_source_unavailable_recovery}" == "true" ]]; then
+      echo "WARNING: using confirmed stable-runtime-source-unavailable recovery" >&2
+      deployment_gate_transition assert_unavailable_stable
+      verify_unavailable_stable_revision
+      global_quiescence_db_preflight
+      deployment_gate_may_be_closed=true
+      deployment_gate_transition arm
+      # Arm closes admission; prove repeats quiescence transactionally. Any
+      # unresolved task still requires the normal incident attestation first.
+      deployment_gate_transition prove
+      run_full_migrations
+      handoff_already_proven=true
+    else
+      # Prove that this controller can reach the authoritative drain endpoint
+      # before closing admission. An orphaned dormant runtime service must not
+      # override a durable stable generation that still belongs to the web
+      # service during the first split rollout.
+      select_runtime_source
+
+      preflight_status_json="$(runtime_status)"
+      if ! jq -e 'type == "object" and (.phase | type) == "string"' \
+        >/dev/null 2>&1 <<<"${preflight_status_json}"; then
+        echo "The prospective runtime drain endpoint is not reachable; admission remains open" >&2
+        exit 1
+      fi
+
+      deployment_gate_may_be_closed=true
+      deployment_gate_transition arm
+    fi
+    ;;
+
+  handoff)
+    if [[ "${stable_source_unavailable_recovery}" == "true" ]]; then
+      echo "Resuming the exact unavailable-stable-source handoff without inventing an HTTP drain" >&2
+      deployment_gate_transition assert_unavailable_handoff
+      verify_unavailable_stable_revision
+      global_quiescence_db_preflight
+      deployment_gate_transition prove
+      run_full_migrations
+      handoff_already_proven=true
+    elif [[ "${legacy_web_source_unavailable_recovery}" == "true" ]]; then
+      echo "Resuming the one-time unavailable legacy web/runtime handoff without inventing an HTTP drain" >&2
+      # This predicate requires the current handoff to retain the literal
+      # legacy source and proves that no nonlegacy generation has ever become
+      # stable. The exact operator-attested web revision must then be absent
+      # or non-Ready, and the database proof remains authoritative for work.
+      deployment_gate_transition assert_initial_handoff
+      verify_unavailable_legacy_web_revision
+      global_quiescence_db_preflight
+      deployment_gate_transition prove
+      run_full_migrations
+      handoff_already_proven=true
+    else
+      deployment_gate_transition arm
+    fi
+    ;;
+
+  retarget)
+    echo "WARNING: break-glass retarget confirmed; predecessor controller/jobs must remain stopped and Cloud Run service operations quiescent" >&2
+    verify_retarget_source_revision
+
+    if [[ "${retarget_from_phase}" == "activating" ]]; then
+      if [[ "${retarget_source_revision_exists}" == "true" &&
+            "${retarget_source_revision_ready}" == "true" ]]; then
+        probe_cloud_run_service "${runtime_service}"
+        if [[ "${cloud_run_service_exists}" != "true" ]]; then
+          echo "The runtime service required to drain the activating predecessor is absent" >&2
+          exit 1
+        fi
+
+        grant_deployer_runtime_invocation
+        verify_runtime_service_private
+        verify_deployment_controller_lock
+
+        gcloud run services update-traffic "${runtime_service}" \
+          --project "${project}" \
+          --region "${region}" \
+          --to-revisions "${retarget_from_generation}=100" \
+          --quiet
+
+        verify_revision_traffic "${runtime_service}" "${retarget_from_generation}"
+        set_api_token_from_serving_revision "${runtime_service}"
+        configure_runtime_control "${runtime_service}"
+
+        if ! request_runtime_drain >/dev/null; then
+          echo "Ready activating predecessor drain request failed; retarget is refused" >&2
+          exit 1
+        fi
+
+        retarget_source_drained=false
+        for _attempt in $(seq 1 48); do
+          status_json="$(runtime_status)"
+
+          if runtime_status_matches_strong_drain "${status_json}" ||
+            runtime_status_matches_dormant_global_drain "${status_json}"; then
+            retarget_source_drained=true
+            break
+          fi
+
+          sleep 5
+        done
+
+        if [[ "${retarget_source_drained}" != "true" ]]; then
+          echo "Ready activating predecessor did not reach a strong drain boundary" >&2
+          echo "Last runtime status: ${status_json:-unknown}" >&2
+          exit 1
+        fi
+      else
+        echo "Activating predecessor is authoritatively absent or non-Ready; HTTP drain is impossible" >&2
+        echo "Proceeding only to the full database quiescence proof under the explicit retarget confirmation" >&2
+      fi
+    fi
+
+    global_quiescence_db_preflight
+    deployment_gate_transition retarget
+    run_full_migrations
+    ;;
+
+  deploying)
+    deployment_gate_transition assert_deploying
+    # Every irreversible handoff selects/proves its target before migrating,
+    # so an interruption can durably be deploying with migrations incomplete.
+    # Re-running the exact target image's migrations is idempotent.
+    run_full_migrations
+    ;;
+
+  activating)
+    deployment_gate_transition assert_activating
+    ;;
+
+  stable)
+    # Stabilization is only attempted after full migration and target startup.
+    deployment_gate_transition assert_stable
+    ;;
+esac
+
+probe_target_revision
+
+case "${deployment_resume_phase}" in
+  new | handoff)
+    if [[ "${handoff_already_proven}" == "true" ]]; then
+      echo "Stable-source-unavailable recovery already proved the fresh target handoff"
+    else
+      if [[ "${target_revision_exists}" == "true" ]]; then
+        echo "Refusing to continue a handoff for existing immutable revision ${expected_revision}" >&2
+        echo "Choose a new MARAITHON_GCP_REVISION_SUFFIX, or explicitly resume the matching durable phase" >&2
+        exit 1
+      fi
+
+    select_runtime_source
+    echo "Runtime drain source: ${source_runtime_service} (${runtime_control_url})"
+
+    if ! request_runtime_drain >/dev/null; then
+      echo "Runtime drain request failed; refusing to replace the serving revision" >&2
+      exit 1
+    fi
+
+    echo "Draining the serving revision's runtime before replacement"
+    runtime_drained=false
+    legacy_contract_authorized=false
+    legacy_contract_checked=false
+
+    for _attempt in $(seq 1 48); do
+      status_json="$(runtime_status)"
+
+      # Draining partitions remain owned until the replacement's ready planner
+      # releases them. This status is a progress hint; the gate transition
+      # below repeats the authoritative proof while holding the protocol lock.
+      if runtime_status_matches_strong_drain "${status_json}"; then
+        echo "Runtime drain status reached the strong handoff boundary"
+        runtime_drained=true
+        break
+      fi
+
+      if runtime_status_matches_dormant_global_drain "${status_json}"; then
+        echo "Runtime restarted dormant with no node after global work reached the handoff boundary"
+        runtime_drained=true
+        break
+      fi
+
+      # Only a database-proven first cutover may use the legacy controller
+      # shape. Once any non-legacy generation has become stable, the history
+      # predicate can never become true again.
+      if runtime_status_has_legacy_contract "${status_json}"; then
+        if [[ "${legacy_contract_checked}" != "true" ]]; then
+          legacy_contract_checked=true
+
+          if deployment_gate_transition assert_initial_handoff; then
+            legacy_contract_authorized=true
+          fi
+        fi
+
+        if [[ "${legacy_contract_authorized}" != "true" ]]; then
+          echo "Serving revision exposes a legacy runtime status after the initial cutover boundary" >&2
+          exit 1
+        fi
+
+        if runtime_status_matches_legacy_dormant "${status_json}"; then
+          if global_quiescence_db_preflight; then
+            echo "Runtime restart reached the one-time legacy dormant boundary plus full database quiescence proof"
+            runtime_drained=true
+            break
+          fi
+
+          echo "Legacy runtime is dormant, but the authoritative global quiescence proof failed" >&2
+          exit 1
+        fi
+
+        if runtime_status_matches_legacy_drain "${status_json}"; then
+          if ! legacy_node_id="$(
+            jq -er '.node_incarnation_id | select(type == "string")' <<<"${status_json}"
+          )"; then
+            echo "Legacy runtime status did not contain a string node incarnation id" >&2
+            exit 1
+          fi
+
+          if [[ "${legacy_node_id}" =~ ^[[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{12}$ ]] &&
+            legacy_drain_db_preflight "${legacy_node_id}"; then
+            echo "Runtime drain reached the one-time legacy boundary plus database preflight"
+            runtime_drained=true
+            break
+          fi
+
+          echo "Legacy runtime drain database preflight failed" >&2
+          exit 1
+        fi
+      fi
+
+      sleep 5
+    done
+
+    echo "Runtime status before authoritative proof: ${status_json:-unknown}"
+
+    if [[ "${runtime_drained}" != "true" ]]; then
+      echo "Refusing revision replacement while exact runtime work remains unproven" >&2
+      echo "If a pre-proof restart is stuck with ready partitions, use the incident-only abort for exactly ${expected_revision} / ${image_digest} only after confirming no out-of-band migration execution was launched, then retry with a fresh deployment identity" >&2
+      exit 1
+    fi
+
+      deployment_gate_transition prove
+      run_full_migrations
+    fi
+    ;;
+
+  retarget)
+    if [[ "${target_revision_exists}" == "true" ]]; then
+      echo "Retarget generation already exists in Cloud Run: ${expected_revision}" >&2
+      echo "Use MARAITHON_DEPLOYMENT_RESUME_PHASE=deploying only if the durable gate already names it" >&2
+      exit 1
+    fi
+
+    ;;
+
+  deploying | activating | stable)
+    ;;
+esac
+
+# Cloud Run mutations and the PostgreSQL gate cannot share one transaction.
+# The persistent Cloud Run Job token/UID/etag CAS is the controller exclusion
+# contract. PostgreSQL gate transitions remain the work-admission authority,
+# and stabilization remains the final exact-runtime admission proof.
+assert_target_gate_phase
+
+if [[ "${deployment_resume_phase}" == "stable" &&
+      "${target_revision_exists}" != "true" ]]; then
+  echo "Stable gate names a Cloud Run runtime revision that does not exist: ${expected_revision}" >&2
+  exit 1
+fi
+
+# The runtime service owns exactly one manually scaled process. Cloud Run can
+# still overlap revision instances while traffic moves, so PostgreSQL admission
+# -- never the platform instance count -- remains the singleton authority.
+probe_cloud_run_service "${runtime_service}"
+runtime_service_preexisting="${cloud_run_service_exists}"
+
+if [[ "${target_revision_exists}" == "true" ]]; then
+  echo "Reconciling existing immutable runtime revision ${expected_revision}"
+else
+  if ! deploy_runtime_candidate "${runtime_service_preexisting}"; then
+    echo "The durable deployment gate remains closed in deploying state" >&2
+    echo "Resume only with the printed revision suffix, image digest, and MARAITHON_DEPLOYMENT_RESUME_PHASE=deploying" >&2
+    exit 1
+  fi
+
+  target_revision_exists=true
+fi
+
+if ! verify_target_revision; then
+  print_target_diagnostics
+  echo "The durable deployment gate remains closed" >&2
+  exit 1
+fi
+
+api_token="${target_api_token}"
+grant_deployer_runtime_invocation
+verify_runtime_service_private
+verify_runtime_service_rejects_unauthenticated
+verify_service_scaling "${runtime_service}" manual "" "" 1
+configure_runtime_control "${runtime_service}"
+
+assert_target_gate_phase
+verify_deployment_controller_lock
+
+if ! gcloud run services update-traffic "${runtime_service}" \
+  --project "${project}" \
+  --region "${region}" \
+  --to-revisions "${expected_revision}=100" \
+  --quiet; then
+  echo "Runtime traffic update failed or was ambiguous; inspect Cloud Run before exact recovery" >&2
+  exit 1
+fi
+
+assert_target_gate_phase
+
+if ! verify_target_traffic; then
+  echo "The durable deployment gate remains closed" >&2
+  exit 1
+fi
+
+# With 100% runtime traffic, the authenticated response is an exact observation
+# of the target K_REVISION and of the same database's durable gate projection.
+# Admission remains closed while deploying. Activating admits only this target;
+# stabilization is attempted only after both local status and transactional DB
+# readiness prove the target exact runtime is complete.
+case "${deployment_resume_phase}" in
+  stable)
+    deployment_gate_transition assert_stable
+    ;;
+
+  activating)
+    deployment_gate_transition assert_activating
+    ;;
+
+  new | handoff | deploying | retarget)
+    target_dormant=false
+
+    for _attempt in $(seq 1 24); do
+      status_json="$(runtime_status)"
+
+      if runtime_status_matches_dormant_generation \
+        "${status_json}" "${expected_revision}" "${image_digest}"; then
+        target_dormant=true
+        break
+      fi
+
+      sleep 5
+    done
+
+    if [[ "${target_dormant}" != "true" ]]; then
+      echo "Target runtime did not prove dormant identity plus the deploying gate" >&2
+      echo "Last runtime status: ${status_json:-unknown}" >&2
+      echo "Resume in deploying phase with the exact printed identities" >&2
+      exit 1
+    fi
+
+    deployment_gate_transition activate
+    ;;
+esac
+
+if [[ "${deployment_resume_phase}" != "stable" ]]; then
+  runtime_ready_activating=false
+
+  for _attempt in $(seq 1 60); do
+    status_json="$(runtime_status)"
+
+    if runtime_status_matches_ready_activating_generation \
+      "${status_json}" "${expected_revision}" "${image_digest}"; then
+      runtime_ready_activating=true
+      break
+    fi
+
+    sleep 5
+  done
+
+  if [[ "${runtime_ready_activating}" != "true" ]]; then
+    echo "Target runtime was admitted, but did not become exactly ready while the gate remained activating" >&2
+    echo "Last runtime status: ${status_json:-unknown}" >&2
+    echo "Resume in activating phase with the exact printed identities" >&2
+    exit 1
+  fi
+
+  deployment_gate_transition stabilize
+fi
+
+runtime_ready_stable=false
+
+for _attempt in $(seq 1 24); do
+  status_json="$(runtime_status)"
+
+  if runtime_status_matches_ready_stable_generation \
+    "${status_json}" "${expected_revision}" "${image_digest}"; then
+    runtime_ready_stable=true
+    break
+  fi
+
+  sleep 5
+done
+
+if [[ "${runtime_ready_stable}" != "true" ]]; then
+  echo "Target runtime did not prove exact readiness with the same generation stably admitted" >&2
+  echo "Last runtime status: ${status_json:-unknown}" >&2
+  echo "Resume in stable phase with the exact printed identities" >&2
+  exit 1
+fi
+
+deployment_gate_transition assert_stable
+deployment_gate_may_be_closed=false
+
+# Keep the current public revision live throughout the exact-runtime handoff.
+# Only after the new runtime is DB-admitted and ready do we create/reconcile
+# and promote the autoscaled web-only revision.
+probe_target_web_revision
+
+if [[ "${target_web_revision_exists}" == "true" ]]; then
+  echo "Reconciling existing immutable web revision ${expected_web_revision}"
+else
+  if ! deploy_web_candidate; then
+    echo "Exact runtime is stable; resume the same deployment in stable phase to finish web promotion" >&2
+    exit 1
+  fi
+
+  target_web_revision_exists=true
+fi
+
+if ! verify_target_web_revision; then
+  print_target_web_diagnostics
+  echo "Exact runtime is stable; the web candidate was not promoted" >&2
+  exit 1
+fi
+
+# Public IAM is a distinct control-plane mutation from immutable revision
+# creation. Reconcile it independently so an ambiguous deploy can resume after
+# creating the exact revision but before its --allow-unauthenticated step lands.
+deployment_gate_transition assert_stable
+grant_public_web_invocation
+verify_web_service_public
+verify_service_scaling "${service}" automatic 1 5 ""
+
+deployment_gate_transition assert_stable
+verify_deployment_controller_lock
+
+if ! gcloud run services update-traffic "${service}" \
+  --project "${project}" \
+  --region "${region}" \
+  --to-revisions "${expected_web_revision}=100" \
+  --quiet; then
+  echo "Web traffic update failed or was ambiguous; exact runtime remains stable" >&2
+  exit 1
+fi
+
+deployment_gate_transition assert_stable
+
+if ! verify_target_web_traffic; then
+  echo "Exact runtime is stable, but web traffic did not converge to ${expected_web_revision}" >&2
+  exit 1
+fi
+
+web_service_url="$(cloud_run_service_url "${service}")"
+web_generation_observed=false
+
+for _attempt in $(seq 1 24); do
+  web_health_json="$(
+    curl --silent --show-error --fail --max-time 15 \
+      "${web_service_url}/health" 2>/dev/null || true
+  )"
+
+  if jq -e --arg generation "${expected_web_revision}" '
+    type == "object" and
+    .status == "ok" and
+    .process_role == "web" and
+    .deployment_generation == $generation
+  ' >/dev/null 2>&1 <<<"${web_health_json}"; then
+    web_generation_observed=true
+    break
+  fi
+
+  sleep 5
+done
+
+if [[ "${web_generation_observed}" != "true" ]]; then
+  echo "The public Cloud Run service did not identify as ${expected_web_revision}" >&2
+  echo "Last health response: ${web_health_json:-unknown}" >&2
+  exit 1
+fi
+
+health_url="https://${web_host}/health"
+curl --fail --silent --show-error --max-time 15 "${health_url}" >/dev/null
+curl --fail --silent --show-error --max-time 15 https://maraithon.com/health >/dev/null
+echo "Split web/runtime identity, traffic, role, and exact-readiness checks passed: ${expected_web_revision} / ${expected_revision}"
+
+# The core rollout is complete. Release only after both traffic targets and
+# health identities are proven; optional product validation below does not
+# mutate the exact-runtime deployment state and must not retain the mutex.
+verify_deployment_controller_lock
+release_deployment_controller_lock
 
 if [[ -n "${todo_validation_user}" ]]; then
   if [[ "${todo_validation_user}" != "kent@runner.now" ]]; then
@@ -148,7 +3342,7 @@ if [[ -n "${todo_validation_user}" ]]; then
     exit 64
   fi
 
-  gcloud run jobs deploy "${service}-todo-validation"     --project "${project}"     --region "${region}"     --image "${image}"     --service-account "${runtime_service_account}"     --set-cloudsql-instances "${connection}"     --set-env-vars "${common_env},DURABLE_PAYLOAD_BINDING_CURRENT_TAG=HMAC.SHA256.V1,TODO_VALIDATION_USER=${todo_validation_user}"     --set-secrets "${runtime_secrets}"     --command /app/bin/maraithon     --args eval,Maraithon.Release.validate_authorized_todo_launch     --cpu 1     --memory 2Gi     --task-timeout 15m     --max-retries 0     --quiet
+  gcloud run jobs deploy "${service}-todo-validation"     --project "${project}"     --region "${region}"     --image "${pinned_image}"     --service-account "${runtime_service_account}"     --set-cloudsql-instances "${connection}"     --set-env-vars "${maintenance_env},DURABLE_PAYLOAD_BINDING_CURRENT_TAG=HMAC.SHA256.V1,TODO_VALIDATION_USER=${todo_validation_user}"     --set-secrets "${runtime_secrets}"     --command /app/bin/maraithon     --args eval,Maraithon.Release.validate_authorized_todo_launch     --cpu 1     --memory 2Gi     --task-timeout 15m     --max-retries 0     --quiet
 
   validation_started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
@@ -172,7 +3366,7 @@ if [[ -n "${todo_validation_user}" ]]; then
     fi
 
     coordination_log="$(gcloud logging read \
-      "resource.type=cloud_run_revision AND resource.labels.service_name=${service} AND timestamp>=\"${validation_started_at}\" AND (textPayload:\"RUNTIME_COORDINATION_ERROR=\" OR jsonPayload.message:\"RUNTIME_COORDINATION_ERROR=\")" \
+      "resource.type=cloud_run_revision AND resource.labels.service_name=${runtime_service} AND timestamp>=\"${validation_started_at}\" AND (textPayload:\"RUNTIME_COORDINATION_ERROR=\" OR jsonPayload.message:\"RUNTIME_COORDINATION_ERROR=\")" \
       --project "${project}" \
       --limit 20 \
       --order=desc \
@@ -207,4 +3401,7 @@ if [[ -n "${todo_validation_user}" ]]; then
 fi
 
 echo "Deployed image revision: ${revision}"
+echo "Deployed image digest: ${image_digest}"
+echo "Cloud Run web revision: ${expected_web_revision}"
+echo "Cloud Run runtime revision: ${expected_revision}"
 echo "Runtime protocol revision: ${protocol_revision}"

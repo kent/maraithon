@@ -21,8 +21,12 @@ defmodule Maraithon.Runtime do
   alias Maraithon.Runtime.BackgroundJobs
   alias Maraithon.Runtime.IncidentLog
   alias Maraithon.Runtime.AgentRestartGuards
+  alias Maraithon.Runtime.WakeCoordinator
 
   require Logger
+
+  @web_lifecycle_finalize_wait_ms 30_000
+  @web_lifecycle_finalize_poll_ms 500
 
   @doc """
   Enqueue durable app-level background work.
@@ -79,12 +83,16 @@ defmodule Maraithon.Runtime do
         put_in(attrs, [:config, "budget"], default_budget())
       end
 
-    with :ok <- exact_runtime_enabled(),
-         :ok <- AgentSupervisor.preflight(admission: :normal),
+    with :ok <- exact_runtime_request_ready(),
+         :ok <- local_start_preflight(),
          :ok <- AgentIsolation.validate_binding_consent_input(user_id, binding_consent),
          {:ok, agent} <- create_consented_running_agent(attrs, binding_consent),
-         {:ok, _pid} <- start_with_failure_fence(agent) do
-      Logger.info("Started agent #{agent.id}", agent_id: agent.id, behavior: agent.behavior)
+         {:ok, _pid_or_status} <- start_or_enqueue_with_failure_fence(agent) do
+      Logger.info("Accepted agent start #{agent.id}",
+        agent_id: agent.id,
+        behavior: agent.behavior
+      )
+
       {:ok, agent}
     else
       {:error, reason} = error ->
@@ -104,8 +112,8 @@ defmodule Maraithon.Runtime do
 
     result =
       if is_map(consent) do
-        with :ok <- exact_runtime_enabled(),
-             :ok <- AgentSupervisor.preflight(admission: :normal),
+        with :ok <- exact_runtime_request_ready(),
+             :ok <- local_start_preflight(),
              :ok <- AgentIsolation.validate_binding_consent_input(user_id, consent),
              {:ok, agent} <-
                install_consented_package(user_id, package_slug, opts, consent) do
@@ -144,8 +152,8 @@ defmodule Maraithon.Runtime do
     consent = Keyword.get(opts, :binding_consent)
 
     if is_map(consent) do
-      with :ok <- exact_runtime_enabled(),
-           :ok <- AgentSupervisor.preflight(admission: :normal),
+      with :ok <- exact_runtime_request_ready(),
+           :ok <- local_start_preflight(),
            :ok <- AgentIsolation.validate_binding_consent_input(user_id, consent),
            {:ok, agent} <- install_consented_chief(user_id, opts, consent),
            {:ok, _pid_or_status} <- maybe_start_installed_agent(agent) do
@@ -160,8 +168,8 @@ defmodule Maraithon.Runtime do
   Start an existing persisted agent by ID.
   """
   def start_existing_agent(id) when is_binary(id) do
-    with :ok <- exact_runtime_enabled(),
-         :ok <- AgentSupervisor.preflight(admission: :normal) do
+    with :ok <- exact_runtime_request_ready(),
+         :ok <- local_start_preflight() do
       with_agent_lifecycle_lock(id, fn -> do_start_existing_agent(id) end)
     end
   end
@@ -189,9 +197,9 @@ defmodule Maraithon.Runtime do
       agent ->
         with :ok <- prepare_explicit_agent_start(agent.id),
              {:ok, updated_agent} <- Agents.claim_agent_start(agent.id) do
-          case start_agent_process(updated_agent) do
-            {:ok, _pid} ->
-              Logger.info("Started existing agent #{id}",
+          case start_or_enqueue_agent_process(updated_agent) do
+            {:ok, _pid_or_status} ->
+              Logger.info("Accepted existing agent start #{id}",
                 agent_id: id,
                 behavior: updated_agent.behavior
               )
@@ -349,13 +357,13 @@ defmodule Maraithon.Runtime do
 
   def resume_agent_installation(id, binding_consent)
       when is_binary(id) and is_map(binding_consent) do
-    with :ok <- exact_runtime_enabled(),
-         :ok <- AgentSupervisor.preflight(admission: :normal),
+    with :ok <- exact_runtime_request_ready(),
+         :ok <- local_start_preflight(),
          %Agent{} = agent <- Agents.get_agent(id, include_removed: true),
          true <- agent.install_status != "removed" || {:error, :agent_removed},
          :ok <- AgentIsolation.validate_binding_consent_input(agent.user_id, binding_consent),
          {:ok, enabled_agent} <- consent_and_enable_agent(agent, binding_consent),
-         {:ok, _pid} <- start_with_failure_fence(enabled_agent) do
+         {:ok, _pid_or_status} <- start_or_enqueue_with_failure_fence(enabled_agent) do
       {:ok, enabled_agent}
     else
       nil -> {:error, :not_found}
@@ -707,12 +715,33 @@ defmodule Maraithon.Runtime do
   end
 
   defp maybe_start_installed_agent(%{install_status: "enabled", status: "running"} = agent) do
-    start_with_failure_fence(agent)
+    start_or_enqueue_with_failure_fence(agent)
   end
 
   defp maybe_start_installed_agent(_agent), do: {:ok, :not_started}
 
-  defp start_with_failure_fence(agent, opts \\ []) do
+  # Web nodes persist desired state but never claim a lease or start an Agent.
+  # WakeCoordinator's PostgreSQL sweep is authoritative; this local cast only
+  # removes latency in combined/runtime development topologies.
+  defp start_or_enqueue_with_failure_fence(agent, opts \\ []) do
+    if RuntimeConfig.runtime_process?() do
+      start_with_failure_fence(agent, opts)
+    else
+      :ok = WakeCoordinator.nudge()
+      {:ok, :queued_for_runtime}
+    end
+  end
+
+  defp start_or_enqueue_agent_process(agent, opts \\ []) do
+    if RuntimeConfig.runtime_process?() do
+      start_agent_process(agent, opts)
+    else
+      :ok = WakeCoordinator.nudge()
+      {:ok, :queued_for_runtime}
+    end
+  end
+
+  defp start_with_failure_fence(agent, opts) do
     case start_agent_process(agent, opts) do
       {:ok, _pid} = success ->
         success
@@ -727,21 +756,25 @@ defmodule Maraithon.Runtime do
     end
   end
 
-  defp start_agent_process(agent, opts \\ []) do
-    opts = put_recorded_recovery_generation(agent.id, opts)
+  defp start_agent_process(agent, opts) do
+    if RuntimeConfig.runtime_process?() do
+      opts = put_recorded_recovery_generation(agent.id, opts)
 
-    supervisor_opts =
-      opts
-      |> Keyword.take([:recovery_generation])
-      |> Keyword.put(:admission, start_admission(opts))
+      supervisor_opts =
+        opts
+        |> Keyword.take([:recovery_generation])
+        |> Keyword.put(:admission, start_admission(opts))
 
-    case AgentSupervisor.start_agent(agent, supervisor_opts) do
-      {:ok, pid} = result ->
-        maybe_record_agent_resumed(agent, pid, opts)
-        result
+      case AgentSupervisor.start_agent(agent, supervisor_opts) do
+        {:ok, pid} = result ->
+          maybe_record_agent_resumed(agent, pid, opts)
+          result
 
-      other ->
-        other
+        other ->
+          other
+      end
+    else
+      {:error, :runtime_process_required}
     end
   end
 
@@ -764,12 +797,15 @@ defmodule Maraithon.Runtime do
   defp execute_lifecycle(id, kind, request, planner, opts \\ []) do
     requires_external_drain = unfenced_local_agent_present?(id)
 
-    with :ok <- exact_runtime_enabled(),
+    with :ok <- exact_runtime_request_ready(),
          {:ok, fence} <-
            begin_lifecycle(id, kind, request, planner, requires_external_drain, opts, 3) do
+      :ok = WakeCoordinator.nudge()
       _route_result = route_lifecycle_fence(fence, lifecycle_route_reason(kind, request))
 
-      case AgentLifecycleOperations.finalize(id, fence.operation_token) do
+      id
+      |> finalize_lifecycle(fence.operation_token, fence.operation)
+      |> case do
         {:ok, %{status: :reconciliation_pending} = pending} ->
           {:ok, Map.put(pending, :agent, Agents.get_agent(id, include_removed: true))}
 
@@ -784,6 +820,114 @@ defmodule Maraithon.Runtime do
       end
     end
   end
+
+  defp finalize_lifecycle(agent_id, operation_token, original_operation) do
+    result =
+      agent_id
+      |> AgentLifecycleOperations.finalize(operation_token)
+      |> recover_concurrently_finalized_lifecycle(
+        agent_id,
+        operation_token,
+        original_operation
+      )
+
+    if RuntimeConfig.process_role() == :web and transient_lifecycle_result?(result) do
+      deadline_ms = System.monotonic_time(:millisecond) + @web_lifecycle_finalize_wait_ms
+
+      await_lifecycle_finalization(
+        agent_id,
+        operation_token,
+        original_operation,
+        result,
+        deadline_ms
+      )
+    else
+      result
+    end
+  end
+
+  defp await_lifecycle_finalization(
+         agent_id,
+         operation_token,
+         original_operation,
+         last_result,
+         deadline_ms
+       ) do
+    remaining_ms = deadline_ms - System.monotonic_time(:millisecond)
+
+    if remaining_ms > 0 and transient_lifecycle_result?(last_result) do
+      receive do
+      after
+        min(@web_lifecycle_finalize_poll_ms, remaining_ms) -> :ok
+      end
+
+      result =
+        agent_id
+        |> AgentLifecycleOperations.finalize(operation_token)
+        |> recover_concurrently_finalized_lifecycle(
+          agent_id,
+          operation_token,
+          original_operation
+        )
+
+      await_lifecycle_finalization(
+        agent_id,
+        operation_token,
+        original_operation,
+        result,
+        deadline_ms
+      )
+    else
+      last_result
+    end
+  end
+
+  defp recover_concurrently_finalized_lifecycle(
+         {:error, :lifecycle_operation_not_found} = missing,
+         agent_id,
+         operation_token,
+         original_operation
+       ) do
+    if RuntimeConfig.process_role() == :web do
+      case AgentLifecycleOperations.confirm_finalized_postcondition(
+             agent_id,
+             operation_token,
+             original_operation
+           ) do
+        {:ok, _result} = confirmed -> confirmed
+        {:error, _reason} -> missing
+      end
+    else
+      missing
+    end
+  end
+
+  defp recover_concurrently_finalized_lifecycle(
+         result,
+         _agent_id,
+         _operation_token,
+         _original_operation
+       ),
+       do: result
+
+  defp transient_lifecycle_result?(
+         {:ok,
+          %{
+            status: :reconciliation_pending,
+            reason: reason
+          }}
+       ) do
+    reason in [
+      :runtime_lease_owned,
+      :active_run_pointer,
+      :processing_directive,
+      :running_agent_run,
+      :requested_agent_run_step,
+      :active_effect
+    ]
+  end
+
+  defp transient_lifecycle_result?(_result), do: false
 
   defp begin_lifecycle(_id, _kind, _request, _planner, _requires_external_drain, _opts, 0),
     do: {:error, :agent_stop_reconciliation_pending}
@@ -904,7 +1048,7 @@ defmodule Maraithon.Runtime do
   defp require_finalized_delete(_result), do: {:error, :agent_lifecycle_incomplete}
 
   defp maybe_start_finalized_agent(agent, true) do
-    with {:ok, _pid} <- start_with_failure_fence(agent), do: {:ok, agent}
+    with {:ok, _pid_or_status} <- start_or_enqueue_with_failure_fence(agent), do: {:ok, agent}
   end
 
   defp maybe_start_finalized_agent(agent, false), do: {:ok, agent}
@@ -1192,9 +1336,35 @@ defmodule Maraithon.Runtime do
   defp exact_runtime_enabled do
     cond do
       not RuntimeConfig.exact_agent_runtime_enabled?() -> {:error, :exact_runtime_disabled}
+      not RuntimeConfig.runtime_process?() -> {:error, :runtime_process_required}
       not RuntimeConfig.exact_agent_runtime_ready?() -> {:error, :effect_protocol_not_exact}
       true -> :ok
     end
+  end
+
+  defp exact_runtime_request_ready do
+    cond do
+      not RuntimeConfig.exact_agent_runtime_enabled?() ->
+        {:error, :exact_runtime_disabled}
+
+      RuntimeConfig.maintenance_process?() ->
+        {:error, :runtime_process_required}
+
+      not RuntimeConfig.exact_agent_protocol_ready?() ->
+        {:error, :effect_protocol_not_exact}
+
+      RuntimeConfig.runtime_process?() and not RuntimeConfig.exact_agent_runtime_ready?() ->
+        {:error, :effect_protocol_not_exact}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp local_start_preflight do
+    if RuntimeConfig.runtime_process?(),
+      do: AgentSupervisor.preflight(admission: :normal),
+      else: :ok
   end
 
   defp normalize_optional_string(nil), do: nil

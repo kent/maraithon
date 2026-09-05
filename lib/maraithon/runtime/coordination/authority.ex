@@ -14,6 +14,41 @@ defmodule Maraithon.Runtime.Coordination.Authority do
   alias Maraithon.Runtime.Coordination.{NodeIncarnation, Partition, Protocol}
 
   @max_ttl_ms 300_000
+  @deployment_gate_node_name "__maraithon_deployment_gate__"
+  @legacy_deployment_generation "legacy"
+  @deployment_generation_pattern ~r/\A[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\z/
+  @image_digest_pattern ~r/\Asha256:[0-9a-f]{64}\z/
+  @deployment_gate_migration 20_260_904_190_000
+
+  @doc "Returns the immutable Cloud Run revision identity used by the deployment gate."
+  def deployment_generation do
+    case System.get_env("MARAITHON_DEPLOYMENT_GENERATION", "") |> String.trim() do
+      "" ->
+        case System.get_env("K_REVISION") do
+          value when is_binary(value) and value != "" -> value
+          _ -> @legacy_deployment_generation
+        end
+
+      stable_generation ->
+        stable_generation
+    end
+  end
+
+  @doc "Returns the latest durable deployment gate projection used by deploy status checks."
+  def deployment_gate_status do
+    case latest_deployment_gate!() do
+      nil ->
+        nil
+
+      gate ->
+        %{
+          state: Map.fetch!(gate, "state"),
+          target_generation: Map.fetch!(gate, "target_generation"),
+          stable_generation: Map.fetch!(gate, "stable_generation"),
+          image_digest: Map.fetch!(gate, "image_digest")
+        }
+    end
+  end
 
   def register_node(opts \\ []) when is_list(opts) do
     id = Keyword.get(opts, :id, Ecto.UUID.generate())
@@ -28,7 +63,10 @@ defmodule Maraithon.Runtime.Coordination.Authority do
          :ok <- valid_ttl(ttl_ms),
          true <- is_map(metadata) do
       Repo.transaction(fn ->
+        require_read_committed!()
         activation_epoch = Protocol.locked_active!()
+        require_deployment_gate_installed!()
+        require_deployment_generation_admitted!(metadata)
         set_local!("maraithon.runtime_node_action", id)
 
         result =
@@ -62,9 +100,422 @@ defmodule Maraithon.Runtime.Coordination.Authority do
     end
   end
 
+  @doc """
+  Atomically closes new node admission before a revision drain starts.
+
+  Deployment gates are append-only revoked rows in the node-incarnation
+  ledger. The database trigger serializes this operation with registration and
+  readiness publication through the protocol-row lock. Only the migrator role
+  may append one.
+  """
+  def arm_deployment_handoff(target_generation, image_digest)
+      when is_binary(target_generation) and is_binary(image_digest) do
+    with :ok <- valid_deployment_generation(target_generation),
+         :ok <- valid_image_digest(image_digest),
+         false <- target_generation == @legacy_deployment_generation do
+      Repo.transaction(fn ->
+        require_read_committed!()
+        {activation_epoch, exact_revision} = lock_deployment_protocol!()
+        latest = latest_deployment_gate!()
+
+        case latest do
+          %{
+            "state" => "handoff",
+            "target_generation" => ^target_generation,
+            "image_digest" => ^image_digest
+          } ->
+            :already_armed
+
+          %{
+            "state" => state,
+            "target_generation" => ^target_generation,
+            "image_digest" => ^image_digest
+          }
+          when state in ["deploying", "activating"] ->
+            Repo.rollback(:deployment_handoff_already_proven)
+
+          %{"state" => state, "target_generation" => pending_generation}
+          when state in ["handoff", "deploying", "activating"] ->
+            Repo.rollback({:deployment_handoff_already_armed, pending_generation})
+
+          %{"state" => state, "stable_generation" => stable_generation}
+          when state in ["stable", "aborted"] ->
+            reject_reused_deployment_generation!(target_generation)
+
+            append_deployment_gate!(
+              activation_epoch,
+              exact_revision,
+              latest,
+              "handoff",
+              target_generation,
+              stable_generation,
+              image_digest
+            )
+
+            :armed
+
+          nil ->
+            reject_reused_deployment_generation!(target_generation)
+
+            append_deployment_gate!(
+              activation_epoch,
+              exact_revision,
+              nil,
+              "handoff",
+              target_generation,
+              @legacy_deployment_generation,
+              image_digest
+            )
+
+            :armed
+
+          _ ->
+            Repo.rollback(:deployment_gate_invalid)
+        end
+      end)
+    else
+      true -> {:error, :legacy_generation_cannot_be_a_handoff_target}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  def arm_deployment_handoff(_target_generation, _image_digest),
+    do: {:error, :invalid_deployment_handoff}
+
+  @doc "Closes all admission after repeating the exact drain proof in PostgreSQL."
+  def prove_deployment_handoff(target_generation, image_digest)
+      when is_binary(target_generation) and is_binary(image_digest) do
+    with :ok <- valid_deployment_generation(target_generation),
+         :ok <- valid_image_digest(image_digest) do
+      Repo.transaction(fn ->
+        require_read_committed!()
+        {activation_epoch, exact_revision} = lock_deployment_protocol!()
+        latest = latest_deployment_gate!()
+
+        case latest do
+          %{
+            "state" => state,
+            "target_generation" => ^target_generation,
+            "image_digest" => ^image_digest
+          }
+          when state in ["deploying", "activating"] ->
+            :already_proven
+
+          %{
+            "state" => "handoff",
+            "target_generation" => ^target_generation,
+            "stable_generation" => stable_generation,
+            "image_digest" => ^image_digest
+          } ->
+            prove_deployment_handoff_quiescent!()
+
+            append_deployment_gate!(
+              activation_epoch,
+              exact_revision,
+              latest,
+              "deploying",
+              target_generation,
+              stable_generation,
+              image_digest
+            )
+
+            :proven
+
+          %{"state" => state, "target_generation" => pending_generation}
+          when state in ["handoff", "deploying", "activating"] ->
+            Repo.rollback({:deployment_handoff_target_mismatch, pending_generation})
+
+          %{"state" => state, "stable_generation" => stable_generation}
+          when state in ["stable", "aborted"] ->
+            Repo.rollback({:deployment_handoff_not_armed, stable_generation})
+
+          _ ->
+            Repo.rollback(:deployment_gate_missing)
+        end
+      end)
+    end
+  end
+
+  def prove_deployment_handoff(_target_generation, _image_digest),
+    do: {:error, :invalid_deployment_handoff}
+
+  @doc "Admits only the proven target generation while its runtime readiness is verified."
+  def activate_deployment_generation(target_generation, image_digest)
+      when is_binary(target_generation) and is_binary(image_digest) do
+    with :ok <- valid_deployment_generation(target_generation),
+         :ok <- valid_image_digest(image_digest) do
+      Repo.transaction(fn ->
+        require_read_committed!()
+        {activation_epoch, exact_revision} = lock_deployment_protocol!()
+        latest = latest_deployment_gate!()
+
+        case latest do
+          %{
+            "state" => "activating",
+            "target_generation" => ^target_generation,
+            "image_digest" => ^image_digest
+          } ->
+            :already_activating
+
+          %{
+            "state" => "deploying",
+            "target_generation" => ^target_generation,
+            "stable_generation" => stable_generation,
+            "previous_generation" => previous_generation,
+            "image_digest" => ^image_digest
+          } ->
+            append_deployment_gate!(
+              activation_epoch,
+              exact_revision,
+              latest,
+              "activating",
+              target_generation,
+              stable_generation,
+              image_digest,
+              previous_generation
+            )
+
+            :activated
+
+          %{"state" => state, "target_generation" => pending_generation}
+          when state in ["handoff", "deploying", "activating"] ->
+            Repo.rollback({:deployment_activation_target_mismatch, pending_generation})
+
+          %{"state" => state, "stable_generation" => stable_generation}
+          when state in ["stable", "aborted"] ->
+            Repo.rollback({:deployment_handoff_not_proven, stable_generation})
+
+          _ ->
+            Repo.rollback(:deployment_gate_missing)
+        end
+      end)
+    end
+  end
+
+  def activate_deployment_generation(_target_generation, _image_digest),
+    do: {:error, :invalid_deployment_handoff}
+
+  @doc "Retargets an irreversible handoff when its Cloud Run revision cannot become viable."
+  def retarget_deployment_handoff(
+        current_generation,
+        current_image_digest,
+        target_generation,
+        target_image_digest
+      )
+      when is_binary(current_generation) and is_binary(current_image_digest) and
+             is_binary(target_generation) and is_binary(target_image_digest) do
+    with :ok <- valid_deployment_generation(current_generation),
+         :ok <- valid_image_digest(current_image_digest),
+         :ok <- valid_deployment_generation(target_generation),
+         :ok <- valid_image_digest(target_image_digest),
+         false <- target_generation == @legacy_deployment_generation,
+         false <- target_generation == current_generation do
+      Repo.transaction(fn ->
+        require_read_committed!()
+        {activation_epoch, exact_revision} = lock_deployment_protocol!()
+        latest = latest_deployment_gate!()
+
+        case latest do
+          %{
+            "state" => "deploying",
+            "target_generation" => ^target_generation,
+            "image_digest" => ^target_image_digest,
+            "sequence" => sequence
+          } ->
+            if deployment_gate_predecessor_matches?(
+                 sequence,
+                 current_generation,
+                 current_image_digest
+               ) do
+              :already_retargeted
+            else
+              Repo.rollback(:deployment_retarget_predecessor_mismatch)
+            end
+
+          %{
+            "state" => state,
+            "target_generation" => ^current_generation,
+            "stable_generation" => stable_generation,
+            "image_digest" => ^current_image_digest
+          }
+          when state in ["deploying", "activating"] ->
+            reject_reused_deployment_generation!(target_generation)
+            prove_deployment_handoff_quiescent!()
+
+            append_deployment_gate!(
+              activation_epoch,
+              exact_revision,
+              latest,
+              "deploying",
+              target_generation,
+              stable_generation,
+              target_image_digest
+            )
+
+            :retargeted
+
+          %{"state" => state, "target_generation" => pending_generation}
+          when state in ["deploying", "activating"] ->
+            Repo.rollback({:deployment_handoff_target_mismatch, pending_generation})
+
+          %{"state" => state} when state in ["handoff", "stable", "aborted"] ->
+            Repo.rollback({:deployment_handoff_not_deploying, state})
+
+          _ ->
+            Repo.rollback(:deployment_gate_missing)
+        end
+      end)
+    else
+      true -> {:error, :invalid_deployment_retarget}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  def retarget_deployment_handoff(
+        _current_generation,
+        _current_image_digest,
+        _target_generation,
+        _target_image_digest
+      ),
+      do: {:error, :invalid_deployment_retarget}
+
+  @doc "Makes a fully ready activating Cloud Run revision the stable generation."
+  def stabilize_deployment_generation(target_generation, image_digest)
+      when is_binary(target_generation) and is_binary(image_digest) do
+    with :ok <- valid_deployment_generation(target_generation),
+         :ok <- valid_image_digest(image_digest) do
+      Repo.transaction(fn ->
+        require_read_committed!()
+        {activation_epoch, exact_revision} = lock_deployment_protocol!()
+        latest = latest_deployment_gate!()
+
+        case latest do
+          %{
+            "state" => "stable",
+            "stable_generation" => ^target_generation,
+            "target_generation" => ^target_generation,
+            "image_digest" => ^image_digest
+          } ->
+            :already_stable
+
+          %{
+            "state" => "activating",
+            "target_generation" => ^target_generation,
+            "stable_generation" => previous_generation,
+            "image_digest" => ^image_digest
+          } ->
+            require_deployment_generation_ready!(
+              target_generation,
+              activation_epoch,
+              exact_revision
+            )
+
+            append_deployment_gate!(
+              activation_epoch,
+              exact_revision,
+              latest,
+              "stable",
+              target_generation,
+              target_generation,
+              image_digest,
+              previous_generation
+            )
+
+            :stabilized
+
+          %{
+            "state" => "deploying",
+            "target_generation" => ^target_generation,
+            "image_digest" => ^image_digest
+          } ->
+            Repo.rollback({:deployment_generation_not_activating, "deploying"})
+
+          %{"state" => state, "target_generation" => pending_generation}
+          when state in ["handoff", "deploying", "activating"] ->
+            Repo.rollback({:deployment_handoff_target_mismatch, pending_generation})
+
+          %{"state" => state, "stable_generation" => stable_generation}
+          when state in ["stable", "aborted"] ->
+            Repo.rollback({:deployment_handoff_not_armed, stable_generation})
+
+          _ ->
+            Repo.rollback(:deployment_gate_missing)
+        end
+      end)
+    end
+  end
+
+  def stabilize_deployment_generation(_target_generation, _image_digest),
+    do: {:error, :invalid_deployment_handoff}
+
+  @doc "Records a pre-proof abort and reopens admission for the last stable generation."
+  def abort_deployment_handoff(target_generation, image_digest)
+      when is_binary(target_generation) and is_binary(image_digest) do
+    with :ok <- valid_deployment_generation(target_generation),
+         :ok <- valid_image_digest(image_digest) do
+      Repo.transaction(fn ->
+        require_read_committed!()
+        {activation_epoch, exact_revision} = lock_deployment_protocol!()
+        latest = latest_deployment_gate!()
+
+        case latest do
+          %{
+            "state" => "handoff",
+            "target_generation" => ^target_generation,
+            "stable_generation" => stable_generation,
+            "image_digest" => ^image_digest
+          } ->
+            append_deployment_gate!(
+              activation_epoch,
+              exact_revision,
+              latest,
+              "aborted",
+              target_generation,
+              stable_generation,
+              image_digest
+            )
+
+            :aborted
+
+          %{
+            "state" => state,
+            "target_generation" => ^target_generation,
+            "image_digest" => ^image_digest
+          }
+          when state in ["deploying", "activating"] ->
+            Repo.rollback(:deployment_handoff_irreversible)
+
+          %{"state" => state, "target_generation" => pending_generation}
+          when state in ["handoff", "deploying", "activating"] ->
+            Repo.rollback({:deployment_handoff_target_mismatch, pending_generation})
+
+          %{
+            "state" => "aborted",
+            "target_generation" => ^target_generation,
+            "image_digest" => ^image_digest
+          } ->
+            :already_aborted
+
+          %{"state" => state, "stable_generation" => stable_generation}
+          when state in ["stable", "aborted"] ->
+            Repo.rollback({:deployment_handoff_not_armed, stable_generation})
+
+          _ ->
+            Repo.rollback(:deployment_gate_missing)
+        end
+      end)
+    end
+  end
+
+  def abort_deployment_handoff(_target_generation, _image_digest),
+    do: {:error, :invalid_deployment_handoff}
+
   def mark_node_ready(%NodeIncarnation{} = session) do
     Repo.transaction(fn ->
+      require_read_committed!()
       _ = Protocol.locked_active!()
+      require_deployment_gate_installed!()
+      require_deployment_generation_admitted!(session.metadata)
       set_local!("maraithon.runtime_node_action", session.id)
 
       update_node!(
@@ -1396,6 +1847,306 @@ defmodule Maraithon.Runtime.Coordination.Authority do
     end
   end
 
+  defp lock_deployment_protocol! do
+    case SQL.query!(
+           Repo,
+           """
+           SELECT activation_epoch, exact_revision
+           FROM public.runtime_coordination_protocols
+           WHERE name = 'runtime' AND mode = 'partition_fenced_v1'
+           FOR UPDATE
+           """,
+           []
+         ).rows do
+      [[activation_epoch, exact_revision]]
+      when not is_nil(activation_epoch) and is_binary(exact_revision) ->
+        {activation_epoch, exact_revision}
+
+      _ ->
+        Repo.rollback(:runtime_coordination_protocol_not_active)
+    end
+  end
+
+  defp latest_deployment_gate! do
+    case SQL.query!(
+           Repo,
+           """
+           SELECT metadata
+           FROM public.runtime_node_incarnations
+           WHERE node_name = $1 AND metadata ->> 'kind' = 'deployment_gate'
+           ORDER BY (metadata ->> 'sequence')::bigint DESC
+           LIMIT 1
+           """,
+           [@deployment_gate_node_name]
+         ).rows do
+      [[metadata]] when is_map(metadata) -> metadata
+      [[metadata]] when is_binary(metadata) -> Jason.decode!(metadata)
+      [] -> nil
+    end
+  end
+
+  defp prove_deployment_handoff_quiescent! do
+    [checks] =
+      SQL.query!(
+        Repo,
+        """
+        SELECT
+          NOT EXISTS (
+            SELECT 1 FROM public.runtime_node_incarnations
+            WHERE state IN ('joining', 'ready')
+              AND lease_expires_at > timezone('UTC', clock_timestamp())
+          ),
+          NOT EXISTS (
+            SELECT 1 FROM public.runtime_leader_authorities
+            WHERE state IN ('preparing', 'ready')
+              AND lease_expires_at > timezone('UTC', clock_timestamp())
+          ),
+          NOT EXISTS (
+            SELECT 1 FROM public.runtime_partitions
+            WHERE state IN ('preparing', 'ready')
+              AND (
+                lease_expires_at IS NULL OR
+                lease_expires_at > timezone('UTC', clock_timestamp())
+              )
+          ),
+          NOT EXISTS (
+            SELECT 1 FROM public.runtime_task_assignments
+            WHERE state IN ('reserved', 'running', 'termination_requested', 'termination_proven')
+          ),
+          NOT EXISTS (SELECT 1 FROM public.agent_runtime_leases)
+        """,
+        []
+      ).rows
+
+    if Enum.all?(checks, &(&1 == true)) do
+      :ok
+    else
+      keys =
+        ~w(no_live_nodes no_live_leader no_admitting_partitions no_unresolved_tasks no_agent_leases)
+
+      Repo.rollback({:deployment_handoff_not_quiescent, Map.new(Enum.zip(keys, checks))})
+    end
+  end
+
+  defp require_deployment_generation_ready!(
+         target_generation,
+         activation_epoch,
+         exact_revision
+       ) do
+    unless SQL.query!(
+             Repo,
+             """
+             WITH protocol AS (
+               SELECT partition_count
+               FROM public.runtime_coordination_protocols
+               WHERE name = 'runtime'
+                 AND mode = 'partition_fenced_v1'
+                 AND activation_epoch = $2::uuid
+                 AND exact_revision = $3
+             ),
+             live_nodes AS (
+               SELECT node.id, node.state, node.ready_at, node.draining_at,
+                      node.revoked_at, node.activation_epoch, node.revision, node.metadata
+               FROM public.runtime_node_incarnations AS node
+               WHERE node.node_name <> $1
+                 AND node.state IN ('joining', 'ready')
+                 AND node.lease_expires_at > timezone('UTC', clock_timestamp())
+             ),
+             target_nodes AS (
+               SELECT node.id
+               FROM live_nodes AS node
+               WHERE node.state = 'ready'
+                 AND node.ready_at IS NOT NULL
+                 AND node.draining_at IS NULL
+                 AND node.revoked_at IS NULL
+                 AND node.activation_epoch = $2::uuid
+                 AND node.revision = $3
+                 AND COALESCE(
+                   NULLIF(node.metadata ->> 'deployment_generation', ''), 'legacy'
+                 ) = $4
+             )
+             SELECT
+               (SELECT count(*) FROM live_nodes) = 1 AND
+               (SELECT count(*) FROM target_nodes) = 1 AND
+               (SELECT count(*) FROM public.runtime_partitions) =
+                 (SELECT partition_count FROM protocol) AND
+               NOT EXISTS (
+                 SELECT 1
+                 FROM public.runtime_partitions AS partition
+                 WHERE partition.activation_epoch IS DISTINCT FROM $2::uuid
+                   OR partition.state <> 'ready'
+                   OR partition.ready_at IS NULL
+                   OR partition.draining_at IS NOT NULL
+                   OR partition.lease_expires_at IS NULL
+                   OR partition.lease_expires_at <= timezone('UTC', clock_timestamp())
+                   OR NOT EXISTS (
+                     SELECT 1 FROM target_nodes
+                     WHERE target_nodes.id = partition.owner_node_incarnation_id
+                   )
+               )
+             """,
+             [
+               @deployment_gate_node_name,
+               activation_epoch,
+               exact_revision,
+               target_generation
+             ]
+           ).rows == [[true]] do
+      Repo.rollback(:deployment_generation_not_ready)
+    end
+
+    :ok
+  end
+
+  defp append_deployment_gate!(
+         activation_epoch,
+         exact_revision,
+         latest,
+         state,
+         target_generation,
+         stable_generation,
+         image_digest,
+         previous_generation \\ nil
+       ) do
+    sequence = if is_nil(latest), do: 1, else: Map.fetch!(latest, "sequence") + 1
+    id = Ecto.UUID.generate()
+    previous_generation = previous_generation || stable_generation
+
+    metadata = %{
+      "kind" => "deployment_gate",
+      "sequence" => sequence,
+      "state" => state,
+      "target_generation" => target_generation,
+      "stable_generation" => stable_generation,
+      "previous_generation" => previous_generation,
+      "image_digest" => image_digest
+    }
+
+    set_local!("maraithon.runtime_deployment_action", id)
+
+    SQL.query!(
+      Repo,
+      """
+      INSERT INTO public.runtime_node_incarnations
+        (id, activation_epoch, node_name, revision, state, lease_expires_at,
+         revoked_at, metadata, inserted_at, updated_at)
+      VALUES
+        ($1::uuid, $2::uuid, $3, $4, 'revoked',
+         timezone('UTC', clock_timestamp()), timezone('UTC', clock_timestamp()),
+         $5::jsonb, timezone('UTC', clock_timestamp()), timezone('UTC', clock_timestamp()))
+      """,
+      [
+        Ecto.UUID.dump!(id),
+        activation_epoch,
+        @deployment_gate_node_name,
+        exact_revision,
+        metadata
+      ]
+    )
+
+    metadata
+  end
+
+  defp reject_reused_deployment_generation!(target_generation) do
+    if SQL.query!(
+         Repo,
+         """
+         SELECT EXISTS (
+           SELECT 1
+           FROM public.runtime_node_incarnations
+           WHERE node_name = $1
+             AND metadata ->> 'kind' = 'deployment_gate'
+             AND $2 IN (
+               metadata ->> 'target_generation',
+               metadata ->> 'stable_generation',
+               metadata ->> 'previous_generation'
+             )
+         )
+         """,
+         [@deployment_gate_node_name, target_generation]
+       ).rows == [[true]] do
+      Repo.rollback(:deployment_generation_already_used)
+    end
+
+    :ok
+  end
+
+  defp deployment_gate_predecessor_matches?(sequence, target_generation, image_digest)
+       when is_integer(sequence) and sequence > 1 do
+    SQL.query!(
+      Repo,
+      """
+      SELECT EXISTS (
+        SELECT 1
+        FROM public.runtime_node_incarnations
+        WHERE node_name = $1
+          AND metadata ->> 'kind' = 'deployment_gate'
+          AND (metadata ->> 'sequence')::bigint = $2::bigint - 1
+          AND metadata ->> 'state' IN ('deploying', 'activating')
+          AND metadata ->> 'target_generation' = $3
+          AND metadata ->> 'image_digest' = $4
+      )
+      """,
+      [@deployment_gate_node_name, sequence, target_generation, image_digest]
+    ).rows == [[true]]
+  end
+
+  defp deployment_gate_predecessor_matches?(_sequence, _target_generation, _image_digest),
+    do: false
+
+  defp require_deployment_gate_installed! do
+    unless SQL.query!(
+             Repo,
+             "SELECT EXISTS (SELECT 1 FROM public.schema_migrations WHERE version = $1)",
+             [@deployment_gate_migration]
+           ).rows == [[true]] do
+      Repo.rollback(:deployment_gate_not_installed)
+    end
+
+    :ok
+  end
+
+  # Admission and gate transitions hold the same protocol-row lock, so this
+  # check cannot go stale before the node write commits. The trigger repeats
+  # it as the non-bypassable database authority; this early check merely turns
+  # an expected handoff state into a normal fail-closed result for Session.
+  defp require_deployment_generation_admitted!(metadata) when is_map(metadata) do
+    generation =
+      Map.get(metadata, "deployment_generation") ||
+        Map.get(metadata, :deployment_generation) ||
+        @legacy_deployment_generation
+
+    if valid_deployment_generation(generation) != :ok do
+      Repo.rollback(:invalid_deployment_generation)
+    end
+
+    case latest_deployment_gate!() do
+      nil when generation == @legacy_deployment_generation ->
+        :ok
+
+      %{"state" => state, "stable_generation" => ^generation}
+      when state in ["stable", "aborted"] ->
+        :ok
+
+      %{"state" => "activating", "target_generation" => ^generation} ->
+        :ok
+
+      _closed_or_mismatched ->
+        Repo.rollback(:deployment_admission_closed)
+    end
+  end
+
+  defp require_read_committed! do
+    unless Repo.config()[:pool] == Ecto.Adapters.SQL.Sandbox do
+      SQL.query!(Repo, "SET TRANSACTION ISOLATION LEVEL READ COMMITTED", [])
+    end
+
+    case SQL.query!(Repo, "SELECT current_setting('transaction_isolation')", []).rows do
+      [["read committed"]] -> :ok
+      _ -> Repo.rollback(:deployment_gate_requires_read_committed)
+    end
+  end
+
   defp set_local!(key, value) do
     SQL.query!(Repo, "SELECT set_config($1, $2, true)", [key, to_string(value)])
     :ok
@@ -1428,6 +2179,24 @@ defmodule Maraithon.Runtime.Coordination.Authority do
 
   defp valid_text(value) when is_binary(value) and byte_size(value) in 1..255, do: :ok
   defp valid_text(_), do: {:error, :invalid_incarnation_text}
+
+  defp valid_deployment_generation(value)
+       when is_binary(value) and byte_size(value) in 1..63 do
+    if Regex.match?(@deployment_generation_pattern, value),
+      do: :ok,
+      else: {:error, :invalid_deployment_generation}
+  end
+
+  defp valid_deployment_generation(_value), do: {:error, :invalid_deployment_generation}
+
+  defp valid_image_digest(value) when is_binary(value) do
+    if Regex.match?(@image_digest_pattern, value),
+      do: :ok,
+      else: {:error, :invalid_image_digest}
+  end
+
+  defp valid_image_digest(_value), do: {:error, :invalid_image_digest}
+
   defp valid_ttl(value) when is_integer(value) and value in 1_000..@max_ttl_ms, do: :ok
   defp valid_ttl(_), do: {:error, :invalid_coordination_ttl}
 end

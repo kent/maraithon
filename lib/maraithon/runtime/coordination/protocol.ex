@@ -19,6 +19,7 @@ defmodule Maraithon.Runtime.Coordination.Protocol do
   @confirmation "NON_ROLLING_MULTINODE_FLEET_DRAINED"
   @migration 20_260_810_140_004
   @repair_migration 20_260_811_000_420
+  @deployment_gate_migration 20_260_904_190_000
 
   @opaque effect_pair_lock :: {:effect_pair_lock, Ecto.UUID.t()}
 
@@ -488,6 +489,8 @@ defmodule Maraithon.Runtime.Coordination.Protocol do
            SELECT
              (SELECT count(*) FROM public.schema_migrations WHERE version = #{@migration}) = 1 AND
              (SELECT count(*) FROM public.schema_migrations WHERE version = #{@repair_migration}) = 1 AND
+             (SELECT count(*) FROM public.schema_migrations
+              WHERE version = #{@deployment_gate_migration}) = 1 AND
              public.runtime_coordination_catalog_ready_count() = 120 AND
              public.runtime_coordination_roles_ready() AND
              public.runtime_coordination_acl_ready() AND

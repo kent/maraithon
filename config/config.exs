@@ -13,7 +13,10 @@ config :phoenix, :filter_parameters, ["password", "secret", "token", "credential
 
 config :maraithon,
   ecto_repos: [Maraithon.Repo],
-  generators: [timestamp_type: :utc_datetime]
+  generators: [timestamp_type: :utc_datetime],
+  # Local development keeps the historical single-node topology. Production
+  # runtime config requires an explicit fail-closed service role.
+  process_role: :combined
 
 # Build-time asset pipeline. Tailwind stays on 3.4 so compiled output matches
 # the classes the templates were written against (the old CDN runtime was v3).

@@ -315,6 +315,37 @@ defmodule Maraithon.Runtime.AgentLifecycleOperations do
   def finalize_for_reconciliation(_agent_id, _operation_token),
     do: {:error, :invalid_lifecycle_operation}
 
+  @doc false
+  def confirm_finalized_postcondition(
+        agent_id,
+        operation_token,
+        %AgentLifecycleOperation{} = original_operation
+      ) do
+    with {:ok, agent_id} <- cast_uuid(agent_id),
+         {:ok, operation_token} <- cast_uuid(operation_token),
+         true <- original_operation.agent_id == agent_id,
+         true <- original_operation.operation_token == operation_token,
+         true <- original_operation.state == "draining",
+         true <- valid_payload?(original_operation),
+         true <- recoverable_operation?(original_operation) do
+      case Repo.transaction(fn ->
+             confirm_finalized_postcondition_locked!(original_operation)
+           end) do
+        {:ok, result} -> {:ok, result}
+        {:error, _reason} -> {:error, :lifecycle_completion_unproven}
+      end
+    else
+      _invalid -> {:error, :lifecycle_completion_unproven}
+    end
+  rescue
+    _error -> {:error, :lifecycle_completion_unproven}
+  catch
+    :exit, _reason -> {:error, :lifecycle_completion_unproven}
+  end
+
+  def confirm_finalized_postcondition(_agent_id, _operation_token, _operation),
+    do: {:error, :lifecycle_completion_unproven}
+
   defp do_finalize(agent_id, operation_token, scoped?) do
     with {:ok, agent_id} <- cast_uuid(agent_id),
          {:ok, operation_token} <- optional_uuid(operation_token) do
@@ -353,6 +384,130 @@ defmodule Maraithon.Runtime.AgentLifecycleOperations do
       end
     end
   end
+
+  defp confirm_finalized_postcondition_locked!(
+         %AgentLifecycleOperation{kind: "delete"} = operation
+       ) do
+    agent = Repo.get(Agent, operation.agent_id)
+    pending_operation = Repo.get(AgentLifecycleOperation, operation.agent_id)
+
+    if is_nil(agent) and is_nil(pending_operation) do
+      %{
+        action: :deleted,
+        agent: nil,
+        agent_id: operation.agent_id,
+        operation_token: operation.operation_token,
+        resume_after: false,
+        status: :finalized
+      }
+    else
+      Repo.rollback(:lifecycle_completion_unproven)
+    end
+  end
+
+  defp confirm_finalized_postcondition_locked!(%AgentLifecycleOperation{} = operation) do
+    agent =
+      Repo.one(
+        from(agent in Agent,
+          where: agent.id == ^operation.agent_id,
+          lock: "FOR UPDATE"
+        )
+      ) || Repo.rollback(:lifecycle_completion_unproven)
+
+    binding = lock_binding(agent)
+
+    if lock_operation(operation.agent_id),
+      do: Repo.rollback(:lifecycle_completion_unproven)
+
+    if finalization_happened_after_begin?(agent, operation) and
+         finalized_agent_postcondition?(agent, binding, operation) do
+      %{
+        action: :updated,
+        agent: agent,
+        agent_id: agent.id,
+        operation_token: operation.operation_token,
+        resume_after: operation.payload["resume_after"] == true,
+        status: :finalized
+      }
+    else
+      Repo.rollback(:lifecycle_completion_unproven)
+    end
+  end
+
+  defp recoverable_operation?(operation) do
+    payload = operation.payload
+    mutation = payload["mutation"]
+
+    is_map(mutation) and mutation["action"] == operation.kind and
+      is_boolean(payload["resume_after"]) and
+      payload["final_status"] in ["running", "stopped", "terminated"]
+  end
+
+  defp finalized_agent_postcondition?(agent, binding, operation) do
+    payload = operation.payload
+    mutation = payload["mutation"]
+
+    case mutation["action"] do
+      "stop" ->
+        payload["final_status"] == "stopped" and agent.status == "stopped" and
+          match?(%DateTime{}, agent.stopped_at)
+
+      "pause" ->
+        payload["final_status"] == "stopped" and agent.status == "stopped" and
+          agent.install_status == "paused" and binding_status?(binding, "paused")
+
+      "remove" ->
+        payload["final_status"] == "stopped" and agent.status == "stopped" and
+          agent.install_status == "removed" and match?(%DateTime{}, agent.removed_at) and
+          binding_status?(binding, "revoked")
+
+      action when action in ["update", "upgrade"] ->
+        mutation_attrs_applied?(agent, mutation["attrs"]) and
+          final_status_applied?(agent, payload["final_status"])
+
+      _invalid ->
+        false
+    end
+  end
+
+  defp binding_status?(nil, _expected), do: true
+  defp binding_status?(%Binding{status: status}, expected), do: status == expected
+
+  defp finalization_happened_after_begin?(
+         %Agent{updated_at: %DateTime{} = updated_at},
+         %AgentLifecycleOperation{initiated_at: %DateTime{} = initiated_at}
+       ),
+       do: DateTime.compare(updated_at, initiated_at) == :gt
+
+  defp finalization_happened_after_begin?(_agent, _operation), do: false
+
+  defp mutation_attrs_applied?(%Agent{} = agent, attrs) when is_map(attrs) do
+    allowed_fields = ~w(behavior config project_id agent_package_version_id)
+
+    if Enum.all?(Map.keys(attrs), &(&1 in allowed_fields)) do
+      changeset = Agent.changeset(agent, attrs)
+      changeset.valid? and changeset.changes == %{}
+    else
+      false
+    end
+  end
+
+  defp mutation_attrs_applied?(_agent, _attrs), do: false
+
+  defp final_status_applied?(agent, "running") do
+    agent.status == "running" and match?(%DateTime{}, agent.started_at) and
+      is_nil(agent.stopped_at)
+  end
+
+  defp final_status_applied?(agent, "stopped") do
+    agent.status == "stopped" and match?(%DateTime{}, agent.stopped_at)
+  end
+
+  defp final_status_applied?(agent, "terminated") do
+    agent.status == "terminated" and match?(%DateTime{}, agent.stopped_at)
+  end
+
+  defp final_status_applied?(_agent, _status), do: false
 
   @doc "Returns a bounded oldest-first set of stranded operation IDs."
   def list_pending_ids(limit \\ 50)

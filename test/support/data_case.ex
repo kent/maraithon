@@ -36,7 +36,15 @@ defmodule Maraithon.DataCase do
   Sets up the sandbox based on the test tags.
   """
   def setup_sandbox(tags) do
-    pid = Ecto.Adapters.SQL.Sandbox.start_owner!(Maraithon.Repo, shared: not tags[:async])
+    opts = [shared: not tags[:async]]
+
+    opts =
+      case tags[:sandbox_isolation] do
+        isolation when is_binary(isolation) -> Keyword.put(opts, :isolation, isolation)
+        _ -> opts
+      end
+
+    pid = Ecto.Adapters.SQL.Sandbox.start_owner!(Maraithon.Repo, opts)
 
     # Local-proof capabilities are sent only when PostgreSQL bind values cannot
     # enter statement or error logs. Reset any database-level default role so

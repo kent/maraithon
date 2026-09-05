@@ -236,7 +236,10 @@ defmodule Maraithon.Runtime.Coordination.Session do
 
   defp coordinate(%{phase: :dormant} = state) do
     if Config.multinode_coordination_enabled?() and Protocol.mode() == :active do
-      case Authority.register_node(ttl_ms: state.node_ttl_ms) do
+      case Authority.register_node(
+             ttl_ms: state.node_ttl_ms,
+             metadata: %{"deployment_generation" => Authority.deployment_generation()}
+           ) do
         {:ok, %NodeIncarnation{} = session} -> %{state | session: session, phase: :joining}
         _ -> state
       end

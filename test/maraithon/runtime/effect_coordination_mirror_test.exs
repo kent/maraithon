@@ -957,7 +957,8 @@ defmodule Maraithon.Runtime.EffectCoordinationMirrorTest do
                             termination_capability_digest:
                               :crypto.hash(:sha256, capability_secret)
                           },
-                          ttl_ms: 60_000
+                          ttl_ms: 60_000,
+                          authority_lease_cap: context.lease.lease_until
                         )
 
                now = DatabaseClock.now!()

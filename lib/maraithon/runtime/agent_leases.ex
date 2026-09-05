@@ -461,6 +461,12 @@ defmodule Maraithon.Runtime.AgentLeases do
   end
 
   def fence_ready!(agent_id, owner_token) do
+    _lease_until = fence_ready_lease_until!(agent_id, owner_token)
+    :ok
+  end
+
+  @doc false
+  def fence_ready_lease_until!(agent_id, owner_token) do
     require_transaction!()
     ensure_exact_runtime_enabled!()
 
@@ -489,7 +495,7 @@ defmodule Maraithon.Runtime.AgentLeases do
         log: false
       )
 
-      :ok
+      lease.lease_until
     else
       _invalid -> Repo.rollback(:runtime_not_ready)
     end

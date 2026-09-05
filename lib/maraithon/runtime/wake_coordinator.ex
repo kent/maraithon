@@ -13,6 +13,7 @@ defmodule Maraithon.Runtime.WakeCoordinator do
   alias Maraithon.Runtime.AgentDirectives
   alias Maraithon.Runtime.AgentLifecycleOperations
   alias Maraithon.Runtime.AgentLeases
+  alias Maraithon.Runtime.AgentRegistry
   alias Maraithon.Runtime.AgentRestartGuards
   alias Maraithon.Runtime.AgentSupervisor
   alias Maraithon.Runtime.AgentWatcher
@@ -36,6 +37,21 @@ defmodule Maraithon.Runtime.WakeCoordinator do
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
   end
+
+  @doc "Requests an immediate best-effort convergence pass when the coordinator is local."
+  def nudge(server \\ __MODULE__)
+
+  def nudge(server) when is_atom(server) do
+    if pid = Process.whereis(server), do: send(pid, :reconcile_now)
+    :ok
+  end
+
+  def nudge(server) when is_pid(server) do
+    send(server, :reconcile_now)
+    :ok
+  end
+
+  def nudge(_server), do: :ok
 
   @doc "Runs one bounded exact-ownership convergence pass."
   def reconcile_once(opts \\ [])
@@ -106,6 +122,17 @@ defmodule Maraithon.Runtime.WakeCoordinator do
 
   @impl true
   def handle_info(:reconcile, state) do
+    run_reconciliation(state)
+    Process.send_after(self(), :reconcile, state.interval_ms)
+    {:noreply, state}
+  end
+
+  def handle_info(:reconcile_now, state) do
+    run_reconciliation(state)
+    {:noreply, state}
+  end
+
+  defp run_reconciliation(state) do
     case reconcile_once(limit: state.limit) do
       {:ok, _summary} ->
         :ok
@@ -115,9 +142,6 @@ defmodule Maraithon.Runtime.WakeCoordinator do
           failure_code: Maraithon.Redaction.error_class(reason)
         )
     end
-
-    Process.send_after(self(), :reconcile, state.interval_ms)
-    {:noreply, state}
   end
 
   defp reconcile_lifecycle_operations(limit, admission_open?) do
@@ -127,7 +151,11 @@ defmodule Maraithon.Runtime.WakeCoordinator do
       result =
         case AgentLifecycleOperations.get(agent_id) do
           %{operation_token: operation_token} ->
-            AgentLifecycleOperations.finalize_for_reconciliation(agent_id, operation_token)
+            result =
+              AgentLifecycleOperations.finalize_for_reconciliation(agent_id, operation_token)
+
+            nudge_lifecycle_owner(agent_id, operation_token, result)
+            result
 
           nil ->
             {:error, :lifecycle_operation_not_found}
@@ -148,6 +176,36 @@ defmodule Maraithon.Runtime.WakeCoordinator do
       {agent_id, result, start_result}
     end)
   end
+
+  defp nudge_lifecycle_owner(
+         agent_id,
+         operation_token,
+         {:ok, %{status: :reconciliation_pending, reason: :runtime_lease_owned}}
+       ) do
+    case AgentLifecycleOperations.get(agent_id) do
+      %{operation_token: ^operation_token, expected_owner_token: owner_token}
+      when is_binary(owner_token) ->
+        case Registry.lookup(AgentRegistry, agent_id) do
+          [{pid, ^owner_token}] when is_pid(pid) ->
+            send(
+              pid,
+              {:agent_dispatch, {:control, :stop, "agent_lifecycle_reconciliation", owner_token}}
+            )
+
+            :ok
+
+          _not_local_owner ->
+            :not_local
+        end
+
+      _stale_operation ->
+        :stale
+    end
+  catch
+    :exit, _reason -> :unavailable
+  end
+
+  defp nudge_lifecycle_owner(_agent_id, _operation_token, _result), do: :not_needed
 
   defp start_unowned_agents(limit, opts) do
     supervisor = Keyword.get(opts, :supervisor, AgentSupervisor)

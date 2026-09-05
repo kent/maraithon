@@ -6,6 +6,24 @@ defmodule Maraithon.Runtime.Config do
   require Logger
 
   @runtime_key Maraithon.Runtime
+  @process_roles [:web, :runtime, :maintenance, :combined]
+
+  @doc "Returns the configured service role. Unknown values fail closed as maintenance."
+  def process_role do
+    case Application.get_env(:maraithon, :process_role, :combined) do
+      role when role in @process_roles -> role
+      _invalid -> :maintenance
+    end
+  end
+
+  @doc "Returns whether this process may serve the public web application."
+  def web_process?, do: process_role() in [:web, :combined]
+
+  @doc "Returns whether this process owns exact and background runtime work."
+  def runtime_process?, do: process_role() in [:runtime, :combined]
+
+  @doc "Returns whether this process is restricted to one-shot maintenance work."
+  def maintenance_process?, do: process_role() == :maintenance
 
   @doc """
   Fetch a raw runtime config value with a default.
@@ -42,22 +60,44 @@ defmodule Maraithon.Runtime.Config do
   end
 
   @doc """
-  Returns whether exact Agent admission has both the revision interlock and the
-  authoritative database Effect protocol. A config flag alone never proves a
-  stopped-fleet cutover completed.
+  Returns whether the durable exact-Agent protocols are active.
+
+  Unlike `exact_agent_runtime_ready?/0`, this does not require a local
+  coordination Session. Web processes use it before persisting desired state
+  for the fixed runtime service to consume.
   """
-  def exact_agent_runtime_ready? do
+  def exact_agent_protocol_ready? do
     exact_agent_runtime_enabled?() and
       (Maraithon.Effects.ProtocolCutover.mode() == :exact or test_protocol_bypass?()) and
-      coordination_requirement_ready?()
+      coordination_protocol_ready?()
   rescue
     _storage_unavailable -> false
   catch
     :exit, _reason -> false
   end
 
-  defp coordination_requirement_ready? do
-    multinode_coordination_ready?() or test_protocol_bypass?()
+  @doc """
+  Returns whether this process has both the durable protocol and a ready local
+  coordination Session. Only runtime-role processes may report local runtime
+  readiness.
+  """
+  def exact_agent_runtime_ready? do
+    runtime_process?() and exact_agent_protocol_ready?() and
+      (local_coordination_session_ready?() or test_protocol_bypass?())
+  rescue
+    _storage_unavailable -> false
+  catch
+    :exit, _reason -> false
+  end
+
+  defp coordination_protocol_ready? do
+    (multinode_coordination_enabled?() and
+       Maraithon.Runtime.Coordination.Protocol.mode() == :active) or
+      test_protocol_bypass?()
+  end
+
+  defp local_coordination_session_ready? do
+    match?({:ok, _session}, Maraithon.Runtime.Coordination.Session.current())
   end
 
   if Mix.env() == :test do
@@ -80,9 +120,9 @@ defmodule Maraithon.Runtime.Config do
 
   @doc "Fails closed unless config, catalog-attested DB mode, and local ready-last session agree."
   def multinode_coordination_ready? do
-    multinode_coordination_enabled?() and
+    runtime_process?() and multinode_coordination_enabled?() and
       Maraithon.Runtime.Coordination.Protocol.mode() == :active and
-      match?({:ok, _session}, Maraithon.Runtime.Coordination.Session.current())
+      local_coordination_session_ready?()
   rescue
     _ -> false
   catch
