@@ -11,9 +11,7 @@ defmodule Maraithon.AssistantChat.CalculationIntent do
 
   def classify(text) when is_binary(text) do
     with {:ok, expression} <- calculation_expression(text),
-         {:ok, result} <- evaluate_calculation(expression) do
-      formatted_result = format_decimal(result)
-
+         {:ok, formatted_result} <- evaluate_calculation(expression) do
       {:ok,
        %{
          type: :simple_calculation,
@@ -104,12 +102,16 @@ defmodule Maraithon.AssistantChat.CalculationIntent do
   end
 
   defp evaluate_calculation(expression) do
-    with {:ok, tokens} <- tokenize_expression(expression),
-         {:ok, value, []} <- parse_expression(tokens) do
-      {:ok, value}
-    else
-      _ -> :error
-    end
+    context = %{Decimal.Context.get() | precision: @max_chars}
+
+    Decimal.Context.with(context, fn ->
+      with {:ok, tokens} <- tokenize_expression(expression),
+           {:ok, value, []} <- parse_expression(tokens) do
+        {:ok, format_decimal(value)}
+      else
+        _ -> :error
+      end
+    end)
   end
 
   defp tokenize_expression(expression) do
@@ -190,7 +192,13 @@ defmodule Maraithon.AssistantChat.CalculationIntent do
 
   defp parse_factor([token | rest]) do
     if Regex.match?(~r/^(?:\d+(?:\.\d+)?|\.\d+)$/u, token) do
-      {:ok, Decimal.new(normalize_decimal_token(token)), rest}
+      case Decimal.parse(normalize_decimal_token(token),
+             max_digits: @max_chars,
+             max_exponent: @max_chars
+           ) do
+        {decimal, ""} -> {:ok, decimal, rest}
+        _invalid_or_out_of_bounds -> :error
+      end
     else
       :error
     end

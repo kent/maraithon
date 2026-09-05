@@ -36,6 +36,13 @@ defmodule Maraithon.AssistantChat.DirectIntentTest do
 
     assert {:ok, %{type: :simple_calculation, expression: "1000 + 2", result: "1002"}} =
              DirectIntent.classify("1,000 + 2")
+
+    operand = "1234567890123456789012345678901234567890"
+
+    assert {:ok, %{type: :simple_calculation, result: result}} =
+             DirectIntent.classify("#{operand}+1")
+
+    assert result == "1234567890123456789012345678901234567891"
   end
 
   test "rejects unsafe or semantic arithmetic-looking prompts" do
@@ -46,6 +53,7 @@ defmodule Maraithon.AssistantChat.DirectIntentTest do
           "2 + apples",
           "1,2 + 3",
           "1.2,3 + 4",
+          "1e1000000 + 1",
           "What is 2026-05-28?",
           "05/28/2026"
         ] do
