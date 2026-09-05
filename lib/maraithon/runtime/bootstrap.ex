@@ -113,6 +113,7 @@ defmodule Maraithon.Runtime.Bootstrap do
   defp retry_bootstrap(reason, state) do
     Logger.warning("Runtime bootstrap did not complete",
       reason: inspect(reason),
+      failure_code: Maraithon.Redaction.error_class(reason),
       retry_attempt: state.retry_attempts + 1
     )
 
