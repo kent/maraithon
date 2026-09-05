@@ -326,7 +326,12 @@ defmodule Maraithon.Crm.Ingest do
             # id was not inserted.
             case open_window_for_update(user_id, source) do
               %Window{} = window -> {:ok, window}
-              nil -> {:error, :open_window_missing}
+              # The conflicting window can be flushed after the insert's
+              # conflict check but before this SELECT acquires its row lock.
+              # It no longer satisfies the partial index: create/lock the next
+              # open window in this same transaction instead of abandoning the
+              # observation that has already been persisted.
+              nil -> ensure_open_window(user_id, source)
             end
 
           {:error, %Ecto.Changeset{} = changeset} ->
