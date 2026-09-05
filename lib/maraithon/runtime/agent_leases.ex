@@ -912,6 +912,9 @@ defmodule Maraithon.Runtime.AgentLeases do
           user_id: user_id
         }
 
+      _ when not is_nil(lease.draining_at) ->
+        Repo.rollback(:partition_authority_lost)
+
       _ ->
         Logger.warning("Agent lease partition scope refused",
           failure_code: prelock_scope_failure_class(scope_result, coordination_fields?)

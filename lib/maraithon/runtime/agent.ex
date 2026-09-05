@@ -2523,14 +2523,22 @@ defmodule Maraithon.Runtime.Agent do
           | sequence_num: Events.latest_sequence_num(data.agent_id)
         }
 
-      {:error, reason} ->
-        Logger.error("Failed to atomically settle Agent Directive",
-          agent_id: data.agent_id,
-          run_id: run_id,
-          directive_reference: Maraithon.Redaction.fingerprint(directive_id),
-          failure_code: Maraithon.Redaction.error_class(reason)
-        )
+      {:error, :partition_authority_lost} ->
+        if durable_lease_draining?(data) do
+          exit(:normal)
+        else
+          log_current_run_settlement_failure(
+            data,
+            run_id,
+            directive_id,
+            :partition_authority_lost
+          )
 
+          data
+        end
+
+      {:error, reason} ->
+        log_current_run_settlement_failure(data, run_id, directive_id, reason)
         data
     end
   end
@@ -2576,6 +2584,15 @@ defmodule Maraithon.Runtime.Agent do
 
         data
     end
+  end
+
+  defp log_current_run_settlement_failure(data, run_id, directive_id, reason) do
+    Logger.error("Failed to atomically settle Agent Directive",
+      agent_id: data.agent_id,
+      run_id: run_id,
+      directive_reference: Maraithon.Redaction.fingerprint(directive_id),
+      failure_code: Maraithon.Redaction.error_class(reason)
+    )
   end
 
   defp append_terminal_run_event!(data, :idle, _payload) do
