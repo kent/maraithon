@@ -1108,13 +1108,15 @@ defmodule Maraithon.Runtime.Agent do
       {:ok, directive} ->
         activate_claimed_directive(data, directive)
 
-      {:error, reason} ->
-        Logger.warning("Exact Agent could not claim durable Directive",
-          agent_reference: Maraithon.Redaction.fingerprint(data.agent_id),
-          failure_code: Maraithon.Redaction.error_class(reason)
-        )
+      {:error, :partition_authority_lost} ->
+        if durable_lease_draining?(data) do
+          {:stop, :normal, data}
+        else
+          stop_after_directive_failure(:claim, :partition_authority_lost, data)
+        end
 
-        {:stop, {:directive_claim_failed, reason}, data}
+      {:error, reason} ->
+        stop_after_directive_failure(:claim, reason, data)
     end
   end
 
@@ -1162,15 +1164,35 @@ defmodule Maraithon.Runtime.Agent do
       {:error, :invalid_directive_payload} ->
         dead_letter_invalid_directive(claimed_data)
 
-      {:error, reason} ->
-        Logger.warning("Durable Directive activation was fenced",
-          agent_reference: Maraithon.Redaction.fingerprint(data.agent_id),
-          directive_reference: Maraithon.Redaction.fingerprint(directive.id),
-          failure_code: Maraithon.Redaction.error_class(reason)
-        )
+      {:error, :partition_authority_lost} ->
+        if durable_lease_draining?(claimed_data) do
+          {:stop, :normal, claimed_data}
+        else
+          stop_after_directive_failure(:activation, :partition_authority_lost, claimed_data)
+        end
 
-        {:stop, {:directive_activation_failed, reason}, claimed_data}
+      {:error, reason} ->
+        stop_after_directive_failure(:activation, reason, claimed_data)
     end
+  end
+
+  defp stop_after_directive_failure(:claim, reason, data) do
+    Logger.warning("Exact Agent could not claim durable Directive",
+      agent_reference: Maraithon.Redaction.fingerprint(data.agent_id),
+      failure_code: Maraithon.Redaction.error_class(reason)
+    )
+
+    {:stop, {:directive_claim_failed, reason}, data}
+  end
+
+  defp stop_after_directive_failure(:activation, reason, data) do
+    Logger.warning("Durable Directive activation was fenced",
+      agent_reference: Maraithon.Redaction.fingerprint(data.agent_id),
+      directive_reference: Maraithon.Redaction.fingerprint(data.current_directive_id),
+      failure_code: Maraithon.Redaction.error_class(reason)
+    )
+
+    {:stop, {:directive_activation_failed, reason}, data}
   end
 
   defp activate_directive_payload_locked(data, "message", payload) when is_map(payload) do
