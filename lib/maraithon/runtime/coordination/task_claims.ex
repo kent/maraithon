@@ -143,7 +143,8 @@ defmodule Maraithon.Runtime.Coordination.TaskClaims do
         state = 'running', ready_at = timezone('UTC', clock_timestamp()),
         updated_at = timezone('UTC', clock_timestamp())
         """,
-        "state = 'reserved' AND lease_expires_at > timezone('UTC', clock_timestamp())"
+        "state = 'reserved' AND lease_expires_at > timezone('UTC', clock_timestamp())",
+        :ready
       )
     end
   end
@@ -158,7 +159,8 @@ defmodule Maraithon.Runtime.Coordination.TaskClaims do
         """
         provider_boundary = 'entered', updated_at = timezone('UTC', clock_timestamp())
         """,
-        "state = 'running' AND provider_boundary = 'not_entered'"
+        "state = 'running' AND provider_boundary = 'not_entered'",
+        :ready
       )
     end
   end
@@ -181,7 +183,8 @@ defmodule Maraithon.Runtime.Coordination.TaskClaims do
       lease_expires_at > timezone('UTC', clock_timestamp()) AND
       (state = 'running' OR
        (state = 'reserved' AND ready_at IS NULL AND provider_boundary = 'not_entered'))
-      """
+      """,
+      :ready
     )
   end
 
@@ -1576,8 +1579,9 @@ defmodule Maraithon.Runtime.Coordination.TaskClaims do
     end
   end
 
-  defp transition(assignment, set_sql, where_sql) do
+  defp transition(assignment, set_sql, where_sql, authority_mode \\ nil) do
     Repo.transaction(fn ->
+      fence_assignment_authority!(assignment, authority_mode)
       assignment = lock_assignment!(assignment)
       set_action!(assignment.id)
 
@@ -1601,6 +1605,22 @@ defmodule Maraithon.Runtime.Coordination.TaskClaims do
 
       load!(result, :task_authority_lost)
     end)
+  end
+
+  defp fence_assignment_authority!(_assignment, nil), do: :ok
+
+  defp fence_assignment_authority!(%TaskAssignment{} = assignment, :ready) do
+    session = %NodeIncarnation{
+      id: assignment.node_incarnation_id,
+      activation_epoch: assignment.activation_epoch
+    }
+
+    Authority.fence_partition!(
+      session,
+      assignment.partition_id,
+      assignment.partition_epoch,
+      :ready
+    )
   end
 
   defp fence_effect_authority_in_transaction!(
