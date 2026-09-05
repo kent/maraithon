@@ -7,7 +7,7 @@ defmodule Maraithon.TodosTest do
   alias Maraithon.Memory
   alias Maraithon.Repo
   alias Maraithon.Todos
-  alias Maraithon.Todos.{OutcomeLearner, TodoLearningEvent}
+  alias Maraithon.Todos.{OutcomeLearner, Todo, TodoLearningEvent}
 
   test "fallback todo copy gives a direct saved-work decision frame" do
     user_id = unique_user_email("todos-fallback-copy")
@@ -397,6 +397,76 @@ defmodule Maraithon.TodosTest do
              |> Enum.map(& &1.id)
 
     assert Todos.count_for_user(user_id, decision_only?: true) == 1
+  end
+
+  test "decision-only pagination slices after exact decision filtering" do
+    user_id = unique_user_email("todos-decision-pagination")
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    attrs = [
+      decision_pagination_attrs("alpha", "Alpha background note", "owed_by_me"),
+      decision_pagination_attrs("bravo", "Bravo follow-up", "owed_to_me"),
+      decision_pagination_attrs("charlie", "Charlie background note", "owed_by_me"),
+      decision_pagination_attrs("delta", "Delta follow-up", "owed_to_me")
+    ]
+
+    assert {:ok, [_alpha, first_decision, _charlie, second_decision]} =
+             Todos.upsert_many(user_id, attrs)
+
+    opts = [decision_only?: true, sort_by: "title", sort_dir: "asc", limit: 1]
+
+    assert [first_decision.id] ==
+             user_id |> Todos.list_for_user(Keyword.put(opts, :offset, 0)) |> Enum.map(& &1.id)
+
+    assert [second_decision.id] ==
+             user_id |> Todos.list_for_user(Keyword.put(opts, :offset, 1)) |> Enum.map(& &1.id)
+
+    assert Todos.list_for_user(user_id, Keyword.put(opts, :offset, 2)) == []
+    assert Todos.count_for_user(user_id, decision_only?: true) == 2
+
+    assert Todos.list_ids_for_user(user_id,
+             decision_only?: true,
+             sort_by: "title",
+             sort_dir: "asc"
+           ) == [first_decision.id, second_decision.id]
+  end
+
+  test "todo sorts use ids as deterministic final tie-breakers" do
+    user_id = unique_user_email("todos-sort-tie-breaker")
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+    [low_id, high_id] = Enum.sort([Ecto.UUID.generate(), Ecto.UUID.generate()])
+    tied_at = ~U[2026-09-04 12:00:00.000000Z]
+
+    for {id, suffix} <- [{high_id, "high"}, {low_id, "low"}] do
+      Repo.insert!(%Todo{
+        id: id,
+        user_id: user_id,
+        owner_user_id: user_id,
+        source: "manual",
+        kind: "general",
+        attention_mode: "act_now",
+        direction: "owed_by_me",
+        title: "Shared sort values",
+        summary: "Background material for quarterly planning.",
+        next_action: "Read the material next week.",
+        priority: 50,
+        status: "open",
+        dedupe_key: "todos-sort-tie-breaker:#{suffix}",
+        inserted_at: tied_at,
+        updated_at: tied_at
+      })
+    end
+
+    for sort_by <- ~w(rank title source status attention priority due updated),
+        sort_dir <- ~w(asc desc) do
+      actual_ids =
+        user_id
+        |> Todos.list_for_user(sort_by: sort_by, sort_dir: sort_dir, limit: 10)
+        |> Enum.map(& &1.id)
+
+      assert actual_ids == [low_id, high_id],
+             "expected #{sort_by} #{sort_dir} ties to be ordered by todo id"
+    end
   end
 
   test "todos persist durable source, owner, due date, notes, and action draft details" do
@@ -873,6 +943,20 @@ defmodule Maraithon.TodosTest do
     overrides
     |> Enum.map(fn {key, value} -> {to_string(key), value} end)
     |> Enum.into(defaults)
+  end
+
+  defp decision_pagination_attrs(suffix, title, direction) do
+    %{
+      "source" => "manual",
+      "kind" => "general",
+      "attention_mode" => "act_now",
+      "title" => title,
+      "summary" => "Background material for quarterly planning.",
+      "next_action" => "Read the material next week.",
+      "priority" => 50,
+      "direction" => direction,
+      "dedupe_key" => "todos-decision-pagination:#{suffix}"
+    }
   end
 
   defp unique_user_email(prefix) do

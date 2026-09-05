@@ -73,15 +73,52 @@ defmodule Maraithon.Todos do
     # Offset applies after order_by so pages are stable within one sort pass.
     # The default "updated desc" sort shifts under concurrent writes — that's
     # accepted; paging clients reconcile by id.
-    user_id
-    |> filtered_todo_query(opts)
-    |> maybe_filter_decision_only(decision_only?)
-    |> apply_todo_order(sort_by, sort_dir)
-    |> offset(^page_offset)
-    |> limit(^limit)
-    |> Repo.all()
-    |> Enum.map(&polish_todo_copy/1)
-    |> Enum.filter(&(not decision_only? or DecisionSignals.needs_decision?(&1)))
+    query =
+      user_id
+      |> filtered_todo_query(opts)
+      |> maybe_filter_decision_only(decision_only?)
+      |> apply_todo_order(sort_by, sort_dir)
+      |> order_by([todo], asc: todo.id)
+
+    if decision_only? do
+      # The SQL predicate is only a broad candidate filter. Apply the exact
+      # decision predicate before slicing so offsets count actual decisions,
+      # not candidates that are discarded after the query.
+      query
+      |> exact_decision_todos()
+      |> Enum.drop(page_offset)
+      |> Enum.take(limit)
+    else
+      query
+      |> offset(^page_offset)
+      |> limit(^limit)
+      |> Repo.all()
+      |> Enum.map(&polish_todo_copy/1)
+    end
+  end
+
+  @doc "Returns filtered todo ids in the same deterministic order as list_for_user/2."
+  def list_ids_for_user(user_id, opts \\ []) when is_binary(user_id) do
+    sort_by = normalize_sort_by(Keyword.get(opts, :sort_by, "rank"))
+    sort_dir = normalize_sort_dir(Keyword.get(opts, :sort_dir, "desc"))
+    decision_only? = decision_only_option?(opts)
+
+    query =
+      user_id
+      |> filtered_todo_query(opts)
+      |> maybe_filter_decision_only(decision_only?)
+      |> apply_todo_order(sort_by, sort_dir)
+      |> order_by([todo], asc: todo.id)
+
+    if decision_only? do
+      query
+      |> exact_decision_todos()
+      |> Enum.map(& &1.id)
+    else
+      query
+      |> select([todo], todo.id)
+      |> Repo.all()
+    end
   end
 
   @doc """
@@ -112,8 +149,8 @@ defmodule Maraithon.Todos do
       # superset (see its docstring); the precise "does this actually need a
       # decision" call happens here via DecisionSignals, same as list_for_user.
       query
-      |> Repo.all()
-      |> Enum.count(&DecisionSignals.needs_decision?/1)
+      |> exact_decision_todos()
+      |> length()
     else
       query
       |> select([todo], count(todo.id))
@@ -2411,6 +2448,13 @@ defmodule Maraithon.Todos do
   end
 
   defp decision_only_option?(_opts), do: false
+
+  defp exact_decision_todos(query) do
+    query
+    |> Repo.all()
+    |> Enum.map(&polish_todo_copy/1)
+    |> Enum.filter(&DecisionSignals.needs_decision?/1)
+  end
 
   defp maybe_filter_owner_user_id(query, nil), do: query
   defp maybe_filter_owner_user_id(query, ""), do: query

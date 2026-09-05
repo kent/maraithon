@@ -1,10 +1,12 @@
 defmodule MaraithonWeb.TodosLiveTest do
   use MaraithonWeb.ConnCase, async: false
 
+  @moduletag sandbox_isolation: "REPEATABLE READ"
+
   import Ecto.Query
   import Phoenix.LiveViewTest
 
-  alias Maraithon.{Agents, Memory, Repo, Timezones}
+  alias Maraithon.{Agents, Repo, Timezones}
   alias Maraithon.Todos
   alias Maraithon.Todos.Brief
   alias Maraithon.Todos.Todo
@@ -35,12 +37,10 @@ defmodule MaraithonWeb.TodosLiveTest do
     {:ok, view, _html} = live(conn, "/todos")
     html = render(view)
 
-    assert html =~ "Work list"
+    assert has_element?(view, "h1", "Todos")
     assert html =~ "Reply to Michael Berlingo"
-    assert html =~ "Starteryou UGC Campaigns"
     assert html =~ "Draft a reply with current status, a clear owner, and timing."
-    assert html =~ "follow-ups that need confirmation"
-    assert html =~ "personal commitments"
+    assert html =~ "Add a todo"
     assert html =~ "1 work item shown."
     assert html =~ "Search"
     assert html =~ "Status"
@@ -55,7 +55,7 @@ defmodule MaraithonWeb.TodosLiveTest do
     refute html =~ "todo shown"
     refute html =~ "Draft a reply with status, owner, and ETA."
     refute html =~ ">Manual<"
-    assert has_element?(view, "a[href='/todos'][aria-current='page']", "Work")
+    assert has_element?(view, "a[href='/todos'][aria-current='page']", "Todos")
 
     row_html =
       view
@@ -70,15 +70,17 @@ defmodule MaraithonWeb.TodosLiveTest do
       |> element("#todo-#{todo.id}")
       |> render_click()
 
+    assert detail_html =~ "Starteryou UGC Campaigns"
     assert detail_html =~ "Critical"
     refute detail_html =~ "priority 91"
     refute detail_html =~ ">91<"
   end
 
   test "empty work list copy stays user-facing", %{conn: conn} do
-    {:ok, view, html} = live(conn, "/todos")
+    {:ok, view, _html} = live(conn, "/todos")
+    html = render(view)
 
-    assert html =~ "Add follow-up"
+    assert html =~ "Add a todo"
     assert html =~ "Your open work list is clear."
     assert html =~ "when the next move is clear"
     refute html =~ "No work items match these filters."
@@ -171,7 +173,7 @@ defmodule MaraithonWeb.TodosLiveTest do
     assert_patch(view, "/todos/#{todo.id}")
 
     html = render(view)
-    assert html =~ "Added follow-up."
+    assert html =~ "Todo added."
     assert html =~ "Call Sarah about renewal"
     assert html =~ "Confirm renewal timeline and owner."
     assert html =~ "Mention budget sensitivity before confirming the ETA."
@@ -809,6 +811,13 @@ defmodule MaraithonWeb.TodosLiveTest do
     assert_patch(view, "/todos")
     assert has_element?(view, "#todo-#{second.id}[data-active='true']")
 
+    assert has_element?(
+             view,
+             "#todo-#{second.id} input[phx-click='toggle_todo_selection'][checked]"
+           )
+
+    assert render(view) =~ "1 selected"
+
     render_hook(view, "resolve_todo_shortcut", %{
       "action" => "complete",
       "id" => second.id
@@ -828,29 +837,27 @@ defmodule MaraithonWeb.TodosLiveTest do
     assert has_element?(view, "#todo-#{first.id}[data-active='true']")
   end
 
-  test "shortcut help is rendered up front for instant client-side display", %{
+  test "dead render stays lightweight and connected content is not hook-gated", %{
     conn: conn
   } do
-    {:ok, view, _html} = live(conn, "/todos")
+    dead_conn = get(conn, "/todos")
+    dead_html = html_response(dead_conn, 200)
 
-    assert has_element?(
-             view,
-             "#todo-keyboard-scope[data-shortcuts-ready='false'][aria-busy='true']"
-           )
+    assert dead_html =~ ~s(id="todo-keyboard-scope")
+    assert dead_html =~ ~s(aria-busy="true")
+    assert dead_html =~ ~s(id="todo-loading-shell")
+    assert dead_html =~ "Loading todos…"
+    refute dead_html =~ ~s(id="todo-ready-content")
+    refute dead_html =~ "The blue row is the active todo."
 
-    assert has_element?(
-             view,
-             "#todo-loading-shell[data-todo-loading-shell='true'][role='status']"
-           )
+    {:ok, view, _html} = live(recycle(dead_conn), "/todos")
 
-    assert has_element?(view, "#todo-loading-shell .todo-boot-sr-only", "Loading todos…")
-    assert has_element?(view, "#todo-loading-shell .todo-boot-nav")
-    assert has_element?(view, "#todo-loading-shell .todo-boot-table")
+    refute has_element?(view, "#todo-keyboard-scope[aria-busy='true']")
+    refute has_element?(view, "#todo-loading-shell")
+    assert has_element?(view, "#todo-ready-content:not([hidden])")
 
-    assert has_element?(
-             view,
-             "#todo-ready-content[data-todo-ready-content='true'][hidden][inert][aria-hidden='true']"
-           )
+    refute render(view) =~ "data-todo-ready-content"
+    refute render(view) =~ ~s(id="todo-ready-content" hidden)
 
     assert has_element?(
              view,
@@ -866,9 +873,106 @@ defmodule MaraithonWeb.TodosLiveTest do
     assert render(view) =~ "Focus search"
   end
 
-  test "bulk see less records feedback and dismisses selected todos", %{conn: conn} do
-    install_see_less_model()
+  test "normalizes out-of-range pages and invalid todo ids", %{conn: conn} do
+    {:ok, view, _html} = live(conn, "/todos")
 
+    render_patch(view, "/todos?page=99")
+    assert_patch(view, "/todos")
+    assert has_element?(view, "h1", "Todos")
+
+    render_patch(view, "/todos/not-a-uuid")
+    assert_patch(view, "/todos")
+    assert has_element?(view, "h1", "Todos")
+
+    missing_id = Ecto.UUID.generate()
+
+    {:ok, invalid_view, _html} = live(conn, "/todos/not-a-uuid")
+    assert has_element?(invalid_view, "h1", "Todos")
+    refute has_element?(invalid_view, "#todo-detail")
+
+    {:ok, missing_view, _html} = live(conn, "/todos/#{missing_id}")
+    assert has_element?(missing_view, "h1", "Todos")
+    refute has_element?(missing_view, "#todo-detail")
+  end
+
+  test "paginates the work list at fifty rows", %{conn: conn} do
+    attrs =
+      for index <- 1..51 do
+        number = index |> Integer.to_string() |> String.pad_leading(2, "0")
+
+        %{
+          "source" => "manual",
+          "kind" => "general",
+          "title" => "Pagination item #{number}",
+          "summary" => "Pagination coverage item #{number}.",
+          "next_action" => "Review pagination item #{number}.",
+          "priority" => 50,
+          "dedupe_key" => "todos-live:pagination:#{number}"
+        }
+      end
+
+    assert {:ok, todos} = Todos.upsert_many(@user_email, attrs)
+    assert length(todos) == 51
+
+    item_50 = Enum.find(todos, &(&1.title == "Pagination item 50"))
+    item_51 = Enum.find(todos, &(&1.title == "Pagination item 51"))
+
+    {:ok, view, html} = live(conn, "/todos?sort=title&dir=asc")
+
+    assert length(Regex.scan(~r/data-todo-row="true"/, html)) == 50
+    assert html =~ "Showing 1–50 of 51 matching work items."
+    assert html =~ "Pagination item 50"
+    refute html =~ "Pagination item 51"
+    assert has_element?(view, "#todo-pagination", "Page 1 of 2")
+    assert has_element?(view, "#todo-pagination button[disabled]", "Previous")
+
+    html =
+      view
+      |> element("#todo-pagination a", "Next")
+      |> render_click()
+
+    assert html =~ "Showing 51–51 of 51 matching work items."
+    assert html =~ "Pagination item 51"
+    refute html =~ "Pagination item 01"
+    assert has_element?(view, "#todo-pagination", "Page 2 of 2")
+    assert has_element?(view, "#todo-pagination button[disabled]", "Next")
+
+    view
+    |> element("#todo-#{item_51.id}")
+    |> render_click()
+
+    assert has_element?(
+             view,
+             "#previous-todo[href^='/todos/#{item_50.id}?']",
+             "Previous"
+           )
+
+    view
+    |> element("#previous-todo")
+    |> render_click()
+
+    assert_patch(view, "/todos/#{item_50.id}?dir=asc&sort=title")
+
+    assert has_element?(
+             view,
+             "#next-todo[href='/todos/#{item_51.id}?dir=asc&page=2&sort=title']",
+             "Next"
+           )
+
+    render_hook(view, "todo_shortcut", %{"key" => "j"})
+    assert_patch(view, "/todos/#{item_51.id}?dir=asc&page=2&sort=title")
+
+    render_patch(view, "/todos/#{item_50.id}?dir=asc&sort=title&status=all")
+
+    view
+    |> element("#todo-primary-actions button[phx-click='complete_todo']")
+    |> render_click()
+
+    assert Todos.get_for_user(@user_email, item_50.id).status == "done"
+    assert_patch(view, "/todos/#{item_51.id}?dir=asc&page=2&sort=title&status=all")
+  end
+
+  test "bulk see less records feedback and dismisses selected todos", %{conn: conn} do
     assert {:ok, [first, second]} =
              Todos.upsert_many(@user_email, [
                %{
@@ -1034,7 +1138,7 @@ defmodule MaraithonWeb.TodosLiveTest do
 
     assert has_element?(
              view,
-             "#todo-keyboard-scope[phx-hook='.TodoKeyboardShortcuts'][data-view='detail']"
+             "#todo-keyboard-scope[phx-hook$='TodoKeyboardShortcuts'][data-view='detail']"
            )
 
     assert has_element?(view, "#todo-detail > header #todo-primary-actions")
@@ -1117,9 +1221,9 @@ defmodule MaraithonWeb.TodosLiveTest do
     assert updated.next_action == "Send the financing packet and confirm the next review window."
   end
 
-  test "see less action records feedback memory and removes todo from active list", %{conn: conn} do
-    install_see_less_model()
-
+  test "see less action queues relevance learning and removes todo from active list", %{
+    conn: conn
+  } do
     assert {:ok, [todo]} =
              Todos.upsert_many(@user_email, [
                %{
@@ -1137,26 +1241,21 @@ defmodule MaraithonWeb.TodosLiveTest do
     assert html =~ "Read vendor newsletter"
 
     view
-    |> element("#todo-#{todo.id} button[phx-click='see_less_todo']")
+    |> element("#todo-#{todo.id}")
+    |> render_click()
+
+    view
+    |> element("#todo-primary-actions button[phx-click='see_less_todo']")
     |> render_click()
 
     html = render(view)
     refute html =~ "Read vendor newsletter"
     assert html =~ "Similar work will show up less often."
 
-    [memory] =
-      Memory.list_items(@user_email,
-        kind: "relevance_feedback",
-        tag: "todo_relevance",
-        limit: 5
-      )
-
-    assert memory.polarity == "negative"
-    assert memory.source_ref_id == todo.id
-
     dismissed = Todos.get_for_user(@user_email, todo.id)
     assert dismissed.status == "dismissed"
     assert get_in(dismissed.metadata, ["assistant_feedback", "value"]) == "see_less"
+    assert get_in(dismissed.metadata, ["see_less_feedback", "learning"]) == "queued"
   end
 
   test "todo action errors hide internal reasons", %{conn: conn} do
@@ -1182,45 +1281,21 @@ defmodule MaraithonWeb.TodosLiveTest do
 
       {:ok, view, _html} = live(conn, "/todos")
 
+      view
+      |> element("#todo-#{todo.id}")
+      |> render_click()
+
       Maraithon.Repo.delete!(todo)
 
       html =
         view
-        |> element("#todo-#{todo.id} button[phx-click='#{click}']")
+        |> element("#todo-primary-actions button[phx-click='#{click}']")
         |> render_click()
 
       refute html =~ title
       refute html =~ ":not_found"
       refute html =~ "not_found"
     end
-  end
-
-  defp install_see_less_model do
-    original = Application.get_env(:maraithon, :todos, [])
-
-    Application.put_env(
-      :maraithon,
-      :todos,
-      Keyword.put(original, :see_less_llm_complete, fn prompt ->
-        assert prompt =~ "TODO_SEE_LESS_TRAINING_JSON_V1"
-
-        {:ok,
-         Jason.encode!(%{
-           "title" => "Show less: generic newsletters",
-           "summary" => "Generic newsletters without direct asks should not become todos.",
-           "content" =>
-             "When a newsletter has no direct ask, decision, deadline, or personal impact, skip it instead of creating a todo.",
-           "pattern_key" => "generic_newsletters_without_direct_asks",
-           "categories" => ["newsletter", "no_direct_ask"],
-           "negative_signals" => ["generic update", "no direct ask"],
-           "exceptions" => ["explicit deadline"],
-           "confidence" => 0.88,
-           "reasoning" => "The selected todo is not actionable."
-         })}
-      end)
-    )
-
-    on_exit(fn -> Application.put_env(:maraithon, :todos, original) end)
   end
 
   defp local_today(timezone_name, fallback_offset) do

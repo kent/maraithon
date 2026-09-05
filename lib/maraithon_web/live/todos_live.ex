@@ -1,14 +1,14 @@
 defmodule MaraithonWeb.TodosLive do
   use MaraithonWeb, :live_view
 
-  alias Maraithon.{BriefingSchedules, Projects, SourceLabels, Timezones}
+  alias Maraithon.{BriefingSchedules, Projects, Repo, SourceLabels, Timezones}
   alias Maraithon.Todos
   alias Maraithon.Todos.{Brief, BriefActions, DecisionSignals, SourceActions, Todo}
   alias MaraithonWeb.TodoActionCopy
 
   require Logger
 
-  @page_limit 200
+  @page_limit 50
   @brief_poll_ms 3_000
   @brief_max_polls 40
   @generating_progress "Reading the source"
@@ -21,7 +21,8 @@ defmodule MaraithonWeb.TodosLive do
     "project" => "all",
     "agent" => "all",
     "sort" => "rank",
-    "dir" => "desc"
+    "dir" => "desc",
+    "page" => "1"
   }
   @default_new_todo_params %{
     "title" => "",
@@ -122,6 +123,7 @@ defmodule MaraithonWeb.TodosLive do
        project_options: [{"Inbox", ""}],
        project_filter_options: [{"All projects", "all"}, {"Inbox", "inbox"}],
        todos: [],
+       todo_navigation_ids: [],
        total_count: 0,
        active_todo_id: nil,
        selected_todo_ids: MapSet.new(),
@@ -138,16 +140,20 @@ defmodule MaraithonWeb.TodosLive do
        reply_target_todo_id: nil,
        reply_form: to_form(%{"subject" => "", "body" => ""}, as: :reply),
        reply_sending?: false,
-       reply_sent: nil
+       reply_sent: nil,
+       todos_loaded?: false,
+       page: 1,
+       total_pages: 1
      )}
   end
 
   @impl true
   def handle_params(params, uri, socket) do
     filters = normalize_filters(params)
-    selected_todo_id = normalize_text(Map.get(params, "todo_id"))
+    raw_todo_id = normalize_text(Map.get(params, "todo_id"))
+    selected_todo_id = normalize_todo_id(raw_todo_id)
 
-    if selected_todo_id do
+    if connected?(socket) and selected_todo_id do
       _ =
         Todos.record_user_opened(current_user_id(socket), selected_todo_id,
           actor_type: "user",
@@ -161,8 +167,31 @@ defmodule MaraithonWeb.TodosLive do
       |> assign(:filters, filters)
       |> assign(:filter_form, to_form(filters, as: :filters))
       |> assign(:selected_todo_id, selected_todo_id)
-      |> refresh_todos()
-      |> load_brief()
+
+    socket =
+      cond do
+        not connected?(socket) ->
+          socket
+
+        raw_todo_id && is_nil(selected_todo_id) ->
+          push_patch(socket, to: todos_path(filters), replace: true)
+
+        true ->
+          # URL navigation is the natural, low-frequency invalidation point
+          # for project labels/options and the user's timezone. Internal todo
+          # events keep using the cached context to stay inexpensive.
+          socket = refresh_todos(socket, reload_context?: true)
+
+          socket =
+            if selected_todo_id && is_nil(socket.assigns.selected_todo) &&
+                 is_nil(socket.redirected) do
+              push_patch(socket, to: todos_path(socket.assigns.filters), replace: true)
+            else
+              socket
+            end
+
+          load_brief(socket)
+      end
 
     {:noreply, socket}
   end
@@ -207,7 +236,7 @@ defmodule MaraithonWeb.TodosLive do
             {:noreply,
              socket
              |> assign(:new_project_form, to_form(%{"name" => ""}, as: :project))
-             |> refresh_todos()
+             |> refresh_todos(reload_context?: true)
              |> put_flash(:info, "#{project.name} created.")}
 
           {:error, %Ecto.Changeset{}} ->
@@ -393,7 +422,7 @@ defmodule MaraithonWeb.TodosLive do
   def handle_event("see_less_todo", %{"id" => todo_id}, socket) do
     selected? = socket.assigns.selected_todo_id == todo_id
     user_id = current_user_id(socket)
-    preferred_next_todo_id = preferred_next_todo_id(socket.assigns.todos, todo_id)
+    preferred_next_todo_id = preferred_next_todo_id(navigation_todo_ids(socket), todo_id)
 
     case Todos.see_less_like(
            user_id,
@@ -760,22 +789,15 @@ defmodule MaraithonWeb.TodosLive do
         phx-hook=".TodoKeyboardShortcuts"
         data-view={if(@selected_todo, do: "detail", else: "index")}
         data-selected-todo-id={@selected_todo && @selected_todo.id}
-        data-shortcuts-ready="false"
-        aria-busy="true"
+        aria-busy={if(!@todos_loaded?, do: "true")}
       >
-        <.todo_loading_shell />
+        <.todo_loading_shell :if={!@todos_loaded?} />
 
-        <div
-          id="todo-ready-content"
-          data-todo-ready-content="true"
-          aria-hidden="true"
-          inert
-          hidden
-        >
+        <div :if={@todos_loaded?} id="todo-ready-content">
           <%= if @selected_todo do %>
             <.todo_detail_panel
               todo={@selected_todo}
-              todos={@todos}
+              navigation_ids={@todo_navigation_ids}
               filters={@filters}
               project_options={@project_options}
               timezone_info={@timezone_info}
@@ -1004,7 +1026,9 @@ defmodule MaraithonWeb.TodosLive do
         <.panel body_class="px-5 py-0">
           <:header>
             <div class="flex flex-wrap items-center justify-between gap-3">
-              <p class="text-sm/6 text-zinc-500"><%= result_count_label(@todos, @total_count) %></p>
+              <p class="text-sm/6 text-zinc-500">
+                <%= result_count_label(@todos, @total_count, @page) %>
+              </p>
               <.badge color="zinc"><%= active_filter_label(@filters) %></.badge>
             </div>
           </:header>
@@ -1046,6 +1070,7 @@ defmodule MaraithonWeb.TodosLive do
 
                   <.table_row
                     :for={todo <- @todos}
+                    :key={todo.id}
                     id={"todo-#{todo.id}"}
                     phx-click="open_todo_detail"
                     phx-value-id={todo.id}
@@ -1116,6 +1141,37 @@ defmodule MaraithonWeb.TodosLive do
                 </.table_body>
               </.table>
           </div>
+
+          <nav
+            :if={@total_pages > 1}
+            id="todo-pagination"
+            aria-label="Todo pages"
+            class="flex flex-wrap items-center justify-between gap-3 border-t border-zinc-950/10 py-4"
+          >
+            <p class="text-sm/6 text-zinc-500">Page <%= @page %> of <%= @total_pages %></p>
+            <div class="flex items-center gap-2">
+              <.button :if={@page == 1} type="button" variant="outline" disabled>
+                Previous
+              </.button>
+              <.button
+                :if={@page > 1}
+                patch={todos_path(@filters, %{"page" => Integer.to_string(@page - 1)})}
+                variant="outline"
+              >
+                Previous
+              </.button>
+              <.button
+                :if={@page < @total_pages}
+                patch={todos_path(@filters, %{"page" => Integer.to_string(@page + 1)})}
+                variant="outline"
+              >
+                Next
+              </.button>
+              <.button :if={@page == @total_pages} type="button" variant="outline" disabled>
+                Next
+              </.button>
+            </div>
+          </nav>
         </.panel>
             </div>
           <% end %>
@@ -1126,18 +1182,11 @@ defmodule MaraithonWeb.TodosLive do
         <script :type={Phoenix.LiveView.ColocatedHook} name=".TodoKeyboardShortcuts">
           export default {
             mounted() {
-              this.shortcutsReady = false
               this.shortcutsOpen = false
               this.optimisticRows = new Map()
               this.processingTodoIds = new Set()
 
               this.handleClick = (event) => {
-                if (!this.shortcutsReady) {
-                  event.preventDefault()
-                  event.stopPropagation()
-                  return
-                }
-
                 const trigger = event.target?.closest?.("[data-shortcuts-trigger='true']")
                 const close = event.target?.closest?.("[data-shortcuts-close='true']")
                 const resolve = event.target?.closest?.("[data-todo-resolve]")
@@ -1158,7 +1207,6 @@ defmodule MaraithonWeb.TodosLive do
               }
 
               this.handleKeydown = (event) => {
-                if (!this.shortcutsReady) return
                 if (event.metaKey || event.ctrlKey || event.altKey) return
 
                 const target = event.target
@@ -1228,13 +1276,12 @@ defmodule MaraithonWeb.TodosLive do
 
               this.el.addEventListener("click", this.handleClick)
               window.addEventListener("keydown", this.handleKeydown)
-              this.beginReadyTransition()
+              this.scrollActiveTodoIntoView()
             },
             beforeUpdate() {
               this.activeTodoIdBeforeUpdate = this.activeTodoId()
             },
             updated() {
-              if (this.shortcutsReady) this.revealReadyContent()
               this.syncShortcutModal()
               this.restoreActiveTodoAfterUpdate()
               this.scrollActiveTodoIntoView()
@@ -1248,29 +1295,6 @@ defmodule MaraithonWeb.TodosLive do
               if (key === "ArrowDown" || key === "ArrowRight") return "j"
               if (key === "ArrowUp" || key === "ArrowLeft") return "k"
               return key
-            },
-            beginReadyTransition() {
-              window.requestAnimationFrame(() => {
-                window.requestAnimationFrame(() => {
-                  this.revealReadyContent()
-                  this.shortcutsReady = true
-                  this.el.dataset.shortcutsReady = "true"
-                  this.scrollActiveTodoIntoView()
-                })
-              })
-            },
-            revealReadyContent() {
-              const loader = this.el.querySelector("[data-todo-loading-shell='true']")
-              const content = this.el.querySelector("[data-todo-ready-content='true']")
-
-              if (loader) loader.hidden = true
-              if (content) {
-                content.hidden = false
-                content.removeAttribute("inert")
-                content.removeAttribute("aria-hidden")
-              }
-
-              this.el.removeAttribute("aria-busy")
             },
             todoRows() {
               return Array.from(this.el.querySelectorAll("[data-todo-row='true']:not([hidden])"))
@@ -1392,37 +1416,123 @@ defmodule MaraithonWeb.TodosLive do
     """
   end
 
-  defp refresh_todos(socket) do
+  defp refresh_todos(socket, opts \\ []) do
+    socket =
+      if Keyword.get(opts, :reload_context?, false) or not socket.assigns.todos_loaded? do
+        load_todo_context(socket)
+      else
+        socket
+      end
+
+    user_id = current_user_id(socket)
+    query_opts = todo_query_opts(socket.assigns.filters, socket.assigns.timezone_info)
+    requested_page = filter_page(socket.assigns.filters)
+    selected_todo = selected_todo_for_user(user_id, socket.assigns.selected_todo_id)
+
+    {todos, todo_navigation_ids, total_count, total_pages, page} =
+      case selected_todo do
+        %Todo{id: selected_todo_id} ->
+          navigation_ids = Todos.list_ids_for_user(user_id, query_opts)
+          count = length(navigation_ids)
+          pages = max(div(count + @page_limit - 1, @page_limit), 1)
+          selected_page = todo_page_for_id(navigation_ids, selected_todo_id)
+
+          {[], navigation_ids, count, pages, selected_page || min(requested_page, pages)}
+
+        nil ->
+          {todos, count, pages, current_page} =
+            load_todo_page(user_id, query_opts, requested_page)
+
+          navigation_ids = Enum.map(todos, & &1.id)
+          {todos, navigation_ids, count, pages, current_page}
+      end
+
+    filters = Map.put(socket.assigns.filters, "page", Integer.to_string(page))
+
+    visible_ids =
+      case selected_todo do
+        %Todo{} ->
+          todo_navigation_ids
+          |> Enum.slice((page - 1) * @page_limit, @page_limit)
+          |> MapSet.new()
+
+        nil ->
+          todos |> Enum.map(& &1.id) |> MapSet.new()
+      end
+
+    selected_todo_ids = MapSet.intersection(socket.assigns.selected_todo_ids, visible_ids)
+
+    active_todo_id =
+      case selected_todo do
+        %Todo{id: todo_id} -> todo_id
+        nil -> resolved_active_todo_id(todos, socket.assigns.active_todo_id, nil)
+      end
+
+    socket =
+      assign(socket,
+        filters: filters,
+        filter_form: to_form(filters, as: :filters),
+        todos: todos,
+        todo_navigation_ids: todo_navigation_ids,
+        total_count: total_count,
+        todos_loaded?: true,
+        page: page,
+        total_pages: total_pages,
+        active_todo_id: active_todo_id,
+        selected_todo_ids: selected_todo_ids,
+        selected_todo_id: selected_todo && selected_todo.id,
+        selected_todo: selected_todo
+      )
+
+    if connected?(socket) and is_nil(selected_todo) and requested_page != page do
+      push_patch(socket, to: todos_path(filters), replace: true)
+    else
+      socket
+    end
+  end
+
+  defp load_todo_context(socket) do
     user_id = current_user_id(socket)
     timezone_info = user_timezone_info(user_id)
     projects = Projects.list_projects(user_id: user_id, status: "active")
-    project_options = [{"Inbox", ""} | Enum.map(projects, &{&1.name, &1.id})]
-
-    project_filter_options =
-      [{"All projects", "all"}, {"Inbox", "inbox"} | Enum.map(projects, &{&1.name, &1.id})]
-
-    query_opts = todo_query_opts(socket.assigns.filters, timezone_info)
-    todos = Todos.list_for_user(user_id, query_opts)
-    total_count = Todos.count_for_user(user_id, Keyword.drop(query_opts, [:limit]))
-    visible_ids = todos |> Enum.map(& &1.id) |> MapSet.new()
-    selected_todo_ids = MapSet.intersection(socket.assigns.selected_todo_ids, visible_ids)
-    selected_todo = selected_todo_for_user(user_id, socket.assigns.selected_todo_id)
-
-    active_todo_id =
-      resolved_active_todo_id(todos, socket.assigns.active_todo_id, selected_todo)
 
     assign(socket,
       projects: projects,
-      project_options: project_options,
-      project_filter_options: project_filter_options,
-      todos: todos,
-      total_count: total_count || 0,
-      active_todo_id: active_todo_id,
-      selected_todo_ids: selected_todo_ids,
-      selected_todo_id: selected_todo && selected_todo.id,
-      selected_todo: selected_todo,
+      project_options: [{"Inbox", ""} | Enum.map(projects, &{&1.name, &1.id})],
+      project_filter_options: [
+        {"All projects", "all"},
+        {"Inbox", "inbox"} | Enum.map(projects, &{&1.name, &1.id})
+      ],
       timezone_info: timezone_info
     )
+  end
+
+  defp load_todo_page(user_id, query_opts, requested_page) do
+    {:ok, result} =
+      Repo.transaction(fn ->
+        # SQL Sandbox owns the outer transaction and sets this isolation at
+        # checkout. Everywhere else this is the first statement after BEGIN.
+        unless Repo.config()[:pool] == Ecto.Adapters.SQL.Sandbox do
+          Repo.query!("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ", [])
+        end
+
+        count = Todos.count_for_user(user_id, query_opts) || 0
+        pages = max(div(count + @page_limit - 1, @page_limit), 1)
+        page = min(requested_page, pages)
+
+        todos =
+          Todos.list_for_user(
+            user_id,
+            Keyword.merge(query_opts,
+              limit: @page_limit,
+              offset: (page - 1) * @page_limit
+            )
+          )
+
+        {todos, count, pages, page}
+      end)
+
+    result
   end
 
   attr :selected_todo_ids, :any, required: true
@@ -1486,77 +1596,62 @@ defmodule MaraithonWeb.TodosLive do
       role="status"
       aria-live="polite"
       aria-label="Loading todos"
+      class="space-y-4"
     >
-      <span class="todo-boot-sr-only">Loading todos…</span>
+      <span class="sr-only">Loading todos…</span>
 
-      <div class="todo-boot-pulse" aria-hidden="true">
-        <div class="todo-boot-nav">
-          <div class="todo-boot-nav-inner">
-            <div class="todo-boot-nav-left">
-              <span class="todo-boot-line" style="width: 6rem; height: 1rem;"></span>
-              <div class="todo-boot-nav-links">
-                <span class="todo-boot-line todo-boot-line-light" style="width: 2.75rem;"></span>
-                <span class="todo-boot-line todo-boot-line-light" style="width: 3.25rem;"></span>
-                <span class="todo-boot-line todo-boot-line-light" style="width: 2.5rem;"></span>
-              </div>
-            </div>
-            <div class="todo-boot-controls">
-              <span class="todo-boot-check" style="width: 2rem; height: 2rem; border-radius: 9999px;"></span>
-              <span class="todo-boot-line todo-boot-line-light" style="width: 5.5rem;"></span>
-            </div>
-          </div>
+      <div class="animate-pulse space-y-4 motion-reduce:animate-none" aria-hidden="true">
+        <div class="flex items-center justify-between gap-4">
+          <div class="h-9 w-28 rounded-md bg-zinc-200"></div>
+          <div class="h-9 w-28 rounded-md bg-zinc-200"></div>
         </div>
 
-        <main class="todo-boot-main">
-          <div class="todo-boot-stack">
-            <div class="todo-boot-header">
-              <span class="todo-boot-line" style="width: 7rem; height: 2rem;"></span>
-              <span class="todo-boot-box" style="width: 7.5rem;"></span>
+        <div class="h-10 w-32 rounded-lg border border-zinc-950/5 bg-white shadow-sm"></div>
+
+        <.panel body_class="p-0">
+          <:header>
+            <div class="flex flex-wrap items-center justify-between gap-4">
+              <div class="flex items-center gap-2">
+                <div class="h-9 w-24 rounded-md bg-zinc-100"></div>
+                <div class="h-9 w-28 rounded-md bg-zinc-100"></div>
+                <div class="h-9 w-20 rounded-md bg-zinc-100"></div>
+              </div>
+              <div class="flex items-center gap-3">
+                <div class="h-5 w-16 rounded bg-zinc-100"></div>
+                <div class="h-9 w-32 rounded-md bg-zinc-100"></div>
+              </div>
             </div>
+          </:header>
 
-            <span class="todo-boot-box" style="width: 8rem; height: 2.5rem; background: #fff;"></span>
-
-            <div class="todo-boot-panel">
-              <div class="todo-boot-toolbar">
-                <div class="todo-boot-controls">
-                  <span class="todo-boot-box" style="width: 6rem;"></span>
-                  <span class="todo-boot-box" style="width: 7rem;"></span>
-                  <span class="todo-boot-box" style="width: 5rem;"></span>
-                </div>
-                <div class="todo-boot-controls">
-                  <span class="todo-boot-line todo-boot-line-light" style="width: 4rem;"></span>
-                  <span class="todo-boot-box" style="width: 8rem;"></span>
-                </div>
+          <div class="overflow-hidden">
+            <div class="min-w-[58rem]">
+              <div class="grid grid-cols-[2.5rem_minmax(20rem,1.6fr)_minmax(10rem,0.7fr)_9rem_5rem] items-center gap-4 border-b border-zinc-950/10 bg-zinc-50/70 px-5 py-3">
+                <div class="size-4 rounded bg-zinc-200"></div>
+                <div class="h-3 w-16 rounded bg-zinc-200"></div>
+                <div class="h-3 w-14 rounded bg-zinc-200"></div>
+                <div class="h-3 w-10 rounded bg-zinc-200"></div>
+                <div class="ml-auto h-3 w-12 rounded bg-zinc-200"></div>
               </div>
 
-              <div style="overflow: hidden;">
-                <div class="todo-boot-table">
-                  <div class="todo-boot-grid todo-boot-grid-head">
-                    <span class="todo-boot-check"></span>
-                    <span class="todo-boot-line" style="width: 4rem;"></span>
-                    <span class="todo-boot-line" style="width: 3.5rem;"></span>
-                    <span class="todo-boot-line" style="width: 2.5rem;"></span>
-                    <span class="todo-boot-line" style="width: 3rem; margin-left: auto;"></span>
-                  </div>
-
-                  <div :for={_row <- 1..6} class="todo-boot-grid todo-boot-row">
-                    <span class="todo-boot-check" style="margin-top: 0.25rem;"></span>
-                    <div class="todo-boot-cell">
-                      <span class="todo-boot-line" style="width: 42%; height: 1rem;"></span>
-                      <span class="todo-boot-line todo-boot-line-light" style="width: 82%;"></span>
-                    </div>
-                    <div class="todo-boot-cell">
-                      <span class="todo-boot-line" style="width: 5rem;"></span>
-                      <span class="todo-boot-line todo-boot-line-light" style="width: 6rem; height: 1.25rem;"></span>
-                    </div>
-                    <span class="todo-boot-line todo-boot-line-light" style="width: 5rem;"></span>
-                    <span class="todo-boot-box" style="width: 3rem; height: 1.75rem; margin-left: auto;"></span>
-                  </div>
+              <div
+                :for={_row <- 1..6}
+                class="grid min-h-24 grid-cols-[2.5rem_minmax(20rem,1.6fr)_minmax(10rem,0.7fr)_9rem_5rem] items-start gap-4 border-b border-zinc-950/5 px-5 py-4 last:border-b-0"
+              >
+                <div class="mt-1 size-4 rounded bg-zinc-100"></div>
+                <div class="space-y-3">
+                  <div class="h-4 w-2/5 rounded bg-zinc-200"></div>
+                  <div class="h-3 w-4/5 rounded bg-zinc-100"></div>
                 </div>
+                <div class="space-y-3">
+                  <div class="h-3.5 w-20 rounded bg-zinc-200"></div>
+                  <div class="h-5 w-24 rounded-md bg-zinc-100"></div>
+                </div>
+                <div class="h-3.5 w-20 rounded bg-zinc-100"></div>
+                <div class="ml-auto h-7 w-12 rounded-md bg-zinc-100"></div>
               </div>
             </div>
           </div>
-        </main>
+        </.panel>
       </div>
     </section>
     """
@@ -1672,7 +1767,7 @@ defmodule MaraithonWeb.TodosLive do
     ~H"""
     <.table_header class={@class}>
       <.link
-        patch={todos_path(@filters, %{"sort" => @field, "dir" => @next_dir})}
+        patch={todos_path(@filters, %{"sort" => @field, "dir" => @next_dir, "page" => "1"})}
         class="inline-flex items-center gap-1 text-zinc-500 hover:text-zinc-950"
       >
         <%= render_slot(@inner_block) %>
@@ -1683,7 +1778,7 @@ defmodule MaraithonWeb.TodosLive do
   end
 
   attr :todo, :any, required: true
-  attr :todos, :list, required: true
+  attr :navigation_ids, :list, required: true
   attr :filters, :map, required: true
   attr :project_options, :list, required: true
   attr :timezone_info, :map, required: true
@@ -1699,13 +1794,15 @@ defmodule MaraithonWeb.TodosLive do
   defp todo_detail_panel(assigns) do
     can_edit_next_action = todo_next_action_editable?(assigns.todo)
     source_action = SourceActions.for_todo(assigns.todo) || %{}
-    {previous_todo, next_todo} = todo_neighbors(assigns.todos, assigns.todo.id)
+    {previous_todo, next_todo} = todo_neighbor_targets(assigns.navigation_ids, assigns.todo.id)
 
     assigns =
       assigns
       |> assign(:can_edit_next_action, can_edit_next_action)
       |> assign(:previous_todo, previous_todo)
       |> assign(:next_todo, next_todo)
+      |> assign(:previous_todo_path, todo_navigation_path(assigns.filters, previous_todo))
+      |> assign(:next_todo_path, todo_navigation_path(assigns.filters, next_todo))
       |> assign(:decision_signal?, todo_decision_signal?(assigns.todo))
       |> assign(:facts, todo_fact_rows(assigns.todo, assigns.timezone_info))
       |> assign(:open_url, Map.get(source_action, "open_url"))
@@ -1732,7 +1829,7 @@ defmodule MaraithonWeb.TodosLive do
           <.button
             :if={@previous_todo}
             id="previous-todo"
-            patch={todo_detail_path(@filters, @previous_todo.id)}
+            patch={@previous_todo_path}
             variant="plain"
             class="text-xs text-zinc-500"
             aria-label="Previous todo"
@@ -1755,7 +1852,7 @@ defmodule MaraithonWeb.TodosLive do
           <.button
             :if={@next_todo}
             id="next-todo"
-            patch={todo_detail_path(@filters, @next_todo.id)}
+            patch={@next_todo_path}
             variant="plain"
             class="text-xs text-zinc-500"
             aria-label="Next todo"
@@ -2614,7 +2711,7 @@ defmodule MaraithonWeb.TodosLive do
   defp resolve_todo(socket, todo_id, :complete) do
     user_id = current_user_id(socket)
     detail? = socket.assigns.selected_todo_id == todo_id
-    preferred_next_todo_id = preferred_next_todo_id(socket.assigns.todos, todo_id)
+    preferred_next_todo_id = preferred_next_todo_id(navigation_todo_ids(socket), todo_id)
 
     case Todos.mark_done(user_id, todo_id, todo_action_opts(user_id, "Completed from Work page.")) do
       {:ok, _todo} ->
@@ -2636,7 +2733,7 @@ defmodule MaraithonWeb.TodosLive do
   defp resolve_todo(socket, todo_id, :dismiss) do
     user_id = current_user_id(socket)
     detail? = socket.assigns.selected_todo_id == todo_id
-    preferred_next_todo_id = preferred_next_todo_id(socket.assigns.todos, todo_id)
+    preferred_next_todo_id = preferred_next_todo_id(navigation_todo_ids(socket), todo_id)
 
     case Todos.dismiss(user_id, todo_id, todo_action_opts(user_id, "Dismissed from Work page.")) do
       {:ok, _todo} ->
@@ -2659,14 +2756,16 @@ defmodule MaraithonWeb.TodosLive do
          %{assigns: %{selected_todo: %Todo{id: todo_id}}} = socket,
          direction
        ) do
-    {previous_todo, next_todo} = todo_neighbors(socket.assigns.todos, todo_id)
+    {previous_todo, next_todo} =
+      todo_neighbor_targets(navigation_todo_ids(socket), todo_id)
+
     target_todo = if direction == :next, do: next_todo, else: previous_todo
 
     case target_todo do
-      %Todo{id: target_todo_id} ->
+      %{id: target_todo_id} = target ->
         socket
         |> assign(:active_todo_id, target_todo_id)
-        |> push_patch(to: todo_detail_path(socket.assigns.filters, target_todo_id))
+        |> push_patch(to: todo_navigation_path(socket.assigns.filters, target))
 
       nil ->
         socket
@@ -2698,10 +2797,56 @@ defmodule MaraithonWeb.TodosLive do
 
   defp todo_neighbors(_todos, _todo_id), do: {nil, nil}
 
-  defp preferred_next_todo_id(todos, todo_id) do
-    case todo_neighbors(todos, todo_id) do
-      {_previous_todo, %Todo{id: next_todo_id}} -> next_todo_id
-      {%Todo{id: previous_todo_id}, nil} -> previous_todo_id
+  defp todo_neighbor_targets(todo_ids, todo_id)
+       when is_list(todo_ids) and is_binary(todo_id) do
+    case Enum.find_index(todo_ids, &(&1 == todo_id)) do
+      nil ->
+        {nil, nil}
+
+      index ->
+        {todo_navigation_target(todo_ids, index - 1), todo_navigation_target(todo_ids, index + 1)}
+    end
+  end
+
+  defp todo_neighbor_targets(_todo_ids, _todo_id), do: {nil, nil}
+
+  defp todo_navigation_target(todo_ids, index) when index >= 0 do
+    case Enum.at(todo_ids, index) do
+      todo_id when is_binary(todo_id) -> %{id: todo_id, page: div(index, @page_limit) + 1}
+      _missing -> nil
+    end
+  end
+
+  defp todo_navigation_target(_todo_ids, _index), do: nil
+
+  defp todo_page_for_id(todo_ids, todo_id) when is_list(todo_ids) and is_binary(todo_id) do
+    case Enum.find_index(todo_ids, &(&1 == todo_id)) do
+      nil -> nil
+      index -> div(index, @page_limit) + 1
+    end
+  end
+
+  defp todo_page_for_id(_todo_ids, _todo_id), do: nil
+
+  defp todo_navigation_path(filters, %{id: todo_id, page: page}) do
+    filters
+    |> Map.put("page", Integer.to_string(page))
+    |> todo_detail_path(todo_id)
+  end
+
+  defp todo_navigation_path(_filters, _target), do: nil
+
+  defp navigation_todo_ids(%{
+         assigns: %{selected_todo: %Todo{}, todo_navigation_ids: todo_ids}
+       }),
+       do: todo_ids
+
+  defp navigation_todo_ids(socket), do: Enum.map(socket.assigns.todos, & &1.id)
+
+  defp preferred_next_todo_id(todo_ids, todo_id) do
+    case todo_neighbor_targets(todo_ids, todo_id) do
+      {_previous_todo, %{id: next_todo_id}} -> next_todo_id
+      {%{id: previous_todo_id}, nil} -> previous_todo_id
       _neighbors -> nil
     end
   end
@@ -2718,10 +2863,8 @@ defmodule MaraithonWeb.TodosLive do
     do: socket
 
   defp maybe_advance_after_resolution(socket, true, resolved_todo_id, preferred_todo_id) do
-    remaining_todo_ids =
-      socket.assigns.todos
-      |> Enum.map(& &1.id)
-      |> Enum.reject(&(&1 == resolved_todo_id))
+    current_todo_ids = navigation_todo_ids(socket)
+    remaining_todo_ids = Enum.reject(current_todo_ids, &(&1 == resolved_todo_id))
 
     next_todo_id =
       if preferred_todo_id in remaining_todo_ids,
@@ -2729,8 +2872,12 @@ defmodule MaraithonWeb.TodosLive do
         else: List.first(remaining_todo_ids)
 
     case next_todo_id do
-      nil -> push_patch(socket, to: todos_path(socket.assigns.filters))
-      todo_id -> push_patch(socket, to: todo_detail_path(socket.assigns.filters, todo_id))
+      nil ->
+        push_patch(socket, to: todos_path(socket.assigns.filters))
+
+      todo_id ->
+        target = %{id: todo_id, page: todo_page_for_id(current_todo_ids, todo_id) || 1}
+        push_patch(socket, to: todo_navigation_path(socket.assigns.filters, target))
     end
   end
 
@@ -2766,7 +2913,6 @@ defmodule MaraithonWeb.TodosLive do
 
   defp todo_query_opts(filters, timezone_info) do
     [
-      limit: @page_limit,
       query: normalize_text(filters["q"]),
       statuses: status_filter(filters["status"]),
       attention_mode: attention_filter(filters["attention"]),
@@ -2861,7 +3007,8 @@ defmodule MaraithonWeb.TodosLive do
           ~w(rank title source status attention priority due updated),
           "rank"
         ),
-      "dir" => normalize_choice(Map.get(params, "dir"), ~w(asc desc), "desc")
+      "dir" => normalize_choice(Map.get(params, "dir"), ~w(asc desc), "desc"),
+      "page" => params |> Map.get("page") |> normalize_page() |> Integer.to_string()
     }
   end
 
@@ -2873,6 +3020,29 @@ defmodule MaraithonWeb.TodosLive do
   end
 
   defp normalize_choice(_value, _allowed, fallback), do: fallback
+
+  defp normalize_page(value) when is_integer(value) and value > 0, do: value
+
+  defp normalize_page(value) when is_binary(value) do
+    case Integer.parse(String.trim(value)) do
+      {page, ""} when page > 0 -> page
+      _invalid -> 1
+    end
+  end
+
+  defp normalize_page(_value), do: 1
+
+  defp normalize_todo_id(value) when is_binary(value) do
+    case Ecto.UUID.cast(value) do
+      {:ok, todo_id} -> todo_id
+      :error -> nil
+    end
+  end
+
+  defp normalize_todo_id(_value), do: nil
+
+  defp filter_page(filters) when is_map(filters), do: normalize_page(Map.get(filters, "page"))
+  defp filter_page(_filters), do: 1
 
   defp normalize_project_filter(value) when value in [nil, ""], do: "all"
   defp normalize_project_filter(value) when value in ["all", "inbox"], do: value
@@ -2999,11 +3169,13 @@ defmodule MaraithonWeb.TodosLive do
 
   defp fetch_map_value(_map, _key), do: nil
 
-  defp result_count_label(todos, total_count) do
+  defp result_count_label(todos, total_count, page) do
     shown = length(todos)
+    first = (page - 1) * @page_limit + 1
+    last = first + shown - 1
 
     cond do
-      total_count > shown -> "Showing #{shown} of #{total_count} matching work items."
+      total_count > shown -> "Showing #{first}–#{last} of #{total_count} matching work items."
       total_count == 1 -> "1 work item shown."
       true -> "#{total_count} work items shown."
     end
