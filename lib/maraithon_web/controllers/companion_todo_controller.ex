@@ -3,9 +3,9 @@ defmodule MaraithonWeb.CompanionTodoController do
   Least-privilege Todo mutations for a paired macOS companion.
 
   Reads are served by `MobileTodoController` so the Mac and iPhone share one
-  stable JSON contract. This controller intentionally exposes only completion
-  and reopening. The authenticated device determines the user; request data
-  can never select an account.
+  stable JSON contract. This controller intentionally exposes only completion,
+  dismissal, and reopening. The authenticated device determines the user;
+  request data can never select an account.
   """
 
   use MaraithonWeb, :controller
@@ -42,6 +42,19 @@ defmodule MaraithonWeb.CompanionTodoController do
       end
 
     respond(conn, result, "reopen")
+  end
+
+  def dismiss(conn, %{"id" => todo_id}) do
+    user_id = conn.assigns.current_user_id
+
+    result =
+      case Todos.get_for_user(user_id, todo_id) do
+        %{status: "dismissed"} = todo -> {:ok, todo}
+        nil -> {:error, :not_found}
+        _todo -> Todos.dismiss(user_id, todo_id, actor_opts(user_id))
+      end
+
+    respond(conn, result, "dismiss")
   end
 
   defp respond(conn, {:ok, todo}, action) do

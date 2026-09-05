@@ -278,6 +278,7 @@ defmodule MaraithonWeb.Router do
     get "/todos", MobileTodoController, :index
     get "/todos/:id", MobileTodoController, :show
     post "/todos/:id/actions/done", CompanionTodoController, :done
+    post "/todos/:id/actions/dismiss", CompanionTodoController, :dismiss
     post "/todos/:id/actions/reopen", CompanionTodoController, :reopen
     post "/device-keys", CompanionController, :upload_device_key
     get "/device-keys/me", CompanionController, :current_device_key

@@ -95,5 +95,18 @@ idempotent for an already open Todo.
 {"action":"reopen","todo":{"id":"uuid","status":"open"}}
 ```
 
-No companion route creates, deletes, dismisses, edits, or reassigns a Todo.
-Those capabilities require a separate product and security decision.
+## Dismiss a Todo
+
+```http
+POST /api/v1/companion/todos/:id/actions/dismiss
+```
+
+This records the normal user dismissal lifecycle and removes the Todo from the
+active list. It is idempotent for an already dismissed Todo.
+
+```json
+{"action":"dismiss","todo":{"id":"uuid","status":"dismissed"}}
+```
+
+No companion route creates, deletes, edits, or reassigns a Todo. Completion,
+dismissal, and reopening are the only paired-device Todo mutations.
