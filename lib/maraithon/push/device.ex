@@ -41,6 +41,7 @@ defmodule Maraithon.Push.Device do
     |> update_change(:device_token, &String.trim/1)
     |> validate_length(:device_token, min: 16, max: 512)
     |> validate_inclusion(:platform, @platforms)
+    |> validate_inclusion(:environment, ["sandbox", "production"])
     |> validate_inclusion(:status, @statuses)
     |> foreign_key_constraint(:user_id)
     |> unique_constraint(:device_token)

@@ -29,6 +29,8 @@ final class PushCoordinator: NSObject {
     )
     private var pendingDeviceToken: String?
     private var uploadedDeviceToken: String?
+    private var registrationTask: Task<Void, Never>?
+    private var unregistering = false
 
     /// Routes a navigation deep link. The URL is buffered so a shell mounted
     /// later (cold launch) still routes it; the notification wakes an
@@ -47,9 +49,16 @@ final class PushCoordinator: NSObject {
     /// prior grant is a no-op; a denial leaves everything quiet.
     func enablePush() async {
         let center = UNUserNotificationCenter.current()
+        let settings = await center.notificationSettings()
 
-        let granted = (try? await center.requestAuthorization(options: [.alert, .badge, .sound])) ?? false
-        guard granted else { return }
+        if settings.authorizationStatus == .notDetermined {
+            let granted = (try? await center.requestAuthorization(options: [.alert, .badge, .sound])) ?? false
+            guard granted else { return }
+        } else if settings.authorizationStatus == .denied {
+            // Also stop server-side delivery after permission is revoked in Settings.
+            await unregisterCurrentDevice()
+            return
+        }
 
         UIApplication.shared.registerForRemoteNotifications()
 
@@ -73,33 +82,81 @@ final class PushCoordinator: NSObject {
     /// Sign-out: remove this device's registration so a signed-out phone stops
     /// receiving another account's notifications.
     func unregisterCurrentDevice() async {
-        defer {
-            pendingDeviceToken = nil
-            uploadedDeviceToken = nil
-        }
+        guard !unregistering else { return }
+        unregistering = true
+        defer { unregistering = false }
+
+        // Finish an in-flight upload before deleting, so sign-out cannot be
+        // overtaken by a late registration response for the previous account.
+        await registrationTask?.value
 
         guard let token = uploadedDeviceToken ?? pendingDeviceToken,
               let sessionToken = sessionTokenProvider?() else { return }
 
-        try? await apiClient.unregisterPushDevice(sessionToken: sessionToken, deviceToken: token)
+        uploadedDeviceToken = nil
+        do {
+            try await apiClient.unregisterPushDevice(sessionToken: sessionToken, deviceToken: token)
+            pendingDeviceToken = nil
+        } catch {
+            // Preserve the token so another foreground attempt can remove it
+            // after permission was revoked while the network was unavailable.
+            pendingDeviceToken = token
+            logger.error("Push unregistration failed: \(error.localizedDescription, privacy: .public)")
+        }
     }
 
     private func uploadPendingTokenIfPossible() async {
-        guard let token = pendingDeviceToken,
+        guard !unregistering,
+              registrationTask == nil,
+              let token = pendingDeviceToken,
               token != uploadedDeviceToken,
               let sessionToken = sessionTokenProvider?() else { return }
 
-        do {
-            try await apiClient.registerPushDevice(
-                sessionToken: sessionToken,
-                deviceToken: token,
-                appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
-            )
-            uploadedDeviceToken = token
-        } catch {
-            // Leave the token pending; the next launch or sign-in retries.
-            logger.error("Push token upload failed: \(error.localizedDescription, privacy: .public)")
+        let task = Task { @MainActor in
+            do {
+                try await apiClient.registerPushDevice(
+                    sessionToken: sessionToken,
+                    deviceToken: token,
+                    appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String,
+                    environment: pushEnvironment
+                )
+                if sessionTokenProvider?() == sessionToken {
+                    uploadedDeviceToken = token
+                }
+            } catch {
+                // Leave the token pending; foregrounding, launch, or sign-in retries.
+                logger.error("Push token upload failed: \(error.localizedDescription, privacy: .public)")
+            }
         }
+        registrationTask = task
+        await task.value
+        registrationTask = nil
+    }
+
+    private var pushEnvironment: String {
+        #if targetEnvironment(simulator)
+        return "sandbox"
+        #else
+        return signedPushEnvironment
+        #endif
+    }
+
+    private var signedPushEnvironment: String {
+        // Read the signing profile when available: an exported Debug build can
+        // be distribution-signed too. App Store/TestFlight omit this file and
+        // always use production APNs.
+        if let url = Bundle.main.url(forResource: "embedded", withExtension: "mobileprovision"),
+           let data = try? Data(contentsOf: url),
+           let start = data.range(of: Data("<plist".utf8)),
+           let end = data.range(of: Data("</plist>".utf8), in: start.lowerBound..<data.endIndex),
+           let profile = try? PropertyListSerialization.propertyList(
+               from: data.subdata(in: start.lowerBound..<end.upperBound), options: [], format: nil
+           ) as? [String: Any],
+           let entitlements = profile["Entitlements"] as? [String: Any],
+           let environment = entitlements["aps-environment"] as? String {
+            return environment == "development" ? "sandbox" : "production"
+        }
+        return "production"
     }
 }
 

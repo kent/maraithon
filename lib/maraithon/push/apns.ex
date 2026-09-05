@@ -52,7 +52,8 @@ defmodule Maraithon.Push.APNS do
         {:error, :not_configured}
 
       {:ok, config} ->
-        with {:ok, {url, headers, body, jwt_generation}} <-
+        with {:ok, config} <- device_environment(config, opts[:environment]),
+             {:ok, {url, headers, body, jwt_generation}} <-
                build_request(config, device_token, payload, opts) do
           case post_once(url, headers, body) do
             {:ok, 200, _body} ->
@@ -321,6 +322,16 @@ defmodule Maraithon.Push.APNS do
 
   defp host(%{environment: "sandbox"}), do: @sandbox_host
   defp host(_config), do: @production_host
+
+  # A development build and a TestFlight build register different APNs tokens.
+  # Select the host per device; never try the other host after a send. Legacy
+  # registrations without an environment retain the server-configured default.
+  defp device_environment(config, nil), do: {:ok, config}
+
+  defp device_environment(config, environment) when environment in ["sandbox", "production"],
+    do: {:ok, %{config | environment: environment}}
+
+  defp device_environment(_config, _environment), do: {:error, :request_rejected}
 
   defp classify_failure(status, response_body, request_jwt_generation) do
     reason = decode_reason(response_body)

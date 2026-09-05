@@ -69,6 +69,7 @@ struct AppShellView: View {
         .onChange(of: scenePhase) { _, newPhase in
             if newPhase == .active {
                 PushCoordinator.shared.clearBadge()
+                Task { await PushCoordinator.shared.enablePush() }
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .maraithonDeepLink)) { _ in

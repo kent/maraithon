@@ -15,7 +15,8 @@ extension MobileAPIClient {
     func registerPushDevice(
         sessionToken: String,
         deviceToken: String,
-        appVersion: String? = nil
+        appVersion: String? = nil,
+        environment: String? = nil
     ) async throws {
         var body: RequestBody = [
             "device_token": .string(deviceToken),
@@ -24,6 +25,10 @@ extension MobileAPIClient {
 
         if let appVersion {
             body["app_version"] = .string(appVersion)
+        }
+
+        if let environment {
+            body["environment"] = .string(environment)
         }
 
         let _: PushDeviceResponse = try await send(

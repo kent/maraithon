@@ -84,7 +84,10 @@ defmodule Maraithon.Push.Notifier do
         fn device ->
           result =
             try do
-              APNS.send(device.device_token, payload, collapse_id: collapse_id)
+              APNS.send(device.device_token, payload,
+                collapse_id: collapse_id,
+                environment: device.environment
+              )
             rescue
               _exception -> {:error, :delivery_unknown}
             catch
