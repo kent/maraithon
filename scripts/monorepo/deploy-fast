@@ -184,6 +184,14 @@ gcloud run deploy "${service}" \
   --startup-probe 'httpGet.path=/health,initialDelaySeconds=5,timeoutSeconds=5,periodSeconds=5,failureThreshold=24' \
   --quiet
 
+# Split-runtime deployments pin traffic to a named revision. Restore the
+# normal floating assignment so this revision and future fast deploys go live.
+gcloud run services update-traffic "${service}" \
+  --project "${project}" \
+  --region "${region}" \
+  --to-latest \
+  --quiet
+
 service_url="$(
   gcloud run services describe "${service}" \
     --project "${project}" \
@@ -191,7 +199,12 @@ service_url="$(
     --format='value(status.url)'
 )"
 
-curl --fail --silent --show-error --max-time 15 "${service_url}/health" >/dev/null
+health_payload="$(curl --fail --silent --show-error --max-time 15 "${service_url}/health")"
+
+if ! jq -e '.status == "ok" and .process_role == "combined"' <<<"${health_payload}" >/dev/null; then
+  echo "Combined service health check failed: ${health_payload}" >&2
+  exit 1
+fi
 
 # After the one-time cutover, let the old private runtime service scale to zero.
 if [[ "${current_role}" != "combined" && "${runtime_service_json}" != "{}" ]]; then
