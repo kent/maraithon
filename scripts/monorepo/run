@@ -49,8 +49,13 @@ if selected_component "${component}" "companion"; then
   echo "If Full Disk Access is already enabled for this app, this reload keeps using it."
   echo "If it is not enabled yet, grant this exact app path once; future reloads preserve it."
   open "${install_app}"
-  # A second open is the native reopen event. It restores the main window when
-  # the prior process had closed it while leaving the menu-bar scene active.
-  sleep 2
-  open "${install_app}"
+  # Cold SwiftUI launches can ignore a reopen event until scene registration
+  # finishes. Retry the idempotent show-window URL briefly in the background
+  # so this command returns immediately while the main window reliably opens.
+  nohup /bin/bash -c '
+    for delay in 2 3 5; do
+      sleep "${delay}"
+      open "maraithon://show"
+    done
+  ' </dev/null >/dev/null 2>&1 &
 fi

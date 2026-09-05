@@ -202,6 +202,11 @@ final class AppEnvironment {
 
     /// Routes inbound deep-link URLs (e.g. `maraithon://device-token/<t>`).
     func handleIncomingURL(_ url: URL) {
+        if url.scheme?.lowercased() == "maraithon", url.host?.lowercased() == "show" {
+            eventLog.debug("app.show_window_requested", source: .ui)
+            return
+        }
+
         deviceAuth.handleIncomingURL(url)
     }
 
