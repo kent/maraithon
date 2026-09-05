@@ -114,6 +114,23 @@ migration_secrets="DATABASE_URL=maraithon-migrator-db-url:latest,DIRECT_DATABASE
 
 runtime_secrets="DATABASE_URL=maraithon-runtime-db-url:latest,SECRET_KEY_BASE=maraithon-secret-key-base:latest,API_BEARER_TOKEN=maraithon-api-bearer-token:latest,ADMIN_PASSWORD=maraithon-admin-password:latest,OPENROUTER_API_KEY=maraithon-openrouter-api-key:latest,CLOAK_KEY=maraithon-cloak-key:latest,DURABLE_PAYLOAD_BINDING_CURRENT_KEY=maraithon-payload-binding-key:latest,RELEASE_COOKIE=maraithon-release-cookie:latest,POSTMARK_SERVER_TOKEN=maraithon-postmark-server-token:latest,AUTH_EMAIL_FROM=maraithon-auth-email-from:latest,GOOGLE_CLIENT_ID=maraithon-google-client-id:latest,GOOGLE_CLIENT_SECRET=maraithon-google-client-secret:latest,GITHUB_CLIENT_ID=maraithon-github-client-id:latest,GITHUB_CLIENT_SECRET=maraithon-github-client-secret:latest,GITHUB_WEBHOOK_SECRET=maraithon-github-webhook-secret:latest,SLACK_CLIENT_ID=maraithon-slack-client-id:latest,SLACK_CLIENT_SECRET=maraithon-slack-client-secret:latest,SLACK_SIGNING_SECRET=maraithon-slack-signing-secret:latest,NOTAUI_CLIENT_ID=maraithon-notaui-client-id:latest,NOTAUI_CLIENT_SECRET=maraithon-notaui-client-secret:latest"
 
+# --set-secrets/--set-env-vars replace the existing configuration. Keep the
+# optional mobile push setup across fast deploys, without fetching key material
+# or adding another deployment gate. The private key must remain a secret ref.
+push_secret_bindings="$(jq -r '
+  [.spec.template.spec.containers[0].env[]? |
+    select(.name | IN("APNS_TEAM_ID", "APNS_KEY_ID", "APNS_PRIVATE_KEY", "APNS_TOPIC", "APNS_ENVIRONMENT", "MOBILE_PUSH_ENABLED", "TELEGRAM_UNIFIED_PUSH_ENABLED")) |
+    select(.valueFrom.secretKeyRef != null) |
+    "\(.name)=\(.valueFrom.secretKeyRef.name):\(.valueFrom.secretKeyRef.key)"] | join(",")
+' <<<"${service_json}")"
+push_env="$(jq -r '
+  [.spec.template.spec.containers[0].env[]? |
+    select(.name | IN("APNS_TEAM_ID", "APNS_KEY_ID", "APNS_TOPIC", "APNS_ENVIRONMENT", "MOBILE_PUSH_ENABLED", "TELEGRAM_UNIFIED_PUSH_ENABLED")) |
+    select(.value != null) | "\(.name)=\(.value)"] | join(",")
+' <<<"${service_json}")"
+runtime_secrets+="${push_secret_bindings:+,${push_secret_bindings}}"
+common_env+="${push_env:+,${push_env}}"
+
 if [[ "${migrations_digest}" != "${current_migrations_digest}" ]]; then
   echo "Migration files changed; running the migration job once"
   gcloud run jobs deploy "${service}-migrate" \
