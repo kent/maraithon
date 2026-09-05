@@ -18,6 +18,18 @@ defmodule Maraithon.LLMTest.RateLimitedProvider do
   end
 end
 
+defmodule Maraithon.LLMTest.SequencedProvider do
+  @moduledoc false
+
+  def complete(params) do
+    state = Application.fetch_env!(:maraithon, :llm_sequenced_provider_state)
+
+    Agent.get_and_update(state, fn %{responses: [response | rest], calls: calls} = current ->
+      {response, %{current | responses: rest, calls: [params | calls]}}
+    end)
+  end
+end
+
 defmodule Maraithon.LLMTest do
   use ExUnit.Case, async: false
 
@@ -247,6 +259,82 @@ defmodule Maraithon.LLMTest do
 
       assert {:ok, %{model: "mock-v1"}} =
                LLM.complete_routing(%{"messages" => [%{"role" => "user", "content" => "hi"}]})
+    end
+  end
+
+  describe "complete_brief/1" do
+    test "reserves deadline and retries a transient error when brief and primary share a target" do
+      state =
+        start_supervised!(
+          {Agent,
+           fn ->
+             %{
+               responses: [
+                 {:error, {:provider_error, :redacted}},
+                 {:ok, %{content: "recovered", model: "shared-model"}}
+               ],
+               calls: []
+             }
+           end}
+        )
+
+      Application.put_env(:maraithon, :llm_sequenced_provider_state, state)
+
+      Application.put_env(:maraithon, Maraithon.Runtime,
+        llm_provider: Maraithon.LLMTest.SequencedProvider,
+        llm_provider_name: "mock",
+        llm_model: "shared-model",
+        llm_brief_model: "shared-model",
+        llm_brief_reasoning_effort: "high"
+      )
+
+      on_exit(fn -> Application.delete_env(:maraithon, :llm_sequenced_provider_state) end)
+
+      assert {:ok, %{content: "recovered"}} =
+               LLM.complete_brief(%{
+                 "messages" => [%{"role" => "user", "content" => "brief this"}],
+                 "timeout_ms" => 120_000
+               })
+
+      calls = state |> Agent.get(& &1.calls) |> Enum.reverse()
+      assert [first, retry] = calls
+      assert first["model"] == "shared-model"
+      assert retry["model"] == "shared-model"
+      assert first["timeout_ms"] <= 60_000
+      assert retry["timeout_ms"] >= 59_000
+    end
+
+    test "does not retry a non-transient failure on the same target" do
+      state =
+        start_supervised!(
+          {Agent,
+           fn ->
+             %{
+               responses: [{:error, {:content_filtered, :redacted}}],
+               calls: []
+             }
+           end}
+        )
+
+      Application.put_env(:maraithon, :llm_sequenced_provider_state, state)
+
+      Application.put_env(:maraithon, Maraithon.Runtime,
+        llm_provider: Maraithon.LLMTest.SequencedProvider,
+        llm_provider_name: "mock",
+        llm_model: "shared-model",
+        llm_brief_model: "shared-model",
+        llm_brief_reasoning_effort: "high"
+      )
+
+      on_exit(fn -> Application.delete_env(:maraithon, :llm_sequenced_provider_state) end)
+
+      assert {:error, {:content_filtered, :redacted}} =
+               LLM.complete_brief(%{
+                 "messages" => [%{"role" => "user", "content" => "brief this"}],
+                 "timeout_ms" => 120_000
+               })
+
+      assert [_first] = Agent.get(state, & &1.calls)
     end
   end
 

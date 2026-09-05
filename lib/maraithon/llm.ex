@@ -6,6 +6,11 @@ defmodule Maraithon.LLM do
   alias Maraithon.LLM.RequestBudget
   alias Maraithon.Runtime.Effects.LLMRateLimiter
 
+  require Logger
+
+  @brief_retry_reserve_ms 60_000
+  @minimum_brief_retry_ms 1_000
+
   defp runtime_config do
     Application.get_env(:maraithon, Maraithon.Runtime, [])
   end
@@ -228,38 +233,59 @@ defmodule Maraithon.LLM do
   matters more than latency.
 
   If the brief model rejects the request (unknown model, unsupported
-  reasoning effort), the call retries once on the primary model at "high"
-  so a misconfigured tier degrades to a good answer instead of an error.
+  reasoning effort), the call retries once on the primary model at "high".
+  When both tiers resolve to the same target, transient provider, network, or
+  timeout failures still receive one retry. The first call reserves a bounded
+  part of the caller's deadline for that recovery attempt.
   """
   def complete_brief(params) when is_map(params) do
     primary = model()
     brief = brief_model()
+    deadline = System.monotonic_time(:millisecond) + request_timeout_ms(params)
 
     brief_params =
       params
       |> Map.put_new("model", brief)
       |> Map.put_new("reasoning_effort", brief_reasoning_effort())
+      |> Map.put("timeout_ms", first_brief_attempt_timeout(deadline))
 
     case complete(brief_params) do
       {:ok, _response} = ok ->
         ok
 
-      {:error, _reason} = error ->
-        if brief_params["model"] == primary and brief_params["reasoning_effort"] == "high" do
-          error
-        else
-          fallback_params =
-            params
-            |> Map.put("model", primary)
-            |> Map.put("reasoning_effort", "high")
+      {:error, reason} = error ->
+        fallback_params =
+          params
+          |> Map.put("model", primary)
+          |> Map.put("reasoning_effort", "high")
 
-          case complete(fallback_params) do
-            {:ok, _response} = ok -> ok
-            {:error, _fallback_reason} -> error
-          end
+        if distinct_brief_target?(brief_params, fallback_params) or transient_failure?(reason) do
+          retry_brief(fallback_params, error, reason, deadline)
+        else
+          error
         end
     end
   end
+
+  @doc false
+  def transient_failure?(:timeout), do: true
+  def transient_failure?(:llm_timeout), do: true
+  def transient_failure?(:provider_error), do: true
+  def transient_failure?(:network_error), do: true
+  def transient_failure?({:llm_timeout, _timeout_ms}), do: true
+  def transient_failure?({:provider_error, _detail}), do: true
+  def transient_failure?({:network_error, _detail}), do: true
+  def transient_failure?({:invalid_response, _detail}), do: true
+
+  def transient_failure?({:api_error, status})
+      when is_integer(status) and status >= 500 and status <= 599,
+      do: true
+
+  def transient_failure?({:api_error, status, _detail})
+      when is_integer(status) and status >= 500 and status <= 599,
+      do: true
+
+  def transient_failure?(_reason), do: false
 
   @doc """
   Stream-complete a request, calling on_chunk for each output_text delta.
@@ -318,6 +344,46 @@ defmodule Maraithon.LLM do
       |> with_provider_slot(deadline, params, fun)
     else
       fun.(params)
+    end
+  end
+
+  defp retry_brief(params, original_error, original_reason, deadline) do
+    remaining_ms = deadline - System.monotonic_time(:millisecond)
+
+    if remaining_ms >= @minimum_brief_retry_ms do
+      Logger.info("Retrying brief model call",
+        model: params["model"],
+        failure_code: Maraithon.Redaction.error_class(original_reason)
+      )
+
+      case complete(Map.put(params, "timeout_ms", remaining_ms)) do
+        {:ok, _response} = ok -> ok
+        {:error, _retry_reason} -> original_error
+      end
+    else
+      original_error
+    end
+  end
+
+  defp first_brief_attempt_timeout(deadline) do
+    remaining_ms = max(deadline - System.monotonic_time(:millisecond), 1)
+
+    if remaining_ms >= @brief_retry_reserve_ms + @minimum_brief_retry_ms do
+      remaining_ms - @brief_retry_reserve_ms
+    else
+      remaining_ms
+    end
+  end
+
+  defp distinct_brief_target?(brief_params, fallback_params) do
+    brief_params["model"] != fallback_params["model"] or
+      brief_params["reasoning_effort"] != fallback_params["reasoning_effort"]
+  end
+
+  defp request_timeout_ms(params) do
+    case params["timeout_ms"] do
+      value when is_integer(value) and value > 0 -> min(value, 300_000)
+      _value -> 120_000
     end
   end
 
