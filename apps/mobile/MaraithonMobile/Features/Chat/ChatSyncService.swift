@@ -686,9 +686,7 @@ struct ChatSyncService {
         guard let todo = try modelContext.fetch(descriptor).first else { return }
 
         if todoData["status"]?.string == "dismissed" {
-            todo.isCompleted = true
-            todo.completedAt = date(from: todoData["closed_at"]) ?? now()
-            todo.updatedAt = date(from: todoData["updated_at"]) ?? now()
+            modelContext.delete(todo)
             return
         }
 
@@ -711,8 +709,13 @@ struct ChatSyncService {
         }
 
         if let status = todoData["status"]?.string {
-            todo.isCompleted = status == "done"
-            todo.completedAt = status == "done" ? (date(from: todoData["closed_at"]) ?? now()) : nil
+            todo.status = TodoStatus(rawValue: status) ?? .open
+            todo.completedAt = todo.status == .done ? (date(from: todoData["closed_at"]) ?? now()) : nil
+            todo.snoozedUntil = date(from: todoData["snoozed_until"])
+        }
+
+        if let attentionMode = todoData["attention_mode"]?.string {
+            todo.attentionMode = TodoAttentionMode(rawValue: attentionMode) ?? .actNow
         }
         todo.updatedAt = date(from: todoData["updated_at"]) ?? now()
     }

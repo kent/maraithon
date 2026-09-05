@@ -130,7 +130,7 @@ struct MobileAPIClient: Sendable {
         static let chatThreads = "chat-threads"
 
         static func todos(includeCards: Bool) -> String {
-            includeCards ? "todos.v2.cards" : "todos.v2"
+            includeCards ? "todos.v3.cards" : "todos.v3"
         }
     }
 
@@ -159,6 +159,11 @@ struct MobileAPIClient: Sendable {
             case completed
             case sentTo = "sent_to"
         }
+    }
+
+    struct TodoActionResponse: Decodable, Sendable {
+        let todo: RemoteTodo
+        let action: String
     }
 
     struct AcknowledgementResponse: Decodable, Sendable {
@@ -263,16 +268,23 @@ struct MobileAPIClient: Sendable {
     struct RemoteTodo: Decodable, Equatable, Sendable {
         let id: String
         let source: String?
+        let kind: String?
+        let attentionMode: String?
         let title: String
         let summary: String?
         let nextAction: String?
         let dueAt: Date?
         let notes: String?
+        let actionPlan: String?
+        let ownerLabel: String?
         let priority: Int?
         let status: String
+        let snoozedUntil: Date?
         let closedAt: Date?
+        let sourceOccurredAt: Date?
         let insertedAt: Date?
         let updatedAt: Date?
+        let brief: RemoteTodoBrief?
         let actionCard: RemoteActionCard?
         let hasActionCardField: Bool
         let relatedPeople: [RemoteRelatedPerson]
@@ -280,16 +292,23 @@ struct MobileAPIClient: Sendable {
         enum CodingKeys: String, CodingKey {
             case id
             case source
+            case kind
+            case attentionMode = "attention_mode"
             case title
             case summary
             case nextAction = "next_action"
             case dueAt = "due_at"
             case notes
+            case actionPlan = "action_plan"
+            case ownerLabel = "owner_label"
             case priority
             case status
+            case snoozedUntil = "snoozed_until"
             case closedAt = "closed_at"
+            case sourceOccurredAt = "source_occurred_at"
             case insertedAt = "inserted_at"
             case updatedAt = "updated_at"
+            case brief
             case actionCard = "action_card"
             case relatedPeople = "related_people"
         }
@@ -298,16 +317,23 @@ struct MobileAPIClient: Sendable {
             let container = try decoder.container(keyedBy: CodingKeys.self)
             id = try container.decode(String.self, forKey: .id)
             source = try container.decodeIfPresent(String.self, forKey: .source)
+            kind = try container.decodeIfPresent(String.self, forKey: .kind)
+            attentionMode = try container.decodeIfPresent(String.self, forKey: .attentionMode)
             title = try container.decode(String.self, forKey: .title)
             summary = try container.decodeIfPresent(String.self, forKey: .summary)
             nextAction = try container.decodeIfPresent(String.self, forKey: .nextAction)
             dueAt = try container.decodeIfPresent(Date.self, forKey: .dueAt)
             notes = try container.decodeIfPresent(String.self, forKey: .notes)
+            actionPlan = try container.decodeIfPresent(String.self, forKey: .actionPlan)
+            ownerLabel = try container.decodeIfPresent(String.self, forKey: .ownerLabel)
             priority = try container.decodeIfPresent(Int.self, forKey: .priority)
             status = try container.decode(String.self, forKey: .status)
+            snoozedUntil = try container.decodeIfPresent(Date.self, forKey: .snoozedUntil)
             closedAt = try container.decodeIfPresent(Date.self, forKey: .closedAt)
+            sourceOccurredAt = try container.decodeIfPresent(Date.self, forKey: .sourceOccurredAt)
             insertedAt = try container.decodeIfPresent(Date.self, forKey: .insertedAt)
             updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt)
+            brief = try container.decodeIfPresent(RemoteTodoBrief.self, forKey: .brief)
             actionCard = try container.decodeIfPresent(RemoteActionCard.self, forKey: .actionCard)
             hasActionCardField = container.contains(.actionCard)
             relatedPeople = try container.decodeIfPresent([RemoteRelatedPerson].self, forKey: .relatedPeople) ?? []
@@ -316,35 +342,83 @@ struct MobileAPIClient: Sendable {
         init(
             id: String,
             source: String? = nil,
+            kind: String? = nil,
+            attentionMode: String? = nil,
             title: String,
             summary: String?,
             nextAction: String?,
             dueAt: Date?,
             notes: String?,
+            actionPlan: String? = nil,
+            ownerLabel: String? = nil,
             priority: Int?,
             status: String,
+            snoozedUntil: Date? = nil,
             closedAt: Date?,
+            sourceOccurredAt: Date? = nil,
             insertedAt: Date? = nil,
             updatedAt: Date? = nil,
+            brief: RemoteTodoBrief? = nil,
             actionCard: RemoteActionCard? = nil,
             hasActionCardField: Bool = true,
             relatedPeople: [RemoteRelatedPerson] = []
         ) {
             self.id = id
             self.source = source
+            self.kind = kind
+            self.attentionMode = attentionMode
             self.title = title
             self.summary = summary
             self.nextAction = nextAction
             self.dueAt = dueAt
             self.notes = notes
+            self.actionPlan = actionPlan
+            self.ownerLabel = ownerLabel
             self.priority = priority
             self.status = status
+            self.snoozedUntil = snoozedUntil
             self.closedAt = closedAt
+            self.sourceOccurredAt = sourceOccurredAt
             self.insertedAt = insertedAt
             self.updatedAt = updatedAt
+            self.brief = brief
             self.actionCard = actionCard
             self.hasActionCardField = hasActionCardField
             self.relatedPeople = relatedPeople
+        }
+    }
+
+    struct RemoteTodoBrief: Decodable, Equatable, Sendable {
+        let whyItMatters: String?
+        let situation: String?
+        let recommendation: String?
+        let steps: [String]
+        let openQuestions: [String]
+        let effort: String?
+        let generatedAt: Date?
+        let model: String?
+
+        enum CodingKeys: String, CodingKey {
+            case whyItMatters = "why_it_matters"
+            case situation
+            case recommendation
+            case steps
+            case openQuestions = "open_questions"
+            case effort
+            case generatedAt = "generated_at"
+            case model
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            whyItMatters = try container.decodeIfPresent(String.self, forKey: .whyItMatters)
+            situation = try container.decodeIfPresent(String.self, forKey: .situation)
+            recommendation = try container.decodeIfPresent(String.self, forKey: .recommendation)
+            steps = try container.decodeIfPresent([String].self, forKey: .steps) ?? []
+            openQuestions = try container.decodeIfPresent([String].self, forKey: .openQuestions) ?? []
+            effort = try container.decodeIfPresent(String.self, forKey: .effort)
+            generatedAt = try container.decodeIfPresent(Date.self, forKey: .generatedAt)
+            model = try container.decodeIfPresent(String.self, forKey: .model)
         }
     }
 
@@ -748,55 +822,75 @@ struct MobileAPIClient: Sendable {
             }
         }
 
+        let headline: String?
         let decisionPrompt: String?
         let contextItems: [ContextItem]
         let whyNow: String?
+        let rankReason: String?
+        let attentionMode: String?
         let sourceContext: String?
         let nextBestAction: String?
         let draftPreview: String?
         let evidenceExcerpt: String?
+        let estimatedEffort: String?
         let sourceAction: SourceAction?
 
         enum CodingKeys: String, CodingKey {
+            case headline
             case decisionPrompt = "decision_prompt"
             case contextItems = "context_items"
             case whyNow = "why_now"
+            case rankReason = "rank_reason"
+            case attentionMode = "attention_mode"
             case sourceContext = "source_context"
             case nextBestAction = "next_best_action"
             case draftPreview = "draft_preview"
             case evidenceExcerpt = "evidence_excerpt"
+            case estimatedEffort = "estimated_effort"
             case sourceAction = "source_action"
         }
 
         init(from decoder: Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
+            headline = try container.decodeIfPresent(String.self, forKey: .headline)
             decisionPrompt = try container.decodeIfPresent(String.self, forKey: .decisionPrompt)
             contextItems = try container.decodeIfPresent([ContextItem].self, forKey: .contextItems) ?? []
             whyNow = try container.decodeIfPresent(String.self, forKey: .whyNow)
+            rankReason = try container.decodeIfPresent(String.self, forKey: .rankReason)
+            attentionMode = try container.decodeIfPresent(String.self, forKey: .attentionMode)
             sourceContext = try container.decodeIfPresent(String.self, forKey: .sourceContext)
             nextBestAction = try container.decodeIfPresent(String.self, forKey: .nextBestAction)
             draftPreview = try container.decodeIfPresent(String.self, forKey: .draftPreview)
             evidenceExcerpt = try container.decodeIfPresent(String.self, forKey: .evidenceExcerpt)
+            estimatedEffort = try container.decodeIfPresent(String.self, forKey: .estimatedEffort)
             sourceAction = try container.decodeIfPresent(SourceAction.self, forKey: .sourceAction)
         }
 
         init(
+            headline: String? = nil,
             decisionPrompt: String? = nil,
             contextItems: [ContextItem] = [],
             whyNow: String? = nil,
+            rankReason: String? = nil,
+            attentionMode: String? = nil,
             sourceContext: String? = nil,
             nextBestAction: String? = nil,
             draftPreview: String? = nil,
             evidenceExcerpt: String? = nil,
+            estimatedEffort: String? = nil,
             sourceAction: SourceAction? = nil
         ) {
+            self.headline = headline
             self.decisionPrompt = decisionPrompt
             self.contextItems = contextItems
             self.whyNow = whyNow
+            self.rankReason = rankReason
+            self.attentionMode = attentionMode
             self.sourceContext = sourceContext
             self.nextBestAction = nextBestAction
             self.draftPreview = draftPreview
             self.evidenceExcerpt = evidenceExcerpt
+            self.estimatedEffort = estimatedEffort
             self.sourceAction = sourceAction
         }
     }
@@ -1034,7 +1128,7 @@ struct MobileAPIClient: Sendable {
             let offsetQuery = offset > 0 ? "&offset=\(offset)" : ""
             let cardScopeQuery = includeCards ? "&open_cards_only=true" : ""
             let response: TodosResponse = try await send(
-                path: "/todos?limit=\(pageSize)\(offsetQuery)&status=all&sort=updated&dir=desc&include_cards=\(includeCards)\(cardScopeQuery)",
+                path: "/todos?limit=\(pageSize)\(offsetQuery)&status=all&sort=rank&dir=desc&include_cards=\(includeCards)\(cardScopeQuery)",
                 sessionToken: sessionToken,
                 etagKey: (conditional && page == 0) ? ETagKey.todos(includeCards: includeCards) : nil,
                 responseType: TodosResponse.self
@@ -1207,6 +1301,31 @@ struct MobileAPIClient: Sendable {
             body: payload,
             responseType: TodoReplyResponse.self
         )
+    }
+
+    func performTodoAction(
+        sessionToken: String,
+        id: UUID,
+        action: String,
+        snoozedUntil: Date? = nil,
+        note: String? = nil
+    ) async throws -> RemoteTodo {
+        var body: RequestBody = [:]
+        if let snoozedUntil {
+            body["snoozed_until"] = .string(Self.iso8601.format(snoozedUntil))
+        }
+        if let note, !note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            body["note"] = .string(note)
+        }
+
+        let response: TodoActionResponse = try await send(
+            path: "/todos/\(id.uuidString.lowercased())/actions/\(action)?include_cards=true",
+            method: "POST",
+            sessionToken: sessionToken,
+            body: body,
+            responseType: TodoActionResponse.self
+        )
+        return response.todo
     }
 
     func deleteTodo(sessionToken: String, id: UUID) async throws -> RemoteTodo {

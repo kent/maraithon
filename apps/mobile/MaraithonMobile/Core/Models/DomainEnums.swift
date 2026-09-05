@@ -41,6 +41,38 @@ enum TodoPriority: String, Codable, CaseIterable, Identifiable {
     }
 }
 
+enum TodoStatus: String, Codable, CaseIterable, Identifiable {
+    case open
+    case snoozed
+    case done
+    case dismissed
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .open: "Open"
+        case .snoozed: "Snoozed"
+        case .done: "Done"
+        case .dismissed: "Dismissed"
+        }
+    }
+}
+
+enum TodoAttentionMode: String, Codable, CaseIterable, Identifiable {
+    case actNow = "act_now"
+    case monitor
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .actNow: "Needs action"
+        case .monitor: "Watching"
+        }
+    }
+}
+
 enum ContactStatus: String, Codable, CaseIterable, Identifiable {
     case lead
     case active

@@ -10,6 +10,12 @@ final class TodoItem {
     var priorityRawValue: String
     var dueDate: Date?
     var isCompleted: Bool
+    /// Optional raw values preserve lightweight migration for existing stores.
+    /// `status` falls back to the legacy completion flag until the first sync.
+    var statusRawValue: String?
+    var attentionModeRawValue: String?
+    var kindRawValue: String?
+    var snoozedUntil: Date?
     var createdAt: Date
     /// Nonoptional default keeps the additive field eligible for SwiftData's
     /// lightweight migration; the first v2 todo sync backfills server time.
@@ -22,6 +28,13 @@ final class TodoItem {
     var nextBestAction: String?
     var draftPreview: String?
     var evidenceExcerpt: String?
+    var cardHeadline: String?
+    var rankReason: String?
+    var estimatedEffort: String?
+    var actionPlan: String?
+    var ownerLabel: String?
+    var sourceOccurredAt: Date?
+    var todoBriefData: Data?
     var sourceSystem: String?
     var sourceProvider: String?
     var sourceProviderLabel: String?
@@ -40,6 +53,30 @@ final class TodoItem {
         set { priorityRawValue = newValue.rawValue }
     }
 
+    var status: TodoStatus {
+        get {
+            if isCompleted { return .done }
+            return TodoStatus(rawValue: statusRawValue ?? "") ?? .open
+        }
+        set {
+            statusRawValue = newValue.rawValue
+            isCompleted = newValue == .done
+        }
+    }
+
+    var attentionMode: TodoAttentionMode {
+        get { TodoAttentionMode(rawValue: attentionModeRawValue ?? "") ?? .actNow }
+        set { attentionModeRawValue = newValue.rawValue }
+    }
+
+    var isActive: Bool {
+        status == .open || status == .snoozed
+    }
+
+    var needsActionNow: Bool {
+        status == .open && attentionMode == .actNow
+    }
+
     init(
         id: UUID = UUID(),
         title: String,
@@ -48,6 +85,10 @@ final class TodoItem {
         priority: TodoPriority = .medium,
         dueDate: Date? = nil,
         isCompleted: Bool = false,
+        status: TodoStatus? = nil,
+        attentionMode: TodoAttentionMode = .actNow,
+        kind: String? = nil,
+        snoozedUntil: Date? = nil,
         createdAt: Date = Date(),
         updatedAt: Date? = nil,
         completedAt: Date? = nil,
@@ -58,6 +99,13 @@ final class TodoItem {
         nextBestAction: String? = nil,
         draftPreview: String? = nil,
         evidenceExcerpt: String? = nil,
+        cardHeadline: String? = nil,
+        rankReason: String? = nil,
+        estimatedEffort: String? = nil,
+        actionPlan: String? = nil,
+        ownerLabel: String? = nil,
+        sourceOccurredAt: Date? = nil,
+        todoBriefData: Data? = nil,
         sourceSystem: String? = nil,
         sourceProvider: String? = nil,
         sourceProviderLabel: String? = nil,
@@ -77,7 +125,11 @@ final class TodoItem {
         self.nextAction = nextAction
         self.priorityRawValue = priority.rawValue
         self.dueDate = dueDate
-        self.isCompleted = isCompleted
+        self.isCompleted = status == .done || isCompleted
+        self.statusRawValue = (status ?? (isCompleted ? .done : .open)).rawValue
+        self.attentionModeRawValue = attentionMode.rawValue
+        self.kindRawValue = kind
+        self.snoozedUntil = snoozedUntil
         self.createdAt = createdAt
         self.updatedAt = updatedAt ?? createdAt
         self.completedAt = completedAt
@@ -88,6 +140,13 @@ final class TodoItem {
         self.nextBestAction = nextBestAction
         self.draftPreview = draftPreview
         self.evidenceExcerpt = evidenceExcerpt
+        self.cardHeadline = cardHeadline
+        self.rankReason = rankReason
+        self.estimatedEffort = estimatedEffort
+        self.actionPlan = actionPlan
+        self.ownerLabel = ownerLabel
+        self.sourceOccurredAt = sourceOccurredAt
+        self.todoBriefData = todoBriefData
         self.sourceSystem = sourceSystem
         self.sourceProvider = sourceProvider
         self.sourceProviderLabel = sourceProviderLabel
@@ -141,6 +200,23 @@ final class TodoItem {
         return decoded
     }
 
+    @Transient private var todoBriefCache = DecodedTodoBriefCache()
+
+    private static let todoBriefDecoder = JSONDecoder()
+
+    var todoBrief: TodoBriefSnapshot? {
+        guard let todoBriefData else { return nil }
+
+        if todoBriefCache.raw == todoBriefData {
+            return todoBriefCache.decoded
+        }
+
+        let decoded = try? Self.todoBriefDecoder.decode(TodoBriefSnapshot.self, from: todoBriefData)
+        todoBriefCache.raw = todoBriefData
+        todoBriefCache.decoded = decoded
+        return decoded
+    }
+
     func setSourceContext(participants: [CardParticipant], conversation: [CardConversationMessage]) {
         if participants.isEmpty && conversation.isEmpty {
             sourceContextData = nil
@@ -170,8 +246,9 @@ final class TodoItem {
     }
 
     func setCompleted(_ completed: Bool, at date: Date = Date()) {
-        isCompleted = completed
+        status = completed ? .done : .open
         completedAt = completed ? date : nil
+        snoozedUntil = nil
         updatedAt = date
     }
 }
@@ -181,6 +258,11 @@ final class TodoItem {
 private final class DecodedSourceContextCache {
     var raw: Data?
     var decoded: TodoStoredSourceContext?
+}
+
+private final class DecodedTodoBriefCache {
+    var raw: Data?
+    var decoded: TodoBriefSnapshot?
 }
 
 /// Codable bundle persisted on TodoItem for participants + conversation.

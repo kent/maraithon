@@ -131,9 +131,17 @@ enum ProductionDataSync {
         let priority: TodoPriority
         let dueDate: Date?
         let isCompleted: Bool
+        let status: TodoStatus
+        let attentionMode: TodoAttentionMode
+        let kind: String?
+        let snoozedUntil: Date?
         let createdAt: Date?
         let updatedAt: Date?
         let completedAt: Date?
+        let actionPlan: String?
+        let ownerLabel: String?
+        let sourceOccurredAt: Date?
+        let todoBriefData: Data?
         let hasActionCardField: Bool
         let relatedPersonIDs: [UUID]
         let sourceSystem: String?
@@ -141,13 +149,16 @@ enum ProductionDataSync {
     }
 
     struct PreparedCard: Sendable {
+        let headline: String?
         let decisionPrompt: String?
         let decisionContextSummary: String?
         let whyNow: String?
+        let rankReason: String?
         let sourceContext: String?
         let nextBestAction: String?
         let draftPreview: String?
         let evidenceExcerpt: String?
+        let estimatedEffort: String?
         let sourceProvider: String?
         let sourceProviderLabel: String?
         let sourceOpenURLString: String?
@@ -170,7 +181,12 @@ enum ProductionDataSync {
     }
 
     nonisolated static func prepare(_ remoteTodo: MobileAPIClient.RemoteTodo, id: UUID) -> PreparedTodo {
-        PreparedTodo(
+        let status = TodoStatus(rawValue: remoteTodo.status) ?? .open
+        let attentionMode = TodoAttentionMode(
+            rawValue: remoteTodo.attentionMode ?? remoteTodo.actionCard?.attentionMode ?? ""
+        ) ?? .actNow
+
+        return PreparedTodo(
             id: id,
             keep: shouldKeepRemoteTodo(remoteTodo),
             title: remoteTodo.title,
@@ -178,10 +194,18 @@ enum ProductionDataSync {
             nextAction: remoteTodo.nextAction,
             priority: priority(from: remoteTodo.priority),
             dueDate: remoteTodo.dueAt,
-            isCompleted: remoteTodo.status == "done",
+            isCompleted: status == .done,
+            status: status,
+            attentionMode: attentionMode,
+            kind: cleanedText(remoteTodo.kind),
+            snoozedUntil: remoteTodo.snoozedUntil,
             createdAt: remoteTodo.insertedAt,
             updatedAt: remoteTodo.updatedAt,
             completedAt: remoteTodo.closedAt,
+            actionPlan: cleanedText(remoteTodo.actionPlan),
+            ownerLabel: cleanedText(remoteTodo.ownerLabel),
+            sourceOccurredAt: remoteTodo.sourceOccurredAt,
+            todoBriefData: encodedBrief(remoteTodo.brief),
             hasActionCardField: remoteTodo.hasActionCardField,
             relatedPersonIDs: remoteTodo.relatedPeople.compactMap { UUID(uuidString: $0.id) },
             sourceSystem: cleanedText(remoteTodo.source),
@@ -193,13 +217,16 @@ enum ProductionDataSync {
         from actionCard: MobileAPIClient.RemoteActionCard?
     ) -> PreparedCard {
         PreparedCard(
+            headline: cleanedText(actionCard?.headline),
             decisionPrompt: cleanedText(actionCard?.decisionPrompt),
             decisionContextSummary: actionCardContextSummary(actionCard),
             whyNow: cleanedText(actionCard?.whyNow),
+            rankReason: cleanedText(actionCard?.rankReason),
             sourceContext: cleanedText(actionCard?.sourceContext),
             nextBestAction: cleanedText(actionCard?.nextBestAction),
             draftPreview: cleanedText(actionCard?.draftPreview),
             evidenceExcerpt: cleanedText(actionCard?.evidenceExcerpt),
+            estimatedEffort: cleanedText(actionCard?.estimatedEffort),
             sourceProvider: cleanedText(actionCard?.sourceAction?.provider),
             sourceProviderLabel: cleanedText(actionCard?.sourceAction?.providerLabel),
             sourceOpenURLString: cleanedText(actionCard?.sourceAction?.openURL),
@@ -238,7 +265,10 @@ enum ProductionDataSync {
         todo.nextAction = prepared.nextAction
         todo.priority = prepared.priority
         todo.dueDate = prepared.dueDate
-        todo.isCompleted = prepared.isCompleted
+        todo.status = prepared.status
+        todo.attentionMode = prepared.attentionMode
+        todo.kindRawValue = prepared.kind
+        todo.snoozedUntil = prepared.snoozedUntil
         if let createdAt = prepared.createdAt {
             todo.createdAt = createdAt
         }
@@ -246,6 +276,10 @@ enum ProductionDataSync {
             todo.updatedAt = updatedAt
         }
         todo.completedAt = prepared.completedAt
+        todo.actionPlan = prepared.actionPlan
+        todo.ownerLabel = prepared.ownerLabel
+        todo.sourceOccurredAt = prepared.sourceOccurredAt
+        todo.todoBriefData = prepared.todoBriefData
         if let contactsByID {
             todo.contact = relatedContact(personIDs: prepared.relatedPersonIDs, contactsByID: contactsByID)
         }
@@ -284,6 +318,7 @@ enum ProductionDataSync {
         var payload: MobileAPIClient.RequestBody = [
             "source": .string("mobile"),
             "kind": .string("general"),
+            "attention_mode": .string(TodoAttentionMode.actNow.rawValue),
             "title": .string(title),
             "summary": .string(notes.isEmpty ? title : notes),
             "next_action": .string(nextAction),
@@ -401,6 +436,10 @@ enum ProductionDataSync {
             priority: prepared.priority,
             dueDate: prepared.dueDate,
             isCompleted: prepared.isCompleted,
+            status: prepared.status,
+            attentionMode: prepared.attentionMode,
+            kind: prepared.kind,
+            snoozedUntil: prepared.snoozedUntil,
             createdAt: createdAt,
             updatedAt: prepared.updatedAt ?? createdAt,
             completedAt: prepared.completedAt,
@@ -411,6 +450,13 @@ enum ProductionDataSync {
             nextBestAction: prepared.card.nextBestAction,
             draftPreview: prepared.card.draftPreview,
             evidenceExcerpt: prepared.card.evidenceExcerpt,
+            cardHeadline: prepared.card.headline,
+            rankReason: prepared.card.rankReason,
+            estimatedEffort: prepared.card.estimatedEffort,
+            actionPlan: prepared.actionPlan,
+            ownerLabel: prepared.ownerLabel,
+            sourceOccurredAt: prepared.sourceOccurredAt,
+            todoBriefData: prepared.todoBriefData,
             sourceSystem: prepared.sourceSystem,
             sourceProvider: prepared.card.sourceProvider,
             sourceProviderLabel: prepared.card.sourceProviderLabel,
@@ -427,6 +473,26 @@ enum ProductionDataSync {
     }
 
     nonisolated private static let sourceContextEncoder = JSONEncoder()
+    nonisolated private static let todoBriefEncoder = JSONEncoder()
+
+    nonisolated private static func encodedBrief(
+        _ brief: MobileAPIClient.RemoteTodoBrief?
+    ) -> Data? {
+        guard let brief else { return nil }
+
+        let snapshot = TodoBriefSnapshot(
+            whyItMatters: cleanedText(brief.whyItMatters),
+            situation: cleanedText(brief.situation),
+            recommendation: cleanedText(brief.recommendation),
+            steps: brief.steps.compactMap(cleanedText),
+            openQuestions: brief.openQuestions.compactMap(cleanedText),
+            effort: cleanedText(brief.effort),
+            generatedAt: brief.generatedAt,
+            model: cleanedText(brief.model)
+        )
+
+        return try? todoBriefEncoder.encode(snapshot)
+    }
 
     nonisolated private static func encodedSourceContext(
         _ sourceAction: MobileAPIClient.RemoteActionCard.SourceAction?
@@ -446,13 +512,16 @@ enum ProductionDataSync {
     }
 
     private static func apply(_ card: PreparedCard, to todo: TodoItem) {
+        todo.cardHeadline = card.headline
         todo.decisionPrompt = card.decisionPrompt
         todo.decisionContextSummary = card.decisionContextSummary
         todo.whyNow = card.whyNow
+        todo.rankReason = card.rankReason
         todo.sourceContext = card.sourceContext
         todo.nextBestAction = card.nextBestAction
         todo.draftPreview = card.draftPreview
         todo.evidenceExcerpt = card.evidenceExcerpt
+        todo.estimatedEffort = card.estimatedEffort
         todo.sourceProvider = card.sourceProvider
         todo.sourceProviderLabel = card.sourceProviderLabel
         todo.sourceOpenURLString = card.sourceOpenURLString
