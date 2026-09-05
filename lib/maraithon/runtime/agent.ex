@@ -151,8 +151,6 @@ defmodule Maraithon.Runtime.Agent do
         lease_ttl_ms: ttl_ms,
         lease_renew_interval_ms: renew_interval_ms
       }) do
-    Process.flag(:trap_exit, true)
-
     if valid_exact_launch?(agent, owner_token, guard_generation, ttl_ms, renew_interval_ms) do
       data =
         agent
@@ -3352,15 +3350,15 @@ defmodule Maraithon.Runtime.Agent do
       {:ok, _draining_lease} ->
         stop_agent("runtime_authority_revoked", data)
 
-      {:error, reason} ->
-        Logger.warning("Exact Agent lease/Directive renewal failed",
-          agent_reference: Maraithon.Redaction.fingerprint(data.agent_id),
-          failure_code: Maraithon.Redaction.error_class(reason)
-        )
+      {:error, :partition_authority_lost} ->
+        if durable_lease_draining?(data) do
+          {:stop, :normal, data}
+        else
+          stop_after_exact_lease_renewal_failure(:partition_authority_lost, data)
+        end
 
-        # Do not release or perform termination cleanup. The Watcher must first
-        # durably guard this exact generation, even for a normal-looking exit.
-        {:stop, {:exact_lease_renewal_failed, reason}, data}
+      {:error, reason} ->
+        stop_after_exact_lease_renewal_failure(reason, data)
     end
   end
 
@@ -3375,6 +3373,32 @@ defmodule Maraithon.Runtime.Agent do
   end
 
   defp renew_effect_admission_authority(_data), do: :ok
+
+  defp durable_lease_draining?(data) do
+    case AgentLeases.get(data.agent_id) do
+      %{owner_token: owner_token, draining_at: draining_at}
+      when owner_token == data.owner_token and not is_nil(draining_at) ->
+        true
+
+      _missing_or_active_lease ->
+        false
+    end
+  rescue
+    _error -> false
+  catch
+    :exit, _reason -> false
+  end
+
+  defp stop_after_exact_lease_renewal_failure(reason, data) do
+    Logger.warning("Exact Agent lease/Directive renewal failed",
+      agent_reference: Maraithon.Redaction.fingerprint(data.agent_id),
+      failure_code: Maraithon.Redaction.error_class(reason)
+    )
+
+    # Do not release or perform termination cleanup. The Watcher must first
+    # durably guard this exact generation, even for a normal-looking exit.
+    {:stop, {:exact_lease_renewal_failed, reason}, data}
+  end
 
   defp renew_exact_authority(data) do
     Repo.transaction(fn ->

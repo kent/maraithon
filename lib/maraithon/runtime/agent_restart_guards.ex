@@ -87,11 +87,14 @@ defmodule Maraithon.Runtime.AgentRestartGuards do
 
         owner = matching_proven_owner(lease, guard, incident)
 
-        if AgentLifecycleOperations.expected_termination?(
-             operation,
-             incident.agent_id,
-             incident.lease_token
-           ) do
+        expected_termination? =
+          AgentLifecycleOperations.expected_termination?(
+            operation,
+            incident.agent_id,
+            incident.lease_token
+          ) or draining_owner?(owner)
+
+        if expected_termination? do
           reconcile_expected_lifecycle_termination!(owner, incident, proof, now)
         else
           reconcile_unexpected_termination!(
@@ -223,6 +226,14 @@ defmodule Maraithon.Runtime.AgentRestartGuards do
        do: {:exact, lease}
 
   defp matching_proven_owner(_lease, _guard, _incident), do: :stale
+
+  # A draining lease is a durable revocation marker. In particular, node and
+  # partition drains publish it before terminating the local Agent process, so
+  # its authenticated DOWN is expected and must not increment the crash guard.
+  defp draining_owner?({:exact, %AgentRuntimeLease{draining_at: draining_at}}),
+    do: not is_nil(draining_at)
+
+  defp draining_owner?(_owner), do: false
 
   defp reconcile_expected_lifecycle_termination!(owner, incident, proof, now) do
     case owner do
