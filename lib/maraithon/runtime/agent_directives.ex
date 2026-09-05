@@ -25,6 +25,7 @@ defmodule Maraithon.Runtime.AgentDirectives do
   alias Maraithon.Runtime.AgentRestartGuard
   alias Maraithon.Runtime.AgentRuntimeLease
   alias Maraithon.Runtime.AgentTerminationIncident
+  alias Maraithon.Runtime.AgentTerminationProof
   alias Maraithon.Runtime.AgentTerminations
   alias Maraithon.Runtime.DatabaseClock
   alias Maraithon.Runtime.Dispatch
@@ -510,8 +511,17 @@ defmodule Maraithon.Runtime.AgentDirectives do
         guard = lock_guard(agent_id)
         lease = lock_lease(agent_id)
         operation = lock_operation(agent_id)
+        incident = lock_reconciled_termination(agent_id, owner_generation)
+        proof = lock_termination_proof(incident)
 
-        ensure_recorded_generation!(guard, lease, owner_generation)
+        ensure_recorded_generation!(
+          guard,
+          lease,
+          incident,
+          proof,
+          agent_id,
+          owner_generation
+        )
 
         if operation do
           :deferred_to_lifecycle
@@ -736,18 +746,29 @@ defmodule Maraithon.Runtime.AgentDirectives do
       join: agent in Agent,
       as: :agent,
       on: agent.id == directive.agent_id and agent.user_id == directive.user_id,
-      join: guard in AgentRestartGuard,
-      on:
-        guard.agent_id == directive.agent_id and
-          guard.last_owner_token == directive.claimed_by_generation,
+      left_join: guard in AgentRestartGuard,
+      on: guard.agent_id == directive.agent_id,
       left_join: lease in AgentRuntimeLease,
       on: lease.agent_id == directive.agent_id,
       left_join: operation in AgentLifecycleOperation,
       on: operation.agent_id == directive.agent_id,
+      left_join: incident in AgentTerminationIncident,
+      on:
+        incident.agent_id == directive.agent_id and
+          incident.lease_token == directive.claimed_by_generation and
+          incident.status == "reconciled",
+      left_join: proof in AgentTerminationProof,
+      on:
+        proof.id == incident.proof_id and proof.incident_id == incident.id and
+          proof.agent_id == directive.agent_id and
+          proof.lease_token == directive.claimed_by_generation,
       where: directive.status == "processing",
-      where: guard.needs_recovery == true,
       where: is_nil(lease.agent_id),
       where: is_nil(operation.agent_id),
+      where:
+        (guard.needs_recovery == true and
+           guard.last_owner_token == directive.claimed_by_generation) or
+          (not is_nil(incident.id) and not is_nil(proof.id)),
       order_by: [asc: directive.claim_expires_at, asc: directive.id],
       limit: ^limit,
       select: {directive.agent_id, directive.claimed_by_generation}
@@ -933,6 +954,28 @@ defmodule Maraithon.Runtime.AgentDirectives do
     )
   end
 
+  defp lock_reconciled_termination(agent_id, owner_generation) do
+    Repo.one(
+      from(incident in AgentTerminationIncident,
+        where: incident.agent_id == ^agent_id,
+        where: incident.lease_token == ^owner_generation,
+        where: incident.status == "reconciled",
+        lock: "FOR UPDATE"
+      )
+    )
+  end
+
+  defp lock_termination_proof(%AgentTerminationIncident{} = incident) do
+    Repo.one(
+      from(proof in AgentTerminationProof,
+        where: proof.id == ^incident.proof_id,
+        where: proof.incident_id == ^incident.id
+      )
+    )
+  end
+
+  defp lock_termination_proof(nil), do: nil
+
   defp lock_by_dedupe(agent_id, dedupe_key) do
     Repo.one(
       from(directive in AgentDirective,
@@ -1095,17 +1138,61 @@ defmodule Maraithon.Runtime.AgentDirectives do
   end
 
   defp ensure_recorded_generation!(
+         _guard,
+         %AgentRuntimeLease{},
+         _incident,
+         _proof,
+         _agent_id,
+         _owner_generation
+       ),
+       do: Repo.rollback(:runtime_lease_owned)
+
+  defp ensure_recorded_generation!(guard, nil, incident, proof, agent_id, owner_generation) do
+    if guard_records_generation?(guard, owner_generation) or
+         termination_records_generation?(incident, proof, agent_id, owner_generation) do
+      :ok
+    else
+      Repo.rollback(:stale_recovery_generation)
+    end
+  end
+
+  defp guard_records_generation?(
          %AgentRestartGuard{needs_recovery: true, last_owner_token: owner_generation},
-         nil,
          owner_generation
        ),
-       do: :ok
+       do: true
 
-  defp ensure_recorded_generation!(_guard, %AgentRuntimeLease{}, _generation),
-    do: Repo.rollback(:runtime_lease_owned)
+  defp guard_records_generation?(_guard, _owner_generation), do: false
 
-  defp ensure_recorded_generation!(_guard, _lease, _generation),
-    do: Repo.rollback(:stale_recovery_generation)
+  defp termination_records_generation?(
+         %AgentTerminationIncident{
+           id: incident_id,
+           activation_epoch: activation_epoch,
+           node_incarnation_id: node_incarnation_id,
+           partition_id: partition_id,
+           partition_epoch: partition_epoch,
+           agent_id: agent_id,
+           lease_token: owner_generation,
+           status: "reconciled",
+           proof_id: proof_id
+         },
+         %AgentTerminationProof{
+           id: proof_id,
+           incident_id: incident_id,
+           activation_epoch: activation_epoch,
+           node_incarnation_id: node_incarnation_id,
+           partition_id: partition_id,
+           partition_epoch: partition_epoch,
+           agent_id: agent_id,
+           lease_token: owner_generation
+         },
+         agent_id,
+         owner_generation
+       ),
+       do: true
+
+  defp termination_records_generation?(_incident, _proof, _agent_id, _owner_generation),
+    do: false
 
   defp insert!(attrs) do
     case %AgentDirective{} |> AgentDirective.changeset(attrs) |> Repo.insert() do
