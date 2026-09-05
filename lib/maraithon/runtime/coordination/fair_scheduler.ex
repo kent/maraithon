@@ -292,6 +292,10 @@ defmodule Maraithon.Runtime.Coordination.FairScheduler do
               LIMIT 1
             ))
           ORDER BY tenant.last_served_sequence, tenant.tenant_key,
+                   -- A bounded, infrequent due-time decision must not wait
+                   -- behind an entire account's source-discovery fan-out.
+                   -- Tenant fairness and every admission fence still apply.
+                   CASE WHEN job.job_type = 'runtime_partition:nudge' THEN 0 ELSE 1 END,
                    job.scheduled_at, job.inserted_at, job.id
           LIMIT 1
         )
