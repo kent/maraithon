@@ -358,14 +358,19 @@ defmodule Maraithon.Runtime.EffectRunner do
         state = drop_effect_task(state, effect_id, demonitor?: false)
 
         if effect do
-          if reason != :normal do
+          disposition = finalize_effect_task_down(effect)
+
+          if reason != :normal and disposition != :terminal do
             Logger.error("Effect task crashed",
               effect_reference: Maraithon.Redaction.fingerprint(effect_id),
               failure_code: Maraithon.Redaction.error_class(reason)
             )
           end
 
-          case finalize_effect_task_down(effect) do
+          case disposition do
+            :terminal ->
+              dispatch_terminal_result(effect)
+
             :ok ->
               dispatch_terminal_result(effect, {:error, @ambiguous_outcome})
 
@@ -2391,8 +2396,8 @@ defmodule Maraithon.Runtime.EffectRunner do
     case coordination_assignment(effect) do
       {:ok, _assignment} ->
         case reconcile_effect_after_task_down(effect) do
-          {:terminal, _stored} ->
-            :ok
+          :terminal ->
+            :terminal
 
           :active ->
             with {:ok, plan} <-
@@ -2434,7 +2439,7 @@ defmodule Maraithon.Runtime.EffectRunner do
            case stored.status do
              status when status in ["completed", "failed", "cancelled"] ->
                converge_terminal_coordination!(stored)
-               {:terminal, stored}
+               :terminal
 
              status when status in ["claimed", "executing", "cancelling"] ->
                :active
