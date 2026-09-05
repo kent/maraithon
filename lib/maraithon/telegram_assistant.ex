@@ -114,9 +114,17 @@ defmodule Maraithon.TelegramAssistant do
     config = config()
 
     case Keyword.get(config, :telegram_unified_push_enabled) do
-      true -> true
-      false -> false
-      nil -> enabled?()
+      true ->
+        true
+
+      false ->
+        false
+
+      # Mobile pushes do not depend on the Telegram chat switch or which LLM
+      # provider powers chat. Keep an explicit broker opt-out authoritative.
+      nil ->
+        enabled?() or
+          (Maraithon.Push.Notifier.enabled?() and Maraithon.Push.APNS.configured?())
     end
   end
 
