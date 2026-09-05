@@ -1,0 +1,20 @@
+# Start from the repository's canonical artifact and credential exclusions.
+#!include:.gitignore
+
+# Never upload repository metadata or local agent/review worktrees.
+.git/
+.claude/
+.superpowers/
+
+# These credentials are ignored by nested native-app rules, which gcloud's
+# root include does not recursively import.
+apps/companion/Config.local.xcconfig
+apps/mobile/Config/*.env
+
+# The production image only copies root Elixir/Phoenix sources. Native apps,
+# tests, docs, and editor metadata add upload work without affecting the image.
+apps/
+docs/
+test/
+.github/
+*.md

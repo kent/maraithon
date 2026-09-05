@@ -1,0 +1,60 @@
+steps:
+  - id: pull-build-cache
+    name: gcr.io/cloud-builders/docker
+    entrypoint: bash
+    args:
+      - -c
+      - docker pull "${_CACHE_IMAGE}" || true
+    waitFor: ["-"]
+
+  - id: pull-runtime-cache
+    name: gcr.io/cloud-builders/docker
+    entrypoint: bash
+    args:
+      - -c
+      - docker pull "${_LATEST_IMAGE}" || true
+    waitFor: ["-"]
+
+  - id: build-cache
+    name: gcr.io/cloud-builders/docker
+    env:
+      - DOCKER_BUILDKIT=1
+    args:
+      - build
+      - --target
+      - builder
+      - --cache-from
+      - ${_CACHE_IMAGE}
+      - --build-arg
+      - BUILDKIT_INLINE_CACHE=1
+      - --tag
+      - ${_CACHE_IMAGE}
+      - .
+
+  - id: build-release
+    name: gcr.io/cloud-builders/docker
+    env:
+      - DOCKER_BUILDKIT=1
+    args:
+      - build
+      - --cache-from
+      - ${_CACHE_IMAGE}
+      - --cache-from
+      - ${_LATEST_IMAGE}
+      - --build-arg
+      - BUILDKIT_INLINE_CACHE=1
+      - --tag
+      - ${_IMAGE}
+      - --tag
+      - ${_LATEST_IMAGE}
+      - .
+
+images:
+  - ${_CACHE_IMAGE}
+  - ${_IMAGE}
+  - ${_LATEST_IMAGE}
+
+options:
+  machineType: E2_HIGHCPU_8
+
+timeout: 1200s

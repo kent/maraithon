@@ -1,0 +1,209 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
+
+project="${MARAITHON_GCP_PROJECT:-maraithon}"
+region="${MARAITHON_GCP_REGION:-us-central1}"
+service="${MARAITHON_GCP_SERVICE:-maraithon}"
+runtime_service="${MARAITHON_GCP_RUNTIME_SERVICE:-maraithon-runtime}"
+service_account="${MARAITHON_GCP_RUNTIME_SERVICE_ACCOUNT:-maraithon-runtime@${project}.iam.gserviceaccount.com}"
+deployer_service_account="${MARAITHON_GCP_DEPLOYER_SERVICE_ACCOUNT:-admin-deployer@${project}.iam.gserviceaccount.com}"
+repository="${MARAITHON_GCP_ARTIFACT_REPOSITORY:-maraithon}"
+database_instance="${MARAITHON_GCP_DATABASE_INSTANCE:-maraithon-db}"
+build_region="${MARAITHON_GCP_BUILD_REGION:-global}"
+
+require_command gcloud
+require_command git
+require_command jq
+require_command curl
+
+if [[ "${project}" != "maraithon" || "${region}" != "us-central1" || "${service}" != "maraithon" ]]; then
+  echo "The fast deploy is intentionally scoped to the Maraithon test app." >&2
+  exit 64
+fi
+
+revision="$(git -C "${ROOT_DIR}" rev-parse --short=12 HEAD)"
+build_id="${GITHUB_RUN_ID:-$(date -u +%Y%m%d%H%M%S)}"
+build_attempt="${GITHUB_RUN_ATTEMPT:-1}"
+image_repository="${region}-docker.pkg.dev/${project}/${repository}/${service}"
+image="${image_repository}:dev-${revision}-${build_id}-${build_attempt}"
+latest_image="${image_repository}:latest"
+cache_image="${image_repository}:build-cache"
+connection="${project}:${region}:${database_instance}"
+socket_dir="/cloudsql/${connection}"
+
+echo "Building ${image} with the shared Docker layer cache"
+run_in "${ROOT_DIR}" gcloud builds submit \
+  --project "${project}" \
+  --region "${build_region}" \
+  --config scripts/monorepo/cloudbuild-fast.yaml \
+  --substitutions "_IMAGE=${image},_LATEST_IMAGE=${latest_image},_CACHE_IMAGE=${cache_image}" \
+  --quiet \
+  .
+
+service_json="$(
+  gcloud run services describe "${service}" \
+    --project "${project}" \
+    --region "${region}" \
+    --format=json 2>/dev/null || printf '{}'
+)"
+
+runtime_service_json="$(
+  gcloud run services describe "${runtime_service}" \
+    --project "${project}" \
+    --region "${region}" \
+    --format=json 2>/dev/null || printf '{}'
+)"
+
+env_value() {
+  local json="$1"
+  local name="$2"
+
+  jq -r --arg name "${name}" '
+    [.spec.template.spec.containers[0].env[]? | select(.name == $name) | .value][0] // ""
+  ' <<<"${json}"
+}
+
+current_role="$(env_value "${service_json}" MARAITHON_PROCESS_ROLE)"
+current_migrations_digest="$(env_value "${service_json}" MARAITHON_MIGRATIONS_DIGEST)"
+deployment_generation="$(env_value "${service_json}" MARAITHON_DEPLOYMENT_GENERATION)"
+termination_public_key="${MARAITHON_AGENT_TERMINATION_ATTESTATION_PUBLIC_KEY:-}"
+
+if [[ -z "${termination_public_key}" ]]; then
+  termination_public_key="$(env_value "${runtime_service_json}" AGENT_TERMINATION_ATTESTATION_PUBLIC_KEY)"
+fi
+
+if [[ -z "${termination_public_key}" ]]; then
+  termination_public_key="$(env_value "${service_json}" AGENT_TERMINATION_ATTESTATION_PUBLIC_KEY)"
+fi
+
+# Reuse the currently admitted runtime generation. This intentionally avoids a
+# staged database handoff for a single-instance test app while preserving the
+# existing PostgreSQL lease protocol inside the application.
+if [[ -z "${deployment_generation}" ]]; then
+  deployment_generation="$(
+    jq -r '
+      [.status.traffic[]? | select((.percent // 0) > 0) | .revisionName][0] //
+      .status.latestReadyRevisionName //
+      "legacy"
+    ' <<<"${runtime_service_json}"
+  )"
+fi
+
+migrations_digest="$(
+  find "${ROOT_DIR}/priv/repo/migrations" -type f -name '*.exs' -print |
+    LC_ALL=C sort |
+    while IFS= read -r migration; do
+      relative_path="${migration#"${ROOT_DIR}"/}"
+      printf '%s ' "${relative_path}"
+      git -C "${ROOT_DIR}" hash-object "${relative_path}"
+    done |
+    git -C "${ROOT_DIR}" hash-object --stdin
+)"
+
+gmail_pubsub_project="${MARAITHON_GMAIL_PUBSUB_PROJECT:-orchestrator-483621}"
+gmail_topic_id="${MARAITHON_GMAIL_PUBSUB_TOPIC_ID:-maraithon-gmail-push}"
+gmail_topic="projects/${gmail_pubsub_project}/topics/${gmail_topic_id}"
+protocol_revision="${MARAITHON_RUNTIME_PROTOCOL_REVISION:-5e0aa5a19e968f7bf026a926f77550707d59d41a}"
+
+common_env="CLOUD_SQL_SOCKET_DIR=${socket_dir},DATABASE_TLS_MODE=private_network_override,DATABASE_TLS_INSECURE_CONFIRMATION=I_ACKNOWLEDGE_DATABASE_TLS_IS_NOT_VERIFIED,DATABASE_TLS_INSECURE_REASON=gcp_cloud_sql_unix_socket,PHX_HOST=maraithon.com,PRIMARY_ADMIN_EMAIL=kent@voteagora.com,LLM_PROVIDER=openrouter,LLM_MODEL=moonshotai/kimi-k3,OPENROUTER_CHAT_MODEL=moonshotai/kimi-k3,OPENROUTER_FAST_MODEL=moonshotai/kimi-k3,OPENROUTER_ROUTING_MODEL=moonshotai/kimi-k3,OPENROUTER_REASONING_EFFORT=high,LLM_BRIEF_REASONING_EFFORT=high,LLM_MAX_CONCURRENCY=3,LLM_REASONING_MAX_CONCURRENCY=3,SOURCE_FANOUT_TENANT_MAX_CONCURRENCY=3,GOOGLE_REDIRECT_URI=https://maraithon.com/auth/google/callback,GOOGLE_CALENDAR_WEBHOOK_URL=https://maraithon.com/webhooks/google/calendar,GOOGLE_PUBSUB_TOPIC=${gmail_topic},GITHUB_REDIRECT_URI=https://maraithon.com/auth/github/callback,SLACK_REDIRECT_URI=https://maraithon.com/auth/slack/callback,NOTAUI_REDIRECT_URI=https://maraithon.com/auth/notaui/callback,EXACT_AGENT_RUNTIME_ENABLED=true,MULTINODE_COORDINATION_ENABLED=true,AGENT_TERMINATION_ATTESTATION_PUBLIC_KEY=${termination_public_key},GIT_SHA=${protocol_revision},DB_QUERY_TIMEOUT_MS=30000,DATABASE_POOL_MODE=session,MARAITHON_DEPLOYMENT_GENERATION=${deployment_generation},MARAITHON_MIGRATIONS_DIGEST=${migrations_digest}"
+
+migration_secrets="DATABASE_URL=maraithon-migrator-db-url:latest,DIRECT_DATABASE_URL=maraithon-migrator-db-url:latest,SECRET_KEY_BASE=maraithon-secret-key-base:latest,API_BEARER_TOKEN=maraithon-api-bearer-token:latest,ADMIN_PASSWORD=maraithon-admin-password:latest,OPENROUTER_API_KEY=maraithon-openrouter-api-key:latest,CLOAK_KEY=maraithon-cloak-key:latest,DURABLE_PAYLOAD_BINDING_CURRENT_KEY=maraithon-payload-binding-key:latest,RELEASE_COOKIE=maraithon-release-cookie:latest"
+
+runtime_secrets="DATABASE_URL=maraithon-runtime-db-url:latest,SECRET_KEY_BASE=maraithon-secret-key-base:latest,API_BEARER_TOKEN=maraithon-api-bearer-token:latest,ADMIN_PASSWORD=maraithon-admin-password:latest,OPENROUTER_API_KEY=maraithon-openrouter-api-key:latest,CLOAK_KEY=maraithon-cloak-key:latest,DURABLE_PAYLOAD_BINDING_CURRENT_KEY=maraithon-payload-binding-key:latest,RELEASE_COOKIE=maraithon-release-cookie:latest,POSTMARK_SERVER_TOKEN=maraithon-postmark-server-token:latest,AUTH_EMAIL_FROM=maraithon-auth-email-from:latest,GOOGLE_CLIENT_ID=maraithon-google-client-id:latest,GOOGLE_CLIENT_SECRET=maraithon-google-client-secret:latest,GITHUB_CLIENT_ID=maraithon-github-client-id:latest,GITHUB_CLIENT_SECRET=maraithon-github-client-secret:latest,GITHUB_WEBHOOK_SECRET=maraithon-github-webhook-secret:latest,SLACK_CLIENT_ID=maraithon-slack-client-id:latest,SLACK_CLIENT_SECRET=maraithon-slack-client-secret:latest,SLACK_SIGNING_SECRET=maraithon-slack-signing-secret:latest,NOTAUI_CLIENT_ID=maraithon-notaui-client-id:latest,NOTAUI_CLIENT_SECRET=maraithon-notaui-client-secret:latest"
+
+if [[ "${migrations_digest}" != "${current_migrations_digest}" ]]; then
+  echo "Migration files changed; running the migration job once"
+  gcloud run jobs deploy "${service}-migrate" \
+    --project "${project}" \
+    --region "${region}" \
+    --image "${image}" \
+    --service-account "${service_account}" \
+    --set-cloudsql-instances "${connection}" \
+    --set-env-vars "${common_env},MARAITHON_PROCESS_ROLE=maintenance,POOL_SIZE=2" \
+    --set-secrets "${migration_secrets}" \
+    --command /app/bin/maraithon \
+    --args eval,Maraithon.Release.migrate \
+    --cpu 1 \
+    --memory 2Gi \
+    --task-timeout 30m \
+    --max-retries 0 \
+    --quiet
+
+  gcloud run jobs execute "${service}-migrate" \
+    --project "${project}" \
+    --region "${region}" \
+    --wait \
+    --quiet
+else
+  echo "Migration files are unchanged; skipping the migration job"
+fi
+
+# The first fast deploy replaces the split runtime with one combined process.
+# Ask the old worker to drain, but do not turn that best-effort request into a
+# deployment gate for this test application.
+if [[ "${current_role}" != "combined" && "${runtime_service_json}" != "{}" ]]; then
+  runtime_url="$(jq -r '.status.url // ""' <<<"${runtime_service_json}")"
+  api_token="$(gcloud secrets versions access latest --secret maraithon-api-bearer-token --project "${project}" 2>/dev/null || true)"
+  identity_token="$(
+    gcloud auth print-identity-token \
+      --impersonate-service-account "${deployer_service_account}" \
+      --audiences "${runtime_url}" \
+      --include-email \
+      --project "${project}" 2>/dev/null || true
+  )"
+
+  if [[ -n "${runtime_url}" && -n "${api_token}" && -n "${identity_token}" ]]; then
+    curl --silent --max-time 15 --request POST \
+      --header "Authorization: Bearer ${api_token}" \
+      --header "X-Serverless-Authorization: Bearer ${identity_token}" \
+      "${runtime_url}/api/v1/runtime/drain" >/dev/null 2>&1 || true
+  fi
+fi
+
+echo "Deploying one combined web/runtime instance"
+gcloud run deploy "${service}" \
+  --project "${project}" \
+  --region "${region}" \
+  --image "${image}" \
+  --service-account "${service_account}" \
+  --set-cloudsql-instances "${connection}" \
+  --set-env-vars "${common_env},MARAITHON_PROCESS_ROLE=combined,POOL_SIZE=16,PHX_SERVER=true,DURABLE_PAYLOAD_BINDING_CURRENT_TAG=HMAC.SHA256.V1,OPENROUTER_HTTP_REFERER=https://maraithon.com,OPENROUTER_APP_TITLE=Maraithon" \
+  --set-secrets "${runtime_secrets}" \
+  --allow-unauthenticated \
+  --port 8080 \
+  --cpu 2 \
+  --memory 2Gi \
+  --scaling 1 \
+  --concurrency 40 \
+  --timeout 3600 \
+  --no-cpu-throttling \
+  --session-affinity \
+  --startup-probe 'httpGet.path=/health,initialDelaySeconds=5,timeoutSeconds=5,periodSeconds=5,failureThreshold=24' \
+  --quiet
+
+service_url="$(
+  gcloud run services describe "${service}" \
+    --project "${project}" \
+    --region "${region}" \
+    --format='value(status.url)'
+)"
+
+curl --fail --silent --show-error --max-time 15 "${service_url}/health" >/dev/null
+
+# After the one-time cutover, let the old private runtime service scale to zero.
+if [[ "${current_role}" != "combined" && "${runtime_service_json}" != "{}" ]]; then
+  gcloud run services update "${runtime_service}" \
+    --project "${project}" \
+    --region "${region}" \
+    --scaling auto \
+    --min 0 \
+    --max 1 \
+    --cpu-throttling \
+    --quiet >/dev/null
+fi
+
+echo "Fast deploy complete: ${service_url}"
+echo "Image: ${image}"

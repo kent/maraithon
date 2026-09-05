@@ -25,7 +25,6 @@ fi
 
 if selected_component "${component}" "companion"; then
   generate_xcode_project "${COMPANION_DIR}"
-  run_in "${COMPANION_DIR}" swift build
   companion_signing_args=()
   while IFS= read -r arg; do
     companion_signing_args+=("${arg}")

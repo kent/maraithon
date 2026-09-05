@@ -1,13 +1,18 @@
-name: Deploy to GCP
+name: Deploy Maraithon test app
 
 on:
   push:
     branches:
       - main
+    paths-ignore:
+      - "apps/**"
+      - "docs/**"
+      - "test/**"
+      - "**/*.md"
   workflow_dispatch:
     inputs:
       operation:
-        description: Production operation
+        description: Operation
         required: true
         default: deploy
         type: choice
@@ -35,19 +40,19 @@ on:
         required: false
         type: string
 
+# Only the newest push matters for a manually tested single-user app.
 concurrency:
-  group: production-deploy
-  cancel-in-progress: false
+  group: maraithon-test-app-deploy
+  cancel-in-progress: true
 
 permissions:
   contents: read
   id-token: write
 
 jobs:
-  deploy:
-    name: Deploy Production
+  operate:
+    name: ${{ inputs.operation || 'deploy' }}
     runs-on: ubuntu-latest
-    environment: production
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -63,17 +68,17 @@ jobs:
         with:
           project_id: maraithon
 
-      - name: Deploy production
+      - name: Deploy
         if: github.event_name == 'push' || inputs.operation == 'deploy'
         run: make deploy
         env:
           MARAITHON_GCP_PROJECT: maraithon
           MARAITHON_GCP_REGION: us-central1
           MARAITHON_GCP_SERVICE: maraithon
-          MARAITHON_VALIDATE_TODO_LAUNCH_USER: kent@runner.now
+          MARAITHON_GCP_RUNTIME_SERVICE: maraithon-runtime
           MARAITHON_AGENT_TERMINATION_ATTESTATION_PUBLIC_KEY: ${{ vars.AGENT_TERMINATION_ATTESTATION_PUBLIC_KEY }}
 
-      - name: Validate production Todo outcome learning
+      - name: Validate todo outcome learning
         if: github.event_name == 'workflow_dispatch' && inputs.operation == 'validate-todo'
         run: scripts/monorepo/validate-todo-production
         env:
@@ -81,7 +86,7 @@ jobs:
           MARAITHON_GCP_REGION: us-central1
           MARAITHON_GCP_SERVICE: maraithon
 
-      - name: Diagnose production runtime coordination
+      - name: Diagnose runtime coordination
         if: github.event_name == 'workflow_dispatch' && inputs.operation == 'diagnose-runtime'
         run: scripts/monorepo/diagnose-runtime-production
         env:
@@ -98,7 +103,7 @@ jobs:
           MARAITHON_OPERATOR_USER: kent@runner.now
           MARAITHON_RESET_CONFIRMATION: RESET_AND_REBUILD_KENT
 
-      - name: Replay and audit Kent's Gmail source window
+      - name: Replay Kent's Gmail source window
         if: github.event_name == 'workflow_dispatch' && inputs.operation == 'replay-gmail'
         run: scripts/monorepo/replay-gmail-production
         env:
@@ -110,7 +115,7 @@ jobs:
           MARAITHON_GMAIL_REPLAY_LOWER: ${{ inputs.gmail_replay_lower }}
           MARAITHON_GMAIL_REPLAY_UPPER: ${{ inputs.gmail_replay_upper }}
 
-      - name: Replay and audit Kent's Slack source window
+      - name: Replay Kent's Slack source window
         if: github.event_name == 'workflow_dispatch' && inputs.operation == 'replay-slack'
         run: scripts/monorepo/replay-slack-production
         env:
