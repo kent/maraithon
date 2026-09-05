@@ -49,14 +49,16 @@ defmodule Maraithon.MixProject do
   # Type `mix help deps` for examples and options.
   defp deps do
     [
-      {:phoenix, "~> 1.8.3"},
+      {:phoenix, "~> 1.8.13"},
       {:phoenix_ecto, "~> 4.5"},
-      {:phoenix_live_view, "~> 1.0"},
+      {:phoenix_live_view, "~> 1.1.33"},
       {:phoenix_html, "~> 4.1"},
+      {:plug, "~> 1.19.5"},
       {:esbuild, "~> 0.10", runtime: Mix.env() == :dev},
       {:tailwind, "~> 0.3", runtime: Mix.env() == :dev},
-      {:ecto_sql, "~> 3.13"},
-      {:postgrex, ">= 0.0.0"},
+      {:ecto_sql, "~> 3.13.4"},
+      {:postgrex, "~> 0.22.4"},
+      {:decimal, "~> 3.1.1"},
       {:telemetry_metrics, "~> 1.0"},
       {:telemetry_poller, "~> 1.0"},
       {:opentelemetry_api, "~> 1.5"},
@@ -66,18 +68,18 @@ defmodule Maraithon.MixProject do
       {:opentelemetry_bandit, "~> 0.3"},
       {:opentelemetry_ecto, "~> 1.2"},
       {:gettext, "~> 1.0"},
-      {:jason, "~> 1.2"},
+      {:jason, "~> 1.4.5"},
       {:dns_cluster, "~> 0.2.0"},
-      {:bandit, "~> 1.5"},
+      {:bandit, "~> 1.12.5"},
       # Maraithon-specific deps
       # gen_statem wrapper
       {:gen_state_machine, "~> 3.0"},
       # HTTP client for LLM calls
-      {:finch, "~> 0.19"},
+      {:finch, "~> 0.21.0"},
       # High-level HTTP client
-      {:req, "~> 0.5"},
+      {:req, "~> 0.6.3"},
       # Low-level pinned-address transport for the HTTP GET tool
-      {:mint, "~> 1.9.3"},
+      {:mint, "~> 1.10.0"},
       # Struct definitions
       {:typed_struct, "~> 0.3"},
       # Config validation

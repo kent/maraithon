@@ -4790,19 +4790,6 @@ defmodule MaraithonWeb.DashboardLive do
   defp health_badge_class(_),
     do: "inline-flex rounded-md bg-zinc-600/10 px-1.5 py-0.5 text-xs/5 font-medium text-zinc-700"
 
-  attr :title, :string, required: true
-  attr :value, :any, required: true
-  attr :value_class, :string, default: "text-zinc-950"
-
-  defp stat_card(assigns) do
-    ~H"""
-    <div class="overflow-hidden rounded-lg border border-zinc-950/10 bg-white px-4 py-5 shadow-sm sm:p-6">
-      <dt class="truncate text-sm/6 font-medium text-zinc-500"><%= @title %></dt>
-      <dd class={"mt-1 text-3xl/9 font-semibold tracking-tight #{@value_class}"}><%= @value %></dd>
-    </div>
-    """
-  end
-
   attr :label, :string, required: true
   attr :value, :any, required: true
   attr :unit, :string, default: nil
@@ -4897,19 +4884,6 @@ defmodule MaraithonWeb.DashboardLive do
           </dd>
         </div>
       </dl>
-    </div>
-    """
-  end
-
-  attr :title, :string, required: true
-  attr :value, :any, required: true
-  attr :value_class, :string, default: "text-zinc-950"
-
-  defp queue_metric(assigns) do
-    ~H"""
-    <div class="rounded-lg border border-zinc-950/10 bg-zinc-50 p-2">
-      <div class="text-zinc-500"><%= @title %></div>
-      <div class={"text-sm font-semibold #{@value_class}"}><%= @value %></div>
     </div>
     """
   end
