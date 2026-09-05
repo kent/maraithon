@@ -38,7 +38,10 @@ defmodule Maraithon.Runtime.NudgeSweep do
   @default_due_soon_horizon_hours 4
   @default_nudge_cap 4
   @default_llm_timeout_ms 60_000
-  @default_max_tokens 2_048
+  # A single tenant pass can return decisions for up to 20 todos, including
+  # ready-to-review follow-up drafts. The old 2,048-token budget repeatedly
+  # ended otherwise valid provider responses with finish_reason=length.
+  @default_max_tokens 4_096
   @max_users_per_cycle 10
   @max_explicit_user_ids 1_000
   @max_todos_per_user 20
@@ -360,7 +363,7 @@ defmodule Maraithon.Runtime.NudgeSweep do
 
         case Task.yield(task, timeout_ms) || Task.shutdown(task, :brutal_kill) do
           {:ok, {:ok, {:ok, response}}} -> decode_response(response, allowed_ids)
-          {:ok, {:ok, {:error, reason}}} -> {:error, Maraithon.Redaction.error_summary(reason)}
+          {:ok, {:ok, {:error, reason}}} -> {:error, closed_llm_failure(reason)}
           {:ok, {:ok, _other}} -> {:error, :unexpected_llm_result}
           {:ok, {:error, failure_code}} -> {:error, {:llm_task_failed, failure_code}}
           {:exit, _reason} -> {:error, :llm_task_exit}
@@ -368,6 +371,39 @@ defmodule Maraithon.Runtime.NudgeSweep do
         end
     end
   end
+
+  # Keep local/provider backpressure typed so PeriodicJobs can durably defer it
+  # without spending the job's retry budget. Collapse every other provider
+  # response to a closed atom before it reaches logs or durable error fields.
+  defp closed_llm_failure({:llm_busy, retry_after_ms} = reason)
+       when is_integer(retry_after_ms) and retry_after_ms >= 0,
+       do: reason
+
+  defp closed_llm_failure({:rate_limited, retry_after_ms} = reason)
+       when is_integer(retry_after_ms) and retry_after_ms >= 0,
+       do: reason
+
+  defp closed_llm_failure({:rate_limited, retry_after_seconds, _detail} = reason)
+       when is_integer(retry_after_seconds) and retry_after_seconds >= 0,
+       do: reason
+
+  defp closed_llm_failure({kind, _detail})
+       when kind in [
+              :content_filtered,
+              :incomplete_response,
+              :insufficient_quota,
+              :invalid_request,
+              :invalid_response,
+              :network_error,
+              :provider_error,
+              :provider_refusal
+            ],
+       do: kind
+
+  defp closed_llm_failure({:api_error, _status, _detail}), do: :api_error
+  defp closed_llm_failure(:timeout), do: :llm_timeout
+  defp closed_llm_failure(:rate_limited), do: :rate_limited
+  defp closed_llm_failure(_reason), do: :llm_call_failed
 
   defp build_prompt(todos, reasons, now, timezone_context) do
     items =
@@ -469,9 +505,18 @@ defmodule Maraithon.Runtime.NudgeSweep do
   defp reason_label(:snooze_expiry), do: "snooze_expired"
 
   defp default_llm_complete(prompt, opts) when is_binary(prompt) do
+    prompt
+    |> decision_request_params(opts)
+    |> LLM.complete()
+  end
+
+  @doc false
+  def decision_request_params(prompt, opts \\ [])
+
+  def decision_request_params(prompt, opts) when is_binary(prompt) and is_list(opts) do
     config = Application.get_env(:maraithon, :todos, [])
 
-    LLM.complete(%{
+    %{
       "messages" => [%{"role" => "user", "content" => prompt}],
       "max_tokens" =>
         opts
@@ -488,7 +533,7 @@ defmodule Maraithon.Runtime.NudgeSweep do
         |> Keyword.get(:llm_timeout_ms)
         |> positive_integer(@default_llm_timeout_ms)
         |> min(@default_llm_timeout_ms)
-    })
+    }
   end
 
   defp decode_response(response, allowed_ids) when is_struct(allowed_ids, MapSet) do

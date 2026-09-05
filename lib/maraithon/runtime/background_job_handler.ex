@@ -148,9 +148,14 @@ defmodule Maraithon.Runtime.BackgroundJobHandler do
         } = job
       )
       when is_binary(todo_id) do
-    with {:ok, user_id} <- require_user_id(job),
-         {:ok, _todo} <- TodoBrief.generate_and_store(user_id, todo_id) do
-      {:ok, %{source: "todo_brief_generation", todo_id: todo_id, status: "ready"}}
+    with {:ok, user_id} <- require_user_id(job) do
+      case TodoBrief.generate_and_store(user_id, todo_id) do
+        {:ok, _todo} ->
+          {:ok, %{source: "todo_brief_generation", todo_id: todo_id, status: "ready"}}
+
+        {:error, reason} ->
+          defer_model_capacity(reason)
+      end
     end
   end
 
@@ -664,6 +669,18 @@ defmodule Maraithon.Runtime.BackgroundJobHandler do
   end
 
   defp handle_google_rate_limit(reason), do: {:error, reason}
+
+  # Todo briefs share the bounded model gate with other reasoning work. Local
+  # slot pressure and provider cooldowns are scheduling signals, not failed
+  # brief attempts, so preserve them for BackgroundJobRunner's durable
+  # retry-after path instead of spending the job's three-attempt budget.
+  @doc false
+  def defer_model_capacity(reason) do
+    case PeriodicJobs.retry_after_seconds_for(reason) do
+      {:ok, seconds} -> {:error, {:retry_after, seconds, reason}}
+      :none -> {:error, reason}
+    end
+  end
 
   # SPEC 04 R8-R10: the suggestion pass proposes only (PreparedAction +
   # Telegram confirm card); it never merges. A failure here must not fail

@@ -636,6 +636,61 @@ defmodule Maraithon.Todos.IntelligenceTest do
     assert [] = Todos.list_for_user(user_id, limit: 10)
   end
 
+  test "ingest_many exact mode canonicalizes reordered decisions by candidate index" do
+    user_id = unique_user_email("todo-intelligence-exact-order")
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    candidates = [
+      %{
+        "source" => "gmail",
+        "title" => "Reply to Ada",
+        "summary" => "Ada asked for a decision.",
+        "next_action" => "Reply to Ada.",
+        "dedupe_key" => "gmail:exact-order-ada"
+      },
+      %{
+        "source" => "gmail",
+        "title" => "Reply to Grace",
+        "summary" => "Grace asked for a decision.",
+        "next_action" => "Reply to Grace.",
+        "dedupe_key" => "gmail:exact-order-grace"
+      }
+    ]
+
+    llm_complete = fn _prompt ->
+      {:ok,
+       %{
+         content:
+           Jason.encode!(%{
+             "summary" => "Returned complete decisions out of order.",
+             "decisions" => [
+               %{
+                 "candidate_index" => 1,
+                 "action" => "skip",
+                 "reasoning" => "Grace needs no durable work."
+               },
+               %{
+                 "candidate_index" => 0,
+                 "action" => "skip",
+                 "reasoning" => "Ada needs no durable work."
+               }
+             ]
+           })
+       }}
+    end
+
+    assert {:ok, result} =
+             Todos.ingest_many(user_id, candidates,
+               llm_complete: llm_complete,
+               exact_decisions: true,
+               semantic_dedupe: false
+             )
+
+    assert Enum.map(result.decisions, & &1.candidate_index) == [0, 1]
+    assert result.skipped_count == 2
+    assert [] = Todos.list_for_user(user_id, limit: 10)
+  end
+
   test "ingest_many exact mode repairs one invalid JSON response" do
     user_id = unique_user_email("todo-intelligence-exact-json-repair")
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)

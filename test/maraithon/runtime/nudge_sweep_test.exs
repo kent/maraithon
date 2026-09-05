@@ -309,12 +309,29 @@ defmodule Maraithon.Runtime.NudgeSweepTest do
   test "an LLM failure for one user is contained and reported, never raised", %{user_id: user_id} do
     _todo = owed_to_me_todo(user_id, "llm-down", next_nudge_at: hours_ago(1))
 
-    failing = fn _prompt -> {:error, :rate_limited} end
+    failing = fn _prompt -> {:error, {:llm_busy, 5_000}} end
+
+    assert {:error, {:llm_busy, 5_000}} = NudgeSweep.run_for_user(user_id, llm_complete: failing)
 
     summary = NudgeSweep.run_once(user_ids: [user_id], llm_complete: failing)
     assert summary.errors == 1
     assert summary.proposed == 0
     assert candidates_for(user_id) == []
+  end
+
+  test "the default decision request budgets enough output for a full tenant page" do
+    assert %{"max_tokens" => 4_096} = NudgeSweep.decision_request_params("bounded prompt")
+
+    assert %{"max_tokens" => 4_096} =
+             NudgeSweep.decision_request_params("bounded prompt", max_tokens: 32_000)
+  end
+
+  test "provider-controlled LLM failures collapse to a closed class", %{user_id: user_id} do
+    _todo = owed_to_me_todo(user_id, "llm-unsafe-detail", next_nudge_at: hours_ago(1))
+    failing = fn _prompt -> {:error, "provider supplied arbitrary detail"} end
+
+    assert {:error, :llm_call_failed} =
+             NudgeSweep.run_for_user(user_id, llm_complete: failing)
   end
 
   test "run_once selects due users itself when none are supplied", %{user_id: user_id} do

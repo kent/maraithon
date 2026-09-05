@@ -159,7 +159,12 @@ defmodule Maraithon.Todos.Brief do
 
       {:error, reason} = error ->
         _ = release_lease(user_id, todo_id)
-        Logger.warning("todo brief generation failed", todo_id: todo_id, reason: inspect(reason))
+
+        Logger.warning("todo brief generation failed",
+          target_reference: Maraithon.Redaction.fingerprint(todo_id),
+          failure_code: Maraithon.Redaction.error_class(reason)
+        )
+
         error
 
       nil ->

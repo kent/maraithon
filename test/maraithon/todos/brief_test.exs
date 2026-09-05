@@ -106,6 +106,20 @@ defmodule Maraithon.Todos.BriefTest do
     assert Brief.current(Todos.get_for_user(user_id, todo.id))
   end
 
+  test "background brief capacity errors use durable retry-after without spending an attempt" do
+    busy = {:llm_busy, 1_000}
+    rate_limited = {:rate_limited, 12, :redacted}
+
+    assert {:error, {:retry_after, 10, ^busy}} =
+             BackgroundJobHandler.defer_model_capacity(busy)
+
+    assert {:error, {:retry_after, 12, ^rate_limited}} =
+             BackgroundJobHandler.defer_model_capacity(rate_limited)
+
+    assert {:error, :invalid_brief_json} =
+             BackgroundJobHandler.defer_model_capacity(:invalid_brief_json)
+  end
+
   test "projects fetched email messages into bounded display history" do
     history =
       Context.source_history(%{
@@ -247,5 +261,30 @@ defmodule Maraithon.Todos.BriefTest do
              Brief.generate_and_store(user_id, todo.id, llm_complete: complete)
 
     refute Brief.generating?(Todos.get_for_user(user_id, todo.id))
+  end
+
+  test "brief failures log a closed class without provider-controlled detail" do
+    user_id = new_user("brief-safe-log")
+    todo = create_todo(user_id)
+    unsafe_detail = "provider-private-#{System.unique_integer([:positive])}"
+    complete = fn _params -> {:error, {:provider_error, unsafe_detail}} end
+
+    Maraithon.LogBuffer.clear()
+
+    assert {:error, {:provider_error, ^unsafe_detail}} =
+             Brief.generate_and_store(user_id, todo.id, llm_complete: complete)
+
+    Logger.flush()
+    _ = :sys.get_state(Maraithon.LogBuffer)
+
+    [entry] =
+      Maraithon.LogBuffer.recent_matching(1, fn entry ->
+        entry.message =~ "todo brief generation failed"
+      end)
+
+    assert entry.metadata["failure_code"] == "provider_error"
+    assert entry.metadata["target_reference"] == Maraithon.Redaction.fingerprint(todo.id)
+    refute Map.has_key?(entry.metadata, "reason")
+    refute inspect(entry, printable_limit: :infinity) =~ unsafe_detail
   end
 end

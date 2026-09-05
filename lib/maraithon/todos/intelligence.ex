@@ -1265,7 +1265,7 @@ defmodule Maraithon.Todos.Intelligence do
         if invalid_count == 0 and length(decisions) == length(candidates) and
              length(salvaged) == length(decisions) and
              indexes == Enum.to_list(0..(length(candidates) - 1)) do
-          {:ok, salvaged}
+          {:ok, Enum.sort_by(salvaged, & &1.candidate_index)}
         else
           {:error, :todo_intelligence_incomplete_decisions}
         end
