@@ -63,16 +63,16 @@ enum TodosCopy {
         }
     }
 
-    static func dueLabel(_ date: Date?) -> String {
+    static func dueLabel(_ date: Date?, active: Bool = true) -> String {
         guard let date else { return "No due date" }
-        if date < Date() {
+        if active && date < Date() {
             return "Overdue " + date.formatted(.dateTime.month(.abbreviated).day())
         }
         return date.formatted(.dateTime.month(.abbreviated).day())
     }
 
-    static func dueTone(_ date: Date?) -> StatusTone {
-        guard let date else { return .muted }
+    static func dueTone(_ date: Date?, active: Bool = true) -> StatusTone {
+        guard active, let date else { return .muted }
         return date < Date() ? .error : .muted
     }
 }

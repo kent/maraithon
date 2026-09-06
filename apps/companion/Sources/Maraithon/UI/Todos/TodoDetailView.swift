@@ -35,9 +35,17 @@ struct TodoDetailView: View {
                 Section("Details") {
                     LabeledContent("Status", value: TodosCopy.statusLabel(todo.status))
                     LabeledContent("Source", value: TodosCopy.sourceLabel(todo.source))
-                    LabeledContent("Attention", value: TodosCopy.attentionLabel(todo.attentionMode))
+                    if todo.canMarkDone {
+                        LabeledContent("Attention", value: TodosCopy.attentionLabel(todo.attentionMode))
+                    }
                     LabeledContent("Priority", value: TodosCopy.priorityLabel(todo.priority))
-                    LabeledContent("Due", value: TodosCopy.dueLabel(todo.dueDate))
+                    LabeledContent("Due", value: TodosCopy.dueLabel(todo.dueDate, active: todo.canMarkDone))
+                }
+
+                if let notes = todo.notes, !notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Section("Notes") {
+                        Text(notes).textSelection(.enabled)
+                    }
                 }
 
                 sourceContext(for: todo)

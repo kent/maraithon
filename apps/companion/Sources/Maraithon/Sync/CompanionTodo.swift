@@ -24,6 +24,7 @@ struct CompanionTodo: Codable, Identifiable, Hashable, Sendable {
     let title: String
     let summary: String?
     let nextAction: String?
+    var notes: String? = nil
     let dueAt: String?
     let priority: Int
     let status: String
@@ -38,6 +39,7 @@ struct CompanionTodo: Codable, Identifiable, Hashable, Sendable {
         case title
         case summary
         case nextAction = "next_action"
+        case notes
         case dueAt = "due_at"
         case priority
         case status

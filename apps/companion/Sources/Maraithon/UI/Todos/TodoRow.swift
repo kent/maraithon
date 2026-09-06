@@ -24,19 +24,19 @@ struct TodoRow: View {
                             .font(.caption)
                             .foregroundStyle(StatusTone.attention.color)
                     }
-                    if todo.priority >= 75 {
+                    if todo.canMarkDone && todo.priority >= 75 {
                         Text(todo.priority >= 90 ? "Critical" : "High")
                             .font(.caption.weight(.medium))
                             .foregroundStyle(todo.priority >= 90 ? StatusTone.error.color : StatusTone.attention.color)
                     }
                 }
 
-                if let move = todo.recommendedMove {
+                if todo.canMarkDone, let move = todo.recommendedMove {
                     Text("Next: \(move)")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
-                } else if let summary = todo.summary, !summary.isEmpty {
+                } else if todo.canMarkDone, let summary = todo.summary, !summary.isEmpty {
                     Text(summary)
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -48,15 +48,17 @@ struct TodoRow: View {
             VStack(alignment: .leading, spacing: Tokens.Spacing.xsmall) {
                 Text(TodosCopy.sourceLabel(todo.source))
                     .font(.callout)
-                Text(TodosCopy.attentionLabel(todo.attentionMode))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                if todo.canMarkDone {
+                    Text(TodosCopy.attentionLabel(todo.attentionMode))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
             .frame(width: 112, alignment: .leading)
 
-            Text(TodosCopy.dueLabel(todo.dueDate))
+            Text(TodosCopy.dueLabel(todo.dueDate, active: todo.canMarkDone))
                 .font(.caption)
-                .foregroundStyle(TodosCopy.dueTone(todo.dueDate).color)
+                .foregroundStyle(TodosCopy.dueTone(todo.dueDate, active: todo.canMarkDone).color)
                 .frame(width: 96, alignment: .leading)
 
             Button(actionTitle) {

@@ -398,6 +398,16 @@ for `kent@runner.now`, using the manual-first development policy.
     source when the input omits it. Status: implemented; `make build` passed.
     Deployment and an exact-wording live check are pending. Tests were not run.
 
+28. **Completed Mac todos still ask for action.** The live manual check moved
+    to Done but retained `Needs action` and `Next:` labels. Completed rows also
+    retained urgent priority styling and could say `Overdue`. Gate those cues
+    on active status; retain the recorded due date and the Reopen action.
+    The same detail review found that the Mac decoder omitted saved notes,
+    so it now preserves and displays them in a selectable Notes section.
+    Status: implemented; `swift build` and signed `make build-companion`
+    packaging passed. Installation and live verification are pending. Tests
+    were not run.
+
 ## Delivery state
 
 Current server: `maraithon-00211-94n`, code through `ce4b1fd1`, deployed by
