@@ -180,7 +180,9 @@ for `kent@runner.now`, using the manual-first development policy.
     SwiftData merge finish. A failure can then receive 304 on retry while the
     local todo list is still old. Clear that validator unless the complete list
     was fetched and saved; preserve a valid 304 response. The same cleanup also
-    applies to a capped listing and local save failure. Simulator app build
+    applies to a capped listing and local save failure. Bump the todo validator
+    cache version so installed apps refetch any previously incomplete list.
+    Simulator app build
     passed on iOS 26.4; no project generation was needed and tests were not run.
     Status: implemented locally; TestFlight delivery pending.
 

@@ -130,7 +130,8 @@ struct MobileAPIClient: Sendable {
         static let chatThreads = "chat-threads"
 
         static func todos(includeCards: Bool) -> String {
-            includeCards ? "todos.v3.cards" : "todos.v3"
+            // Older validators may describe a page set that never reached SwiftData.
+            includeCards ? "todos.v4.cards" : "todos.v4"
         }
     }
 
