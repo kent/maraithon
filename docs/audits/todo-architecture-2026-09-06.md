@@ -229,3 +229,18 @@ preparing, and 44 unassigned, with no active or termination-requested tasks.
 This is a recovery observation, not a steady-state health result. Gmail catch-up,
 freshly failed source graphs, deferred ingestion, and a complete periodic Agent
 cycle/checkpoint remain to verify after the next deployment.
+
+At 19:33:33 UTC, all 64 partitions had returned to ready/live, with two running
+tasks and no termination requests. Discovery reasoning completions reached 74
+since recovery; 90 were pending and two running. All 18 recurring schedules
+were advancing without recorded errors, and all 1,108 outcome-known Effects
+still had matching evidence. The next Agent checkpoint and wakeup were due at
+19:35:07 and 19:35:25, respectively.
+
+Querying failures by `failed_at` rather than historical aggregate strings found
+eight interrupted model jobs recorded as `provider_outcome_ambiguous` since
+recovery, plus three dependent graph/acquisition failures. No new invalid-JSON
+or incomplete-decision failures appeared in this interval. Preserve those
+ambiguous outcomes and let subsequent source cycles reevaluate unfinished
+coverage. The deployment/recovery interruptions explain the current failures;
+fresh Gmail cursor advancement still depends on completing its source graphs.
