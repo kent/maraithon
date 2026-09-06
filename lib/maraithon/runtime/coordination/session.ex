@@ -28,7 +28,10 @@ defmodule Maraithon.Runtime.Coordination.Session do
   @default_tick 2_000
   @default_node_ttl 30_000
   @default_partition_ttl 30_000
-  @default_leader_ttl 15_000
+  # A planner tick also publishes partitions and reconciles task proofs.
+  # Give leadership the same lease window as its node, rather than expiring
+  # it halfway through an otherwise valid node/partition lease.
+  @default_leader_ttl 30_000
 
   def child_spec(opts) do
     %{
@@ -322,8 +325,8 @@ defmodule Maraithon.Runtime.Coordination.Session do
         :ok ->
           _ = drain_revoked_partitions(session)
 
-          case TaskClaims.reconcile_proven(100) do
-            {:ok, _results} -> plan_partitions(state)
+          case TaskClaims.reconcile_proven(10) do
+            {:ok, _results} -> state |> refresh_leader() |> plan_partitions()
             _error -> fail_closed(state, :reconcile_proven)
           end
 
@@ -376,6 +379,8 @@ defmodule Maraithon.Runtime.Coordination.Session do
   defp database_error_code(:undefined_table), do: "undefined_table"
   defp database_error_code(_code), do: "other"
 
+  defp refresh_leader(%{phase: phase} = state) when phase != :ready, do: state
+
   defp refresh_leader(%{leader: nil} = state) do
     case Authority.acquire_leader(state.session, state.leader_ttl_ms) do
       {:ok, preparing} ->
@@ -386,6 +391,11 @@ defmodule Maraithon.Runtime.Coordination.Session do
 
       {:error, :leader_held} ->
         state
+
+      {:error, :leader_incarnation_expired} ->
+        # The exact protocol requires a fresh node identity after this node's
+        # ready leadership expires. Preserve the identity for local cleanup.
+        fail_closed(state, :leader_incarnation_expired)
 
       _ ->
         state

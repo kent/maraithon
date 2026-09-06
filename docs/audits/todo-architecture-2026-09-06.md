@@ -28,7 +28,8 @@ for `kent@runner.now`, using the manual-first development policy.
    without duplicating mailbox or Slack acquisition. Also propagate completion
    errors to the durable runner so failed model calls retry.
    Status: implemented in `581e8fa5`; build passed; deployed in
-   `maraithon-00195-x7j`. Runtime recovered; live backstop execution pending behind source catch-up.
+   `maraithon-00195-x7j`. The independent backstop completed at 19:23:48 UTC
+   with no retries or recorded error.
 
 2. **Fast deploy contains a drain-proof gate contrary to development policy.**
    It polls up to 48 times and refuses replacement without a strong drain
@@ -48,7 +49,8 @@ for `kent@runner.now`, using the manual-first development policy.
    timestamp, account, and stale-row checks. Thread context now keeps each
    reply's actual timestamp and sender instead of inheriting the delta timestamp.
    Calendar evidence uses creation/update time rather than a future event start.
-   Build passed; deployment pending.
+   Build passed; deployed in workflow `34054801166`, revision
+   `maraithon-00199-6vt`.
 
 4. **Automatic closure needs explicit provenance and stale-decision protection.**
    Cross-source completion writes a free-text resolution note through ordinary
@@ -60,7 +62,8 @@ for `kent@runner.now`, using the manual-first development policy.
    `93bf5406`; build passed and deployed in `maraithon-00196-k5d`.
    Reopening now records a correction and requires newer evidence across
    deterministic and model checks. Existing mobile and companion reopen
-   actions use this shared server path; build passed, deployment pending.
+   actions use this shared server path; build passed and deployed in
+   `maraithon-00197-thz`.
 
 5. **Completion rotation stops at a fixed 500-row pool.**
    The general cross-source pass loads the oldest-updated 500 todos before
@@ -125,6 +128,17 @@ for `kent@runner.now`, using the manual-first development policy.
    the admitted todo count. Existing prompt splitting and complete coverage
    requirements remain; Kent's 626-item list needs 32 batches instead of 63
    per source partition. Status: implemented locally; build passed; deployment pending.
+
+10. **Planner leadership expires before otherwise valid worker leases.**
+    Cloud SQL reported `expired leader incarnation cannot be revived` at
+    19:25:27 UTC. Leadership had a 15-second lease while node and partition
+    leases lasted 30 seconds; one coordination tick can also publish partitions
+    and reconcile task proofs. Match the leader window to 30 seconds, bound
+    proof reconciliation to ten assignments per tick, and renew leadership
+    immediately before planning. An actually expired ready leader still needs
+    a fresh node identity: detect that condition explicitly and retain the old
+    identity for fenced cleanup instead of attempting a prohibited revival.
+    Status: implemented locally; build passed; deployment pending.
 
 ## Delivery state
 
@@ -206,3 +220,12 @@ was saved at 19:22:39. Since recovery, 28 discovery reasoning jobs and 44 closur
 reasoning jobs had completed, with 1,108 outcome-known Effects and no missing
 evidence. The cursors still awaited graph finalization. This sample predates
 the deferred-ingestion deployment and does not validate that fix.
+
+At 19:26:52 UTC, Slack discovery had advanced at 19:23:45 and the independent
+completion backstop had completed at 19:23:48. Since recovery, 31 discovery
+reasoning jobs and 54 closure reasoning jobs had completed. The leader-expiry
+recovery was still converging: 13 partitions were ready, four draining, three
+preparing, and 44 unassigned, with no active or termination-requested tasks.
+This is a recovery observation, not a steady-state health result. Gmail catch-up,
+freshly failed source graphs, deferred ingestion, and a complete periodic Agent
+cycle/checkpoint remain to verify after the next deployment.

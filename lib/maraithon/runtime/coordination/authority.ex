@@ -679,20 +679,27 @@ defmodule Maraithon.Runtime.Coordination.Authority do
         leader =
           SQL.query!(
             Repo,
-            "SELECT state, leader_epoch, lease_expires_at FROM public.runtime_leader_authorities WHERE role = 'partition_planner' FOR UPDATE",
+            "SELECT state, leader_epoch, lease_expires_at, node_incarnation_id FROM public.runtime_leader_authorities WHERE role = 'partition_planner' FOR UPDATE",
             []
           ).rows
 
         _ = lock_node!(session)
 
         case leader do
-          [[state, _epoch, expires_at]]
+          [[state, _epoch, expires_at, node_id]]
           when state in ["preparing", "ready"] and not is_nil(expires_at) ->
-            if db_future?(expires_at),
-              do: Repo.rollback(:leader_held),
-              else: take_leader!(session, activation_epoch, token, ttl_ms)
+            cond do
+              db_future?(expires_at) ->
+                Repo.rollback(:leader_held)
 
-          [[_state, _epoch, _expires_at]] ->
+              state == "ready" and node_id == Ecto.UUID.dump!(session.id) ->
+                Repo.rollback(:leader_incarnation_expired)
+
+              true ->
+                take_leader!(session, activation_epoch, token, ttl_ms)
+            end
+
+          [[_state, _epoch, _expires_at, _node_id]] ->
             take_leader!(session, activation_epoch, token, ttl_ms)
         end
       end)
