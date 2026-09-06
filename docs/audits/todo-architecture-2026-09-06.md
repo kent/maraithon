@@ -44,7 +44,7 @@ for `kent@runner.now`, using the manual-first development policy.
    reply normally has a different ID and channel from a Gmail todo, so a valid
    model decision can be rejected. Replace this with evidence-grounded
    cross-source relationship validation while retaining quote and time checks.
-   Status: implemented locally with a quoted, distinctive shared relationship
+   Status: implemented with a quoted, distinctive shared relationship
    anchor for cross-source/manual work, while retaining confidence, exact quote,
    timestamp, account, and stale-row checks. Thread context now keeps each
    reply's actual timestamp and sender instead of inheriting the delta timestamp.
@@ -168,12 +168,14 @@ for `kent@runner.now`, using the manual-first development policy.
     preparation consumed a renewal interval. Reject expired provider-entry
     attempts with an ordinary authority-loss result before the trigger rejects
     them. Status: implemented in `03765c85`; `make build` passed; workflow
-    `34056034289` deployed successfully.
+    `34056034289` deployed successfully as `maraithon-00202-fg4`.
 
     The Chief of Staff's three-failure guard tripped at 19:25:29 UTC and left it
     stopped. Its normal explicit start action checks that prior leases,
     operations, processing directives, and termination incidents are clear before
-    resetting the guard. Restart and sustained cycle verification remain pending.
+    resetting the guard. The normal start action reset the guard at 19:55:51 UTC;
+    the Agent recovered at 19:55:59. Its snapshot advanced at 20:14:20 with
+    zero subsequent crashes. Periodic-cycle verification exposed finding 14.
 
 13. **An interrupted iPhone sync can retain a validator for unsaved data.**
     The first todo page stores the collection ETag before later pages and the
@@ -184,9 +186,30 @@ for `kent@runner.now`, using the manual-first development policy.
     cache version so installed apps refetch any previously incomplete list.
     Simulator app build
     passed on iOS 26.4; no project generation was needed and tests were not run.
-    Status: implemented locally; TestFlight delivery pending.
+    Status: implemented in `5d8a42e2` and `26191c62`; workflow `34057077032`
+    delivered TestFlight `1.0.1` build `20260906200907` and verified Founders
+    access for Kent at 20:13:34 UTC.
+
+14. **Source activity postpones the periodic Chief of Staff scan indefinitely.**
+    At 20:14:28 UTC, the recovered Agent was running and had processed 105
+    runs since the first recovery, but no new scheduled wakeup or Effect had
+    occurred since 19:18. Every completed PubSub run replaced its pending
+    periodic wakeup with another ten-minute delay. Continuous discovery traffic
+    therefore prevented a full scheduled skill cycle. Preserve an earlier
+    active wakeup within the periodic scope, atomically cancelling duplicates;
+    still allow an earlier deadline and preserve unrelated one-shot scopes.
+    Status: implemented; `make build` passed. Deployment and live periodic
+    cycle verification remain pending.
 
 ## Delivery state
+
+Current server: `maraithon-00202-fg4`, code through `03765c85`, deployed by
+successful workflow `34056034289`. Current iPhone release: TestFlight `1.0.1`
+build `20260906200907`, code through `26191c62`, available to Founders via
+workflow `34057077032`. The signed local Mac development app is installed at
+`~/Applications/Maraithon.app`; direct UI inspection showed 627 active items.
+No public Sparkle release was made.
+
 
 The first batch through `f3dfb2d8` deployed successfully using GitHub's existing
 keyless `make deploy` workflow, run `34053264882`. Revision
@@ -197,14 +220,14 @@ workflow for the already-present native updates (`34053264885`). It completed
 successfully: TestFlight version `1.0.1`, build `20260906185611`, Founders group.
 
 The second server batch through `4a2ded25` deployed successfully in workflow
-`34053477349`. Revision `maraithon-00196-k5d` serves 100% of traffic and
-`/health` reports `ok` with the combined process role.
+`34053477349`. Revision `maraithon-00196-k5d` initially served 100% of traffic and
+`/health` reported `ok` with the combined process role.
 
 Local deployment was unavailable: the shell's active service account belongs
 to another project, Kent's cached organizational logins require reauthentication,
 and the other checked credentials lack deployment access. No credentials or
-IAM grants were changed. Later fixes listed above are committed locally and
-were delivered by the second workflow. `591e1ba7` separately records physical
+IAM grants were changed. Server fixes were committed and
+delivered through the keyless workflows recorded beside each finding. `591e1ba7` separately records physical
 Cloud Run revision/service identity on new runtime nodes and logs their node
 IDs. This and the reopening fix (`3ffe1482`) deployed successfully in workflow
 `34054377367`, revision `maraithon-00197-thz`, serving 100% of traffic.
@@ -290,3 +313,35 @@ or incomplete-decision failures appeared in this interval. Preserve those
 ambiguous outcomes and let subsequent source cycles reevaluate unfinished
 coverage. The deployment/recovery interruptions explain the current failures;
 fresh Gmail cursor advancement still depends on completing its source graphs.
+
+
+## Second recovery and stable processing
+
+The reserved assignment in finding 12 belonged to retired revision
+`maraithon-00200-zm4`, established by its node's physical Cloud Run metadata.
+After verifying that no traffic targeted that revision, its deletion, absence,
+and successful Cloud Audit deletion were recorded. Destruction evidence is
+retained outside the repository in
+`~/.config/maraithon/agent-termination-evidence/task-e398451c-7524-4eb8-9903-63663b0f57c8-destruction.json`,
+SHA-256 `22ecb50d2e45bb85c21ed11f9f9aa935a4bb119c9e3c949678b5aeba73290ab5`.
+
+Execution `maraithon-runtime-recovery-t9hgq` recorded the identity-bound task
+termination proof and completed successfully at 19:55:57 UTC. The normal Chief
+start action cleared its guard and persisted the desired running state; the
+immediate response was `partition_not_owned` while reassignment converged.
+The Watcher recovered the Agent eight seconds later at 19:55:59. Its successful
+execution receipt is retained outside the repository, and the temporary
+incident-role job was deleted. No cursor or ambiguous provider outcome was
+rewritten.
+
+At 20:14:28 UTC (`maraithon-todo-validation-f792r`), all 64 partitions were
+ready with live leases, with three running tasks and no pending termination.
+The serving node had remained the same since 19:52:02. The Agent guard had
+zero crashes and no recovery requirement; its idle snapshot advanced at
+20:14:20. All 1,108 outcome-known Effects retained matching evidence. Discovery
+reasoning completions reached 158 since first recovery, with two pending and
+three running; closure completions reached 61. All 18 recurring schedules
+were scheduled ahead without persisted errors. Source cursors still awaited
+complete graph coverage. No application errors were recorded on the current
+revision between the Agent recovery and the 20:16 check. The moving periodic
+wakeup described in finding 14 prevents calling the full loop verified yet.
