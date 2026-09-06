@@ -1133,6 +1133,9 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
   end
 
   defp evaluate_resolutions(user_id, todos, evidence, now, opts) do
+    # Exact passes must return every decision, including citations for each
+    # closure. A fixed 2K-token response can truncate a valid larger batch.
+    opts = Keyword.put_new(opts, :max_tokens, max(@default_max_tokens, length(todos) * 256))
     llm_complete = Keyword.get(opts, :llm_complete) || (&default_llm_complete(&1, opts))
 
     with {:ok, {prompt, authorized_evidence}} <-

@@ -20,7 +20,7 @@ defmodule Maraithon.Runtime.SourceAccountClosure do
   alias Maraithon.Runtime.TodoCompletionSweep
   alias Maraithon.Todos.Todo
 
-  @todo_batch_size 10
+  @todo_batch_size 20
   @max_replay_fanouts 500
   @allowed_watermark_kinds ~w(gmail_closure_watermark slack_closure_watermark)
 

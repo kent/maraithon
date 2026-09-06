@@ -17,7 +17,7 @@ defmodule Maraithon.Runtime.TodoCompletionSweep do
   alias Maraithon.Todos.{CompletionSweep, CrossSourceCompletion, Todo, UserBatch}
 
   @deterministic_batch_size 20
-  @cross_source_batch_size 10
+  @cross_source_batch_size 20
 
   require Logger
 

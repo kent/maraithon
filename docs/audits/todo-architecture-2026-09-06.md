@@ -100,7 +100,13 @@ for `kent@runner.now`, using the manual-first development policy.
    explanations and corrections, and current mobile/companion consumption of
    server state. Native changes should follow demonstrated gaps, with narrow
    builds and installation/release only for affected apps.
-   Status: remaining review and direct verification.
+   The Mac client ignored pagination after its first 200 todos. It now fetches
+   every page before replacing the list, deduplicates overlapping rows, and
+   rejects malformed/nonterminating pagination. Swift build passed; the signed
+   local app was rebuilt, installed, and launched at `~/Applications/Maraithon.app`.
+   iPhone pagination and manual create/reopen paths already use the shared API.
+   Direct Mac verification showed all 627 active work items after loading.
+   Source catch-up remains in progress.
 
 8. **Todo deduplication blocks the Agent's lease renewal.**
    At 19:14:11 UTC the Chief completed an effect, then entered another model
@@ -110,7 +116,15 @@ for `kent@runner.now`, using the manual-first development policy.
    to the durable model queue, retaining encrypted candidates and idempotent
    queue keys; attach results to the originating brief after ingestion.
    Yield between skills and renew authority at each continuation boundary.
-   Status: implemented in `97362cfd`; build passed; deployment in progress.
+   Status: implemented in `97362cfd`; build passed; deployed in workflow
+   `34054609844`, revision `maraithon-00198-pzq`.
+
+9. **Closure repeats source context too often for a large todo list.**
+   The exact matrix used batches of ten todos. Increase both the fanout and
+   inner checker batch to twenty and scale the response-token allowance with
+   the admitted todo count. Existing prompt splitting and complete coverage
+   requirements remain; Kent's 626-item list needs 32 batches instead of 63
+   per source partition. Status: implemented locally; build passed; deployment pending.
 
 ## Delivery state
 
