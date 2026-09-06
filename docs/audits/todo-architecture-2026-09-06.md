@@ -127,7 +127,8 @@ for `kent@runner.now`, using the manual-first development policy.
    inner checker batch to twenty and scale the response-token allowance with
    the admitted todo count. Existing prompt splitting and complete coverage
    requirements remain; Kent's 626-item list needs 32 batches instead of 63
-   per source partition. Status: implemented locally; build passed; deployment pending.
+   per source partition. Status: implemented in `a2d9dedc`; build passed;
+   deployed in `maraithon-00200-zm4`.
 
 10. **Planner leadership expires before otherwise valid worker leases.**
     Cloud SQL reported `expired leader incarnation cannot be revived` at
@@ -138,7 +139,17 @@ for `kent@runner.now`, using the manual-first development policy.
     immediately before planning. An actually expired ready leader still needs
     a fresh node identity: detect that condition explicitly and retain the old
     identity for fenced cleanup instead of attempting a prohibited revival.
-    Status: implemented locally; build passed; deployment pending.
+    Status: implemented in `a1f71b75`; build passed; deployed in
+    `maraithon-00200-zm4`. Sustained runtime verification remains in progress.
+
+11. **A transient post-deploy health request falsely reports rollout failure.**
+    Workflow `34055148827` built and deployed revision `maraithon-00200-zm4`
+    to 100% of traffic, then its single 15-second health request timed out.
+    Both service URLs subsequently returned `ok` with the combined process
+    role. Retry transient health transport/HTTP failures up to twice, and avoid
+    an additional traffic update when the service already sends 100% to the
+    latest revision. Retain the response-content check and a bounded retry
+    window. Status: shell syntax verified locally; delivery pending.
 
 ## Delivery state
 

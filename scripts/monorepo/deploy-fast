@@ -275,22 +275,35 @@ gcloud run deploy "${service}" \
 source_drain_requested=false
 trap - EXIT
 
-# Split-runtime deployments pin traffic to a named revision. Restore the
-# normal floating assignment so this revision and future fast deploys go live.
-gcloud run services update-traffic "${service}" \
-  --project "${project}" \
-  --region "${region}" \
-  --to-latest \
-  --quiet
-
-service_url="$(
+deployed_service_json="$(
   gcloud run services describe "${service}" \
     --project "${project}" \
     --region "${region}" \
-    --format='value(status.url)'
+    --format=json
 )"
 
-health_payload="$(curl --fail --silent --show-error --max-time 15 "${service_url}/health")"
+# Split-runtime deployments can pin traffic to a named revision. Restore the
+# floating assignment only when deployment has not already done so.
+if ! jq -e '
+  .status.traffic | length == 1 and
+    .[0].latestRevision == true and .[0].percent == 100
+' <<<"${deployed_service_json}" >/dev/null; then
+  gcloud run services update-traffic "${service}" \
+    --project "${project}" \
+    --region "${region}" \
+    --to-latest \
+    --quiet
+fi
+
+service_url="$(jq -er '.status.url' <<<"${deployed_service_json}")"
+
+# A just-routed service can briefly time out while Cloud Run adjusts instances.
+# Retry transient transport/HTTP failures; still reject an unhealthy response.
+health_payload="$(
+  curl --fail --silent --show-error --connect-timeout 5 --max-time 15 \
+    --retry 2 --retry-delay 1 --retry-max-time 45 \
+    "${service_url}/health"
+)"
 
 if ! jq -e '.status == "ok" and .process_role == "combined"' <<<"${health_payload}" >/dev/null; then
   echo "Combined service health check failed: ${health_payload}" >&2
