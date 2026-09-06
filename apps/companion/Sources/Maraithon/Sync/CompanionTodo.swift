@@ -49,7 +49,10 @@ struct CompanionTodo: Codable, Identifiable, Hashable, Sendable {
     }
 
     var recommendedMove: String? {
-        Self.nonblank(actionCard?.nextBestAction) ?? Self.nonblank(nextAction)
+        if ["manual", "mobile"].contains(source) {
+            return Self.nonblank(nextAction) ?? Self.nonblank(actionCard?.nextBestAction)
+        }
+        return Self.nonblank(actionCard?.nextBestAction) ?? Self.nonblank(nextAction)
     }
 
     var dueDate: Date? { Self.parseDate(dueAt) }

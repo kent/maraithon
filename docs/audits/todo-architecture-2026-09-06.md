@@ -396,7 +396,12 @@ for `kent@runner.now`, using the manual-first development policy.
     Preserve wording and line breaks for `manual` and `mobile` sources, while
     retaining cleanup for generated work. Partial updates use the persisted
     source when the input omits it. Status: implemented; `make build` passed.
-    Deployment and an exact-wording live check are pending. Tests were not run.
+    Workflow `34064359869` deployed `d12529a8` as `maraithon-00212-c5r`.
+    Live check `5afac5a2-3299-4c29-9cf2-658d262bdfba` retained its exact title
+    (`Verify exact todo wording`) and two note lines after a fresh server load
+    at 22:37:51 UTC. The Mac also now prefers a manual todo's saved next action
+    over a generated card suggestion; that follow-up passed `swift build` and
+    signed packaging. Tests were not run.
 
 28. **Completed Mac todos still ask for action.** The live manual check moved
     to Done but retained `Needs action` and `Next:` labels. Completed rows also
@@ -404,14 +409,15 @@ for `kent@runner.now`, using the manual-first development policy.
     on active status; retain the recorded due date and the Reopen action.
     The same detail review found that the Mac decoder omitted saved notes,
     so it now preserves and displays them in a selectable Notes section.
-    Status: implemented; `swift build` and signed `make build-companion`
-    packaging passed. Installation and live verification are pending. Tests
-    were not run.
+    Status: implemented in `0afa3d1f`; `swift build` and signed
+    `make build-companion` packaging passed. Installed and visually verified
+    at 22:36 UTC: the completed row had no attention/next-step cue, the inspector
+    showed Done and Notes, and Reopen remained available. Tests were not run.
 
 ## Delivery state
 
-Current server: `maraithon-00211-94n`, code through `ce4b1fd1`, deployed by
-successful workflow `34063974077`. Current iPhone release: TestFlight `1.0.1`
+Current server: `maraithon-00212-c5r`, code through `d12529a8`, deployed by
+successful workflow `34064359869`. Current iPhone release: TestFlight `1.0.1`
 build `20260906211723`, code through `871e245c`, available to Founders via
 workflow `34060595850`. The signed local Mac development app is installed at
 `~/Applications/Maraithon.app`; its 21:07 UTC refresh showed 953 active items
