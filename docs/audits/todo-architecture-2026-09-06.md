@@ -507,8 +507,12 @@ for `kent@runner.now`, using the manual-first development policy.
     retries, completed results, and ambiguous outcomes retain their normal
     settlement path. A 500 ms lock timeout lets a later sibling retry cleanup
     rather than holding up lease renewal behind another writer.
-    Status: implemented; compile passed. Deployment and live cancellation
-    counts remain to verify. No tests were run under the manual-first policy.
+    Status: implemented in `fcf33862`; compile passed. Workflow `34067235556`
+    deployed revision `maraithon-00216-gkc` successfully. Initial live logs
+    recorded 769 cancellations in fourteen short batches, with a maximum
+    measured call duration of 2,765 ms. Previously settled and ambiguous
+    outcomes remained intact. Full replacement-cycle completion remains to
+    verify. No tests were run under the manual-first policy.
 
 34. **iPhone completion detail also retains stale actions.** The iOS decoder
     ignores the public resolution note, while completed rows and detail still
@@ -523,15 +527,36 @@ for `kent@runner.now`, using the manual-first development policy.
     on the first refresh. No server payload change is required. `make
     build-mobile` regenerated the Xcode project and passed its simulator app
     build; no generated project is committed. Tests were not run under the
-    manual-first policy. TestFlight delivery and device inspection remain
-    pending.
+    manual-first policy. Workflow `34067357201` successfully published code through `1ba7bb51` as
+    TestFlight `1.0.1` build `20260906233635`. Founders access and Kent’s tester
+    membership were verified in the release logs. The available simulator is signed out, so the
+    updated detail view has not yet been inspected with a live iPhone session.
+
+35. **Repeated thread context survives evidence deduplication.** A Gmail
+    batch with seventeen acquired messages produced 284 evidence records and
+    six model calls. Thread replies inherit each acquired delta's coverage
+    reference, and the existing dedupe key includes that reference, so
+    otherwise identical activity is repeated in the exact prompt.
+
+    Coalesce exact evidence records only when every field other than the
+    coverage reference matches. Preserve every acquired reference in
+    `source_refs`, retain a scalar reference for completion provenance, and
+    verify that the packed prompts still cover the original reference set.
+    Sender, timestamp, account, source ID, thread, subject, and full text must
+    all match. Different evidence remains separate. The prompt identifies
+    aliases as one activity, not independent confirmations; byte limits and
+    todo coverage checks are unchanged. Log original and unique record counts.
+    Status: implemented; `make build` passed. Live deduplication and model-call
+    reduction remain to verify. No tests were run. Deployment is waiting for
+    the currently staging Gmail acquisition to publish its child list so that
+    replacement does not strand an unpublished graph.
 
 ## Delivery state
 
-Current server: `maraithon-00215-64f`, code through `8f4d5f35`, deployed by
-successful workflow `34066652859`. Current iPhone release: TestFlight `1.0.1`
-build `20260906211723`, code through `871e245c`, available to Founders via
-workflow `34060595850`. The signed local Mac development app includes finding 32 and is installed
+Current server: `maraithon-00216-gkc`, code through `fcf33862`, deployed by
+successful workflow `34067235556`. Current iPhone release: TestFlight `1.0.1`
+build `20260906233635`, code through `1ba7bb51`, available to Founders via
+workflow `34067357201`. The signed local Mac development app includes finding 32 and is installed
 at `~/Applications/Maraithon.app`. Live checks verified
 New Todo, saved wording and multiline notes after a fresh load, user completion,
 the completed-row display, and Command-N/Escape. The two manual check items
@@ -974,3 +999,44 @@ completed-batch time with very similar input sizes, though it does not isolate
 model latency from local packing. Every sampled successful new batch retained
 complete coverage and nine model calls. The two-minute query window started
 at 23:35:18; its final runtime measurements remain pending.
+
+
+The revision-215 query window completed in execution
+`maraithon-todo-validation-p2s8g` at 23:37:21. Its 23:35:18–23:37:18 window
+included revision 216's activation, so the one-off storage verification calls
+are startup work, not steady-state load. SQL execution totaled 15.44 seconds;
+fair scheduling contributed 18.37%, and the node write-lock query 9.48%.
+The final snapshot caught the deployment handoff (60 draining, four unassigned)
+and is not a healthy steady-state observation. Before that handoff, revision
+215 created a checkpoint at 23:35:58 and completed two Effects by 23:36:27;
+all 1,142 outcome-known Effects had matching evidence.
+
+Revision 216 recovered the Chief at 23:38:18.582 UTC. Execution
+`maraithon-todo-validation-z2clz` observed all 64 partitions ready/live on node
+`e4ba2b7b` at 23:39:07, with no new restart-guard crash and no task awaiting
+termination. Gmail account 2's old graph was already fully terminal: 275
+cancelled, sixteen completed, and 59 failed (including its retained ambiguous
+outcome). Gmail account 1 cleanup was still in progress in that sample.
+The old Slack graph retained eleven completed and three ambiguous outcomes,
+with ten unclaimed children cancelled and its failed finalizer recorded.
+No source cursor or ambiguous outcome was manually relabeled.
+
+The production-safe timing keys deployed in `37494cc3` now report actual
+packing measurements: the first two fresh revision-216 batches each prepared
+40 todos against 690 evidence items into ten chunks, in 136 and 146 ms.
+Completion latency and source-cursor advancement are separate outcomes still
+being observed by the running `z2clz` watch.
+
+
+At 23:41 and 23:43, the `z2clz` watch confirmed both old Gmail graphs fully
+terminal, with their previous completion and ambiguous-outcome counts intact.
+Fresh Gmail account 2 acquisition `4a528a15-cd06-4f3f-b8e4-e27fe682e26a` published
+175 children; its first two completed by 23:43:10 with complete coverage and
+no evaluation/fetch error. Slack replacement `cb721b54` also completed its first
+two batches. Account 1 acquisition `993c7be3-f1e3-4e6a-a90e-fdb600925196` remained
+in graph preparation, with 1,716 staged children at 23:45:11. These children
+cannot do model work before the parent publishes its complete list. All 64
+partitions stayed ready/live at each observation, and the restart guard had
+no new crash. Closure cursors had not advanced. The next wakeup is due at
+23:46:28 and checkpoint at 23:48:17. A two-minute performance/final-runtime
+probe was submitted as `maraithon-todo-validation-pnbvp`.

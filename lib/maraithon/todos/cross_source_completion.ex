@@ -1285,21 +1285,53 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
 
   defp partition_exact_prompt_evidence(user_id, todos, evidence, now, opts) do
     started_at = System.monotonic_time(:millisecond)
+    unique_evidence = coalesce_exact_prompt_evidence(evidence)
 
     with {:ok, budget} <- exact_prompt_evidence_budget(todos, now, opts),
-         {:ok, fragments} <- split_exact_prompt_evidence(evidence, budget),
+         {:ok, fragments} <- split_exact_prompt_evidence(unique_evidence, budget),
          {:ok, chunks} <- pack_exact_prompt_evidence(fragments, budget),
          :ok <- validate_exact_partition_refs(evidence, chunks) do
       Logger.info("Cross-source exact prompt prepared",
         user_fingerprint: Maraithon.Redaction.fingerprint(user_id),
         candidate_count: length(todos),
         item_count: length(evidence),
+        included_candidates: length(unique_evidence),
         count: length(chunks),
         duration_ms: System.monotonic_time(:millisecond) - started_at
       )
 
       {:ok, chunks}
     end
+  end
+
+  # A thread reply can be attached to several acquired delta items. Its
+  # coverage references differ, but its content need only appear once. Match
+  # every other field exactly, including author, timestamp, account and IDs.
+  # Keep all coverage references and the first scalar ref for provenance.
+  defp coalesce_exact_prompt_evidence(evidence) do
+    {order, grouped} =
+      Enum.reduce(evidence, {[], %{}}, fn item, {order, grouped} ->
+        key = Map.delete(item, "source_ref")
+        refs = MapSet.new(List.wrap(read_string(item, "source_ref", nil)))
+
+        case Map.fetch(grouped, key) do
+          {:ok, {first, prior_refs}} ->
+            {order, Map.put(grouped, key, {first, MapSet.union(prior_refs, refs)})}
+
+          :error ->
+            {[key | order], Map.put(grouped, key, {item, refs})}
+        end
+      end)
+
+    order
+    |> Enum.reverse()
+    |> Enum.map(fn key ->
+      {item, refs} = Map.fetch!(grouped, key)
+
+      if MapSet.size(refs) > 1,
+        do: Map.put(item, "source_refs", Enum.sort(refs)),
+        else: item
+    end)
   end
 
   defp exact_prompt_evidence_budget(todos, now, opts) do
@@ -1400,7 +1432,9 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
 
   defp exact_source_refs(evidence) do
     evidence
-    |> Enum.map(&read_string(&1, "source_ref", nil))
+    |> Enum.flat_map(fn item ->
+      [read_string(item, "source_ref", nil) | read_list(item, "source_refs")]
+    end)
     |> Enum.reject(&is_nil/1)
     |> Enum.uniq()
     |> Enum.sort()
@@ -1506,6 +1540,7 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
       "text" => exact_string(item, "text", nil),
       "at" => read_string(item, "at", nil),
       "source_ref" => read_string(item, "source_ref", nil),
+      "source_refs" => read_list(item, "source_refs"),
       "source_item_id" => read_string(item, "source_item_id", nil),
       "target_source_item_id" => read_string(item, "target_source_item_id", nil),
       "thread_id" => read_string(item, "thread_id", nil),
@@ -1824,6 +1859,9 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
       weak to prove completion, leave the item open.
     - When unsure, leave the item open. Wrongly closing real work is worse
       than showing a finished item.
+    - An evidence item can list several source_refs when identical activity
+      appeared in multiple acquired messages. It is one activity with several
+      coverage references, not independent confirmations.
 
     OPEN_WORK_ITEMS_JSON:
     #{todos_json}
