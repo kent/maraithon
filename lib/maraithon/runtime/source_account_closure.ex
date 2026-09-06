@@ -102,36 +102,18 @@ defmodule Maraithon.Runtime.SourceAccountClosure do
     todo_batches = Enum.chunk_every(todo_snapshots, CrossSourceCompletion.max_todos_per_request())
     packed_partitions = pack_source_partitions(source_partitions)
 
-    case build_bounded_handoffs(todo_batches, packed_partitions, account, opts) do
-      {:ok, handoffs} ->
-        fanout_result(
-          account,
-          handoffs,
-          packed_partitions,
-          todo_batches,
-          watermarks,
-          source_refs,
-          todo_snapshots,
-          opts
-        )
-
-      {:error, _reason} when length(packed_partitions) < length(source_partitions) ->
-        with {:ok, handoffs} <-
-               build_bounded_handoffs(todo_batches, source_partitions, account, opts) do
-          fanout_result(
-            account,
-            handoffs,
-            source_partitions,
-            todo_batches,
-            watermarks,
-            source_refs,
-            todo_snapshots,
-            opts
-          )
-        end
-
-      {:error, _reason} = error ->
-        error
+    with {:ok, handoffs, bounded_partitions} <-
+           build_bounded_handoffs(todo_batches, packed_partitions, account, opts) do
+      fanout_result(
+        account,
+        handoffs,
+        bounded_partitions,
+        todo_batches,
+        watermarks,
+        source_refs,
+        todo_snapshots,
+        opts
+      )
     end
   end
 
@@ -224,12 +206,28 @@ defmodule Maraithon.Runtime.SourceAccountClosure do
               {:cont, {:ok, [bounded_handoff | handoffs]}}
 
             {:error, _reason} ->
-              {:halt, {:error, :source_closure_handoff_payload_too_large}}
+              {:halt, {:split, source_partition_index - 1, source_bundle}}
           end
       end)
       |> case do
-        {:ok, handoffs} -> {:ok, Enum.reverse(handoffs)}
-        {:error, _reason} = error -> error
+        {:ok, handoffs} ->
+          {:ok, Enum.reverse(handoffs), source_partitions}
+
+        {:split, partition_index, partition} ->
+          # Full handoffs include todo snapshots and coverage metadata as well
+          # as the source bundle. Split only the partition that exceeds those
+          # bounds, then rebuild the matrix with its final indices and counts.
+          with {:ok, split_partitions} <-
+                 SourceAccountDiscovery.split_partition_for_handoff(partition) do
+            bounded_partitions =
+              source_partitions
+              |> List.replace_at(partition_index, split_partitions)
+              |> List.flatten()
+
+            build_bounded_handoffs(todo_batches, bounded_partitions, account, opts)
+          else
+            {:error, _reason} -> {:error, :source_closure_handoff_payload_too_large}
+          end
       end
     end
   end

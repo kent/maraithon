@@ -324,7 +324,8 @@ defmodule Maraithon.Runtime.SourceAccountDiscovery do
     end
   end
 
-  defp split_partition_for_handoff(partition) do
+  @doc false
+  def split_partition_for_handoff(partition) do
     records = source_records(partition)
 
     if length(records) > 1 do

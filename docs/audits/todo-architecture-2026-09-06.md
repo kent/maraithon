@@ -547,9 +547,27 @@ for `kent@runner.now`, using the manual-first development policy.
     aliases as one activity, not independent confirmations; byte limits and
     todo coverage checks are unchanged. Log original and unique record counts.
     Status: implemented; `make build` passed. Live deduplication and model-call
-    reduction remain to verify. No tests were run. Deployment is waiting for
-    the currently staging Gmail acquisition to publish its child list so that
-    replacement does not strand an unpublished graph.
+    reduction remain to verify. No tests were run. Gmail acquisition
+    `993c7be3` published its child list by the 23:47 observation, so deployment
+    no longer needs to wait for that graph to finish staging.
+
+36. **One oversized closure handoff discards packing for the entire scan.**
+    Gmail acquisition `993c7be3` published 1,800 children for 290 source items
+    and 993 todos: 72 source partitions times 25 todo batches. The previous
+    280-item scan used eleven source partitions. Code inspection found an
+    all-or-nothing fallback: any packed handoff failure retries the complete
+    matrix with the original small discovery partitions. Packing checks the
+    source bundle alone; the full job also contains todo snapshots, references,
+    and fanout metadata. The production result suggests this fallback was
+    taken; the original payload failure was not logged.
+
+    Reuse discovery's existing source-record splitter for the offending
+    partition only, then rebuild the matrix with final indices and counts.
+    Other packed partitions stay packed, all source records remain covered,
+    and the existing durable payload bounds and replay fanout cap still apply.
+    A single unsplittable record still fails explicitly. Status: implemented;
+    `make build` passed, with no tests run under the manual-first policy.
+    Reduction in a newly acquired production graph remains to verify.
 
 ## Delivery state
 
