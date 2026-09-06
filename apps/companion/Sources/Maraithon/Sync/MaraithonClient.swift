@@ -141,51 +141,9 @@ struct MaraithonClient: Sendable {
         return try decoder.decode(RecallResponse.self, from: data)
     }
 
-    /// Lists Todos through the paired-device bearer surface. The server
-    /// derives the account from the token; the client never sends a user id.
-    func listTodos(
-        filter: TodoListFilter,
-        query: String? = nil
-    ) async throws -> CompanionTodosResponse {
-        var queryItems = [
-            URLQueryItem(name: "status", value: filter.rawValue),
-            URLQueryItem(name: "sort", value: filter == .active ? "rank" : "updated"),
-            URLQueryItem(name: "dir", value: "desc"),
-            URLQueryItem(name: "limit", value: "200"),
-            URLQueryItem(name: "include_cards", value: filter == .active ? "true" : "false"),
-            URLQueryItem(name: "open_cards_only", value: "true")
-        ]
-        if let query, !query.isEmpty {
-            queryItems.append(URLQueryItem(name: "q", value: query))
-        }
-
-        let request = try await makeRequest(
-            method: "GET",
-            path: "/api/v1/companion/todos",
-            body: nil,
-            queryItems: queryItems
-        )
-        let (data, response) = try await transport(request)
-        try Self.validate(response: response, data: data)
-        return try JSONDecoder().decode(CompanionTodosResponse.self, from: data)
-    }
-
-    /// Completes, dismisses, or reopens a Todo through the paired-device
-    /// least-privilege action surface.
-    func updateTodo(id: String, action: CompanionTodoAction) async throws -> CompanionTodoActionResponse {
-        let request = try await makeRequest(
-            method: "POST",
-            path: "/api/v1/companion/todos/\(id)/actions/\(action.rawValue)",
-            body: nil
-        )
-        let (data, response) = try await transport(request)
-        try Self.validate(response: response, data: data)
-        return try JSONDecoder().decode(CompanionTodoActionResponse.self, from: data)
-    }
-
     // MARK: - Request shaping
 
-    private func makeRequest(
+    func makeRequest(
         method: String,
         path: String,
         body: Data?,
@@ -219,7 +177,7 @@ struct MaraithonClient: Sendable {
         return request
     }
 
-    private static func validate(response: URLResponse, data: Data) throws {
+    static func validate(response: URLResponse, data: Data) throws {
         guard let http = response as? HTTPURLResponse else {
             throw MaraithonClientError.invalidResponse
         }
