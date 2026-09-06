@@ -106,6 +106,7 @@ defmodule Maraithon.Todos.CompletionSweep do
       |> where([todo], todo.user_id == ^user_id and todo.status in ^@open_statuses)
       |> maybe_scope_source_account(opts)
       |> maybe_scope_todo_ids(opts)
+      |> maybe_exclude_account_messages(opts)
       |> order_by([todo], asc_nulls_first: todo.last_completion_checked_at, asc: todo.id)
       |> limit(^limit)
       |> Repo.all()
@@ -155,6 +156,14 @@ defmodule Maraithon.Todos.CompletionSweep do
   end
 
   def run_for_user(_user_id, _opts), do: empty_user_summary(nil, 0)
+
+  defp maybe_exclude_account_messages(query, opts) do
+    if Keyword.get(opts, :skip_account_message_sources, false) do
+      where(query, [todo], todo.source != "gmail")
+    else
+      query
+    end
+  end
 
   defp maybe_scope_source_account(query, opts) do
     case Keyword.get(opts, :source_account_id) do

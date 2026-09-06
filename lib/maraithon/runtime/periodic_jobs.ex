@@ -48,6 +48,7 @@ defmodule Maraithon.Runtime.PeriodicJobs do
   @source_dependency_retry_ms 10_000
   @slack_reconciliation_fanout_spacing_seconds 6
   @slack_reconciliation_plan_cooldown_seconds 55
+  @completion_backstop_interval_seconds 30 * 60
 
   @token_job "runtime_partition:token_refresh"
   @watch_job "runtime_partition:watch_renewal"
@@ -1113,42 +1114,57 @@ defmodule Maraithon.Runtime.PeriodicJobs do
     account_cursor_key = "durable_todo_completion_accounts"
     account_cursor = load_account_cursor(account_cursor_key)
     accounts = todo_completion_accounts(batch_size, account_cursor)
-    cursor_key = "durable_todo_completion_legacy_sweep"
+    cursor_key = "durable_todo_completion_backstop"
     cursor = UserBatch.load_cursor(cursor_key)
 
-    legacy_users =
-      UserBatch.open_todo_user_ids_without_connected_source_account(after_user_id: cursor)
+    # Account deltas cover Gmail and Slack. Every user also needs calendar and
+    # companion evidence, even when they have one of those accounts connected.
+    users = UserBatch.open_todo_user_ids(after_user_id: cursor)
 
     with {:ok, account_count} <-
            enqueue_many(accounts, fn account ->
              enqueue_source_account_cycle(account, now)
            end),
-         {:ok, legacy_count} <-
-           enqueue_many(legacy_users, fn user_id ->
-             BackgroundJobs.enqueue(@todo_completion_job, %{
-               user_id: user_id,
-               queue: @model_queue,
-               dedupe_key: model_dedupe_key("todo_completion_legacy", user_id),
-               partition_key: tenant_partition(user_id),
-               rate_limit_key: "model",
-               max_attempts: 3,
-               scheduled_at: now,
-               payload: %{"user_id" => user_id, "partition_role" => "legacy"}
-             })
-           end) do
+         {:ok, backstop_count} <-
+           enqueue_many(users, &enqueue_completion_backstop(&1, now)) do
       result =
         {:ok,
          %{
            schedule: "todo_completion_sweep",
-           discovered: length(accounts) + length(legacy_users),
-           enqueued: account_count + legacy_count,
+           discovered: length(accounts) + length(users),
+           enqueued: account_count + backstop_count,
            account_partitions: account_count,
-           legacy_partitions: legacy_count
+           backstop_partitions: backstop_count
          }}
 
       result
-      |> record_cursor_after(cursor_key, legacy_users)
+      |> record_cursor_after(cursor_key, users)
       |> record_account_cursor_after(account_cursor_key, accounts)
+    end
+  end
+
+  defp enqueue_completion_backstop(user_id, now) do
+    cutoff = DateTime.add(now, -@completion_backstop_interval_seconds, :second)
+
+    recent? =
+      BackgroundJob
+      |> where([job], job.user_id == ^user_id and job.job_type == ^@todo_completion_job)
+      |> where([job], job.status in @active_statuses or job.inserted_at >= ^cutoff)
+      |> Repo.exists?()
+
+    if recent? do
+      {:skip, :completion_backstop_not_due}
+    else
+      BackgroundJobs.enqueue(@todo_completion_job, %{
+        user_id: user_id,
+        queue: @model_queue,
+        dedupe_key: model_dedupe_key("todo_completion_backstop", user_id),
+        partition_key: tenant_partition(user_id),
+        rate_limit_key: "model",
+        max_attempts: 3,
+        scheduled_at: now,
+        payload: %{"user_id" => user_id, "partition_role" => "backstop"}
+      })
     end
   end
 
@@ -1622,10 +1638,10 @@ defmodule Maraithon.Runtime.PeriodicJobs do
   defp execute_model(%BackgroundJob{job_type: @todo_completion_job} = job) do
     with {:ok, user_id} <- partition_user_id(job) do
       opts =
-        if Map.get(job.payload || %{}, "partition_role") == "legacy" do
-          [source_account_unassigned?: true]
-        else
-          []
+        case Map.get(job.payload || %{}, "partition_role") do
+          "backstop" -> [skip_account_message_sources: true]
+          "legacy" -> [source_account_unassigned?: true]
+          _other -> []
         end
 
       TodoCompletionSweep.run_for_user(user_id, opts) |> normalize_work_result()

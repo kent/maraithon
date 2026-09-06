@@ -38,7 +38,20 @@ defmodule Maraithon.Runtime.TodoCompletionSweep do
       run_for_user_exhaustive(user_id, opts)
     else
       deterministic = CompletionSweep.run_for_user(user_id, opts)
-      Map.put(deterministic, :cross_source, run_cross_source_user(user_id, opts))
+
+      # A nested error would look like a successful job to the durable runner
+      # and suppress retries until the next backstop interval.
+      case run_cross_source_user(user_id, opts) do
+        {:error, _reason} = error ->
+          error
+
+        cross_source ->
+          if deterministic.errors == 0 and deterministic.fetch_errors == 0 do
+            Map.put(deterministic, :cross_source, cross_source)
+          else
+            {:error, :completion_sweep_incomplete}
+          end
+      end
     end
   rescue
     error ->
@@ -496,6 +509,7 @@ defmodule Maraithon.Runtime.TodoCompletionSweep do
         :source_bundle_fetcher,
         :source_timeout_ms,
         :source_skill_config,
+        :skip_account_message_sources,
         :source_account_id,
         :source_account_unassigned?,
         :source_scope,

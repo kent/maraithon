@@ -614,7 +614,8 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
         event: nil,
         # An explicit evidence sweep, not a scheduled scan — keep the deep
         # lookback window (SPEC 04 R2 caps scheduled scans to 48h).
-        acquisition_deep_lookback: true
+        acquisition_deep_lookback: true,
+        skip_account_message_sources: Keyword.get(opts, :skip_account_message_sources, false)
       }
       |> maybe_put_context_source_scope(Keyword.get(opts, :source_scope))
 
