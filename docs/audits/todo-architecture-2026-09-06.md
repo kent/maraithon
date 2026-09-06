@@ -149,7 +149,30 @@ for `kent@runner.now`, using the manual-first development policy.
     role. Retry transient health transport/HTTP failures up to twice, and avoid
     an additional traffic update when the service already sends 100% to the
     latest revision. Retain the response-content check and a bounded retry
-    window. Status: shell syntax verified locally; delivery pending.
+    window. Status: shell syntax verified; deployed in successful workflow
+    `34055535413`, revision `maraithon-00201-srb`.
+
+12. **Lease-loss cleanup skips reserved tasks and can strand a partition.**
+    The 19:46:54 UTC snapshot isolated a new reserved, never-entered assignment
+    `e398451c-7524-4eb8-9903-63663b0f57c8` on partition 31, epoch 166. Its
+    expired node `b75c14e2-28c0-4dff-8a6e-2606f8c565c4` records the hosting
+    revision `maraithon-00200-zm4`. Cleanup tried a running-only termination
+    transition for reservations, then skipped the guardian when that failed.
+    Route every local assignment through its exact guardian; it already
+    persists never-activated proof or atomic termination intent plus monitored
+    proof. Attempt all identities even when one proof must retry. Avoid repeating
+    the already-completed workload-drain phases during normal shutdown.
+
+    The same recovery showed a node expiry after slow coordination work.
+    Refresh node, partition, and leader ownership before planning whenever
+    preparation consumed a renewal interval. Reject expired provider-entry
+    attempts with an ordinary authority-loss result before the trigger rejects
+    them. Status: implemented locally; `make build` passed; deployment pending.
+
+    The Chief of Staff's three-failure guard tripped at 19:25:29 UTC and left it
+    stopped. Its normal explicit start action checks that prior leases,
+    operations, processing directives, and termination incidents are clear before
+    resetting the guard. Restart and sustained cycle verification remain pending.
 
 ## Delivery state
 

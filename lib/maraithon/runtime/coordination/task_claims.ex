@@ -159,7 +159,10 @@ defmodule Maraithon.Runtime.Coordination.TaskClaims do
         """
         provider_boundary = 'entered', updated_at = timezone('UTC', clock_timestamp())
         """,
-        "state = 'running' AND provider_boundary = 'not_entered'",
+        """
+        state = 'running' AND provider_boundary = 'not_entered' AND
+        lease_expires_at > timezone('UTC', clock_timestamp())
+        """,
         :ready
       )
     end

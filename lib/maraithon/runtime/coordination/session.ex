@@ -315,27 +315,53 @@ defmodule Maraithon.Runtime.Coordination.Session do
   end
 
   defp ready_cycle(state) do
+    started_at = System.monotonic_time(:millisecond)
+    state = renew_ownership(state)
+
+    if state.phase == :ready do
+      prepare_and_plan(state, started_at)
+    else
+      state
+    end
+  end
+
+  defp renew_ownership(%{phase: phase} = state) when phase != :ready, do: state
+
+  defp renew_ownership(state) do
     with {:renew_node, {:ok, %NodeIncarnation{} = session}} <-
            {:renew_node, Authority.renew_node(state.session, state.node_ttl_ms)},
          {:renew_partitions, {:ok, _partitions}} <-
            {:renew_partitions, Authority.renew_partitions(session, state.partition_ttl_ms)} do
-      state = %{state | session: session} |> refresh_leader()
-
-      case publish_preparing_partitions(session) do
-        :ok ->
-          _ = drain_revoked_partitions(session)
-
-          case TaskClaims.reconcile_proven(10) do
-            {:ok, _results} -> state |> refresh_leader() |> plan_partitions()
-            _error -> fail_closed(state, :reconcile_proven)
-          end
-
-        {:error, :partition_publish_failed} ->
-          fail_closed(state, :publish_partition)
-      end
+      %{state | session: session} |> refresh_leader()
     else
       {:renew_node, _error} -> fail_closed(state, :renew_node)
       {:renew_partitions, _error} -> fail_closed(state, :renew_partitions)
+    end
+  end
+
+  defp prepare_and_plan(state, started_at) do
+    case publish_preparing_partitions(state.session) do
+      :ok ->
+        _ = drain_revoked_partitions(state.session)
+
+        case TaskClaims.reconcile_proven(10) do
+          {:ok, _results} ->
+            # Recovery can spend a whole renewal interval publishing partitions
+            # or settling proofs. Refresh every ownership lease before another
+            # planner batch; renewing only leadership leaves the node to expire.
+            state =
+              if System.monotonic_time(:millisecond) - started_at >= state.tick_ms,
+                do: renew_ownership(state),
+                else: state
+
+            plan_partitions(state)
+
+          _error ->
+            fail_closed(state, :reconcile_proven)
+        end
+
+      {:error, :partition_publish_failed} ->
+        fail_closed(state, :publish_partition)
     end
   end
 
@@ -499,7 +525,9 @@ defmodule Maraithon.Runtime.Coordination.Session do
     case Authority.begin_node_drain(session) do
       {:ok, :draining} ->
         terminate_local_agents()
-        drain_revoked_partitions(%{session | state: "draining", ready_at: nil})
+        # begin_node_drain already revoked each partition's workload. Terminate
+        # its exact local tasks without repeating those database drain phases.
+        terminate_local_tasks(session)
         _ = TaskClaims.reconcile_proven(100)
 
         # PostgreSQL refuses revocation while any local task lacks its proof;
@@ -572,19 +600,19 @@ defmodule Maraithon.Runtime.Coordination.Session do
         where: a.state in ["reserved", "running", "termination_requested"],
         order_by: a.id
     )
-    |> Enum.each(fn assignment ->
-      assignment =
-        if assignment.state in ["reserved", "running"] do
-          case TaskClaims.request_termination(assignment) do
-            {:ok, requested} -> requested
-            _ -> assignment
-          end
-        else
-          assignment
-        end
+    |> Enum.each(&terminate_local_assignment/1)
+  rescue
+    _ -> :blocked
+  catch
+    :exit, _ -> :blocked
+  end
 
-      if assignment.state == "termination_requested", do: terminate_exact_task(assignment)
-    end)
+  defp terminate_local_assignment(assignment) do
+    # A reserved task cannot use the running-only termination-request transition.
+    # The guardian records never-activated proof for reservations, or atomically
+    # requests termination and records monitored proof for an activated task.
+    # Keep attempting the other exact identities if one proof must retry.
+    terminate_exact_task(assignment)
   rescue
     _ -> :blocked
   catch
