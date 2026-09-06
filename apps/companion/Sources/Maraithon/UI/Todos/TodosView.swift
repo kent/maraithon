@@ -31,8 +31,13 @@ struct TodosView: View {
             TodoDetailView(
                 todo: activeTodo,
                 isWorking: activeTodo.map { store.pendingActionIDs.contains($0.id) } ?? false,
+                isLoadingDetails: activeTodo.map { store.loadingDetailIDs.contains($0.id) } ?? false,
+                detailError: activeTodoID.flatMap { store.detailErrors[$0] },
                 primaryAction: { performPrimaryAction(store: store) },
-                dismissAction: { perform(.dismiss, store: store) }
+                dismissAction: { perform(.dismiss, store: store) },
+                retryDetails: {
+                    if let todo = activeTodo { Task { await store.loadDetails(for: todo) } }
+                }
             )
             .inspectorColumnWidth(
                 min: Tokens.Layout.todoInspectorMinWidth,
@@ -51,6 +56,10 @@ struct TodosView: View {
         }
         .onChange(of: store.todos.map(\.id)) { _, _ in
             reconcileSelection(store.todos)
+        }
+        .task(id: inspectorShown ? "\(activeTodoID ?? ""):\(store.lastUpdatedAt?.timeIntervalSinceReferenceDate ?? 0)" : nil) {
+            guard inspectorShown, let todo = activeTodo else { return }
+            await store.loadDetails(for: todo)
         }
     }
 

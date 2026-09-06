@@ -87,6 +87,8 @@ struct CompanionTodoActionCard: Codable, Hashable, Sendable {
     let nextBestAction: String?
     let draftPreview: String?
     let sourceContext: String?
+    let evidenceExcerpt: String?
+    let sourceAction: CompanionTodoSourceAction?
 
     enum CodingKeys: String, CodingKey {
         case headline
@@ -95,7 +97,32 @@ struct CompanionTodoActionCard: Codable, Hashable, Sendable {
         case nextBestAction = "next_best_action"
         case draftPreview = "draft_preview"
         case sourceContext = "source_context"
+        case evidenceExcerpt = "evidence_excerpt"
+        case sourceAction = "source_action"
     }
+}
+
+struct CompanionTodoSourceAction: Codable, Hashable, Sendable {
+    let openURL: String?
+    let openLabel: String?
+    let draftText: String?
+
+    enum CodingKeys: String, CodingKey {
+        case openURL = "open_url"
+        case openLabel = "open_label"
+        case draftText = "draft_text"
+    }
+
+    var destination: URL? {
+        guard let openURL, let url = URL(string: openURL),
+              let scheme = url.scheme?.lowercased(),
+              ["https", "http", "slack", "sms"].contains(scheme) else { return nil }
+        return url
+    }
+}
+
+struct CompanionTodoDetailsResponse: Codable, Sendable {
+    let todo: CompanionTodo
 }
 
 struct CompanionTodosResponse: Codable, Sendable {

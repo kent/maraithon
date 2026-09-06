@@ -52,7 +52,7 @@ extension MaraithonClient {
             URLQueryItem(name: "dir", value: "desc"),
             URLQueryItem(name: "limit", value: "200"),
             URLQueryItem(name: "offset", value: String(offset)),
-            URLQueryItem(name: "include_cards", value: filter == .active ? "true" : "false"),
+            URLQueryItem(name: "include_cards", value: "false"),
             URLQueryItem(name: "open_cards_only", value: "true")
         ]
         if let query, !query.isEmpty {
@@ -68,6 +68,21 @@ extension MaraithonClient {
         let (data, response) = try await transport(request)
         try Self.validate(response: response, data: data)
         return try JSONDecoder().decode(CompanionTodosResponse.self, from: data)
+    }
+
+    /// Fetches richer source context only for the item being inspected.
+    func todoDetails(id: String) async throws -> CompanionTodoDetailsResponse {
+        let request = try await makeRequest(
+            method: "GET",
+            path: "/api/v1/companion/todos/\(id)",
+            body: nil,
+            queryItems: [URLQueryItem(name: "include_cards", value: "true")]
+        )
+        let (data, response) = try await transport(request)
+        try Self.validate(response: response, data: data)
+        let details = try JSONDecoder().decode(CompanionTodoDetailsResponse.self, from: data)
+        guard details.todo.id == id else { throw MaraithonClientError.invalidResponse }
+        return details
     }
 
     /// Completes, dismisses, or reopens a Todo through the paired-device

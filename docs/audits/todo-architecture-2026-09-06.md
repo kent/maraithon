@@ -240,7 +240,10 @@ for `kent@runner.now`, using the manual-first development policy.
     Preserve due-time admission, FIFO within each type, tenant quotas, urgent
     nudge/push precedence, and every execution-partition/task fence.
     Status: implemented in `40f630f9`; `make build` passed; workflow
-    `34059463117` deployed successfully. Live workload rotation remains to verify.
+    `34059463117` deployed revision `maraithon-00206-f8l`. At 21:01:45 UTC,
+    durable workload watermarks covered eight job types. Since 20:56, discovery,
+    closure, completion backstop, ingestion, and brief generation all completed
+    work, proving rotation across the catch-up backlog.
 
 18. **A drained process can rejoin after a later coordination error.**
     A database-side drain stopped node `d31038e4` from owning partitions, but
@@ -251,15 +254,38 @@ for `kent@runner.now`, using the manual-first development policy.
     drain intent as a non-admitting `drain_pending` phase; observe a draining
     node on renewal, retry cleanup without leadership, and only allow explicit
     rejoin after drain completes. Retain the exact local proof and task fences.
-    Status: implemented; `make build` passed; deployment pending.
+    Status: implemented in `9ce17d46`; `make build` passed; workflow
+    `34059647528` deployed `maraithon-00207-8zf` successfully at 21:02:37 UTC.
+
+19. **The Mac bulk list fetches rich context it only needs in the inspector.**
+    Request base todos for every list page and fetch one action card when its
+    inspector opens. Preserve complete-list replacement, protect detail results
+    against selection/refresh races, and display source evidence, the original
+    source link, and a copyable suggested reply. `swift build` and the signed
+    `make deploy-companion` build passed. Manual inspection showed 953 active
+    items and loaded Gmail context in 0.324 seconds. A normal refresh took
+    6.792 seconds, versus the earlier 37.305-second refresh with bulk cards;
+    refreshing with the inspector open correctly reloaded its context.
+    No todo was changed and no reply was sent during inspection.
+
+20. **Local source cursor checks repeatedly deserialize the whole cursor.**
+    The first Mac refresh still took 24.891 seconds. Its first HTTP page took
+    0.986 seconds, but page two began about 20.6 seconds after page one.
+    Calendar and Contacts scans completed during that gap. Both source loops
+    call `shouldPush` for every record; each call reads and rebuilds the entire
+    UserDefaults cursor on the main actor (4,213 calendar occurrences against
+    6,899 cursor entries, plus 2,166 contacts). Snapshot each cursor once per
+    cycle while retaining advancement only after acknowledged ingestion.
+    Status: identified; implementation pending.
 
 ## Delivery state
 
-Current server: `maraithon-00205-lj6`, code through `7e13bea0`, deployed by
-successful workflow `34059096574`. Current iPhone release: TestFlight `1.0.1`
+Current server: `maraithon-00207-8zf`, code through `9ce17d46`, deployed by
+successful workflow `34059647528`. Current iPhone release: TestFlight `1.0.1`
 build `20260906200907`, code through `26191c62`, available to Founders via
 workflow `34057077032`. The signed local Mac development app is installed at
-`~/Applications/Maraithon.app`; its 20:33 UTC refresh showed 941 active items.
+`~/Applications/Maraithon.app`; its 21:07 UTC refresh showed 953 active items
+in 6.792 seconds with lazy source context.
 No public Sparkle release was made.
 
 
@@ -472,3 +498,15 @@ that connection, immediately followed by the old instance's SIGTERM at
 20:58:16 UTC. This establishes that revision absence alone was not physical
 termination evidence. No new incident attestation was recorded. Post-shutdown
 ownership and proof cleanup remain to verify.
+
+
+At 21:01:45 UTC (`maraithon-todo-validation-lprfk`), all 64 partitions were
+ready/live on revision 206. No retired 202 node retained a live lease or owned
+partitions; only its six previously recorded ambiguous outcomes remained.
+The Chief held a live lease on 206, completed two new Effects, and persisted
+an idle snapshot at 21:00:42. All 1,118 outcome-known Effects had matching
+evidence. Three tasks were running and no task awaited termination. The
+independent completion backstop and Agent ingestion both completed around
+20:59. Closure/discovery cursors still awaited full coverage. Revision 207's
+post-deployment health observation is pending in execution
+`maraithon-todo-validation-k6gj7`.

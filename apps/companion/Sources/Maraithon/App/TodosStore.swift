@@ -19,6 +19,8 @@ final class TodosStore {
     private(set) var phase: Phase = .idle
     private(set) var pendingActionIDs: Set<String> = []
     private(set) var lastUpdatedAt: Date?
+    private(set) var loadingDetailIDs: Set<String> = []
+    private(set) var detailErrors: [String: String] = [:]
 
     var filter: TodoListFilter = .active
     var query: String = ""
@@ -27,6 +29,7 @@ final class TodosStore {
     private let eventLog: EventLog
     private let unauthorizedHandler: UnauthorizedHandler
     private var loadGeneration = 0
+    private var detailRequestTokens: [String: UUID] = [:]
 
     init(
         client: MaraithonClient,
@@ -63,6 +66,7 @@ final class TodosStore {
             guard generation == loadGeneration else { return }
 
             todos = response.todos
+            detailErrors = [:]
             lastUpdatedAt = Date()
             phase = .loaded
             eventLog.info(
@@ -85,6 +89,42 @@ final class TodosStore {
                 source: .cloud,
                 payload: ["error": String(describing: error)]
             )
+        }
+    }
+
+    func loadDetails(for todo: CompanionTodo) async {
+        guard todo.actionCard == nil else { return }
+        let generation = loadGeneration
+        let requestToken = UUID()
+        detailRequestTokens[todo.id] = requestToken
+        loadingDetailIDs.insert(todo.id)
+        detailErrors.removeValue(forKey: todo.id)
+        eventLog.debug("todos.details_started", source: .cloud, payload: ["todo_id": todo.id])
+
+        defer {
+            if detailRequestTokens[todo.id] == requestToken {
+                detailRequestTokens.removeValue(forKey: todo.id)
+                loadingDetailIDs.remove(todo.id)
+            }
+        }
+
+        do {
+            let response = try await client.todoDetails(id: todo.id)
+            try Task.checkCancellation()
+            guard generation == loadGeneration,
+                  detailRequestTokens[todo.id] == requestToken,
+                  todos.first(where: { $0.id == todo.id }) == todo else { return }
+            apply(response.todo)
+            eventLog.debug("todos.details_finished", source: .cloud, payload: ["todo_id": todo.id])
+        } catch MaraithonClientError.unauthorized {
+            guard !Task.isCancelled, generation == loadGeneration,
+                  detailRequestTokens[todo.id] == requestToken else { return }
+            rejectToken()
+        } catch {
+            guard !Task.isCancelled, generation == loadGeneration,
+                  detailRequestTokens[todo.id] == requestToken else { return }
+            detailErrors[todo.id] = CompanionErrorCopy.message(for: error)
+            eventLog.warning("todos.details_failed", source: .cloud, payload: ["todo_id": todo.id])
         }
     }
 
@@ -136,6 +176,9 @@ final class TodosStore {
         loadGeneration += 1
         todos = []
         pendingActionIDs = []
+        loadingDetailIDs = []
+        detailErrors = [:]
+        detailRequestTokens = [:]
         lastUpdatedAt = nil
         phase = .idle
         filter = .active
