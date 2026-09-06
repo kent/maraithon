@@ -33,6 +33,7 @@ defmodule Maraithon.Runtime.PeriodicJobs do
   alias Maraithon.Runtime.SlackSourceReplay
   alias Maraithon.Runtime.SlackConversationReconciler
   alias Maraithon.Runtime.SourceAccountAdmission
+  alias Maraithon.Runtime.SourceGraphCleanup
   alias Maraithon.Runtime.TodoCompletionSweep
   alias Maraithon.Runtime.TokenRefresher
   alias Maraithon.Runtime.WatchRenewer
@@ -285,9 +286,13 @@ defmodule Maraithon.Runtime.PeriodicJobs do
       |> where([child], child.status in ["failed", "cancelled"])
       |> Repo.exists?()
 
-    if failed?,
-      do: {:error, {:discard, :source_graph_abandoned}},
-      else: execute_model(job)
+    if failed? do
+      with {:ok, _cancelled} <- SourceGraphCleanup.cancel_unclaimed(job, ids) do
+        {:error, {:discard, :source_graph_abandoned}}
+      end
+    else
+      execute_model(job)
+    end
   end
 
   defp source_graph_parent_type(type)

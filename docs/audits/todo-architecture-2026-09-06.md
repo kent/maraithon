@@ -495,6 +495,21 @@ for `kent@runner.now`, using the manual-first development policy.
     action advice or reply controls. Reopen remained available. Returned the
     app to the unfiltered Active list (993 items). No tests were run.
 
+33. **Failed source graphs release model slots one child at a time.** At
+    23:30 UTC, Gmail's abandoned graphs still retained 289 and 506 pending
+    children. Only thirteen children cleared in two minutes, delaying fresh
+    scans even though those graphs can no longer advance a cursor.
+
+    A running sibling now cancels up to 64 unclaimed children in one short transaction. It rechecks a terminal sibling failure,
+    retains the User privacy fence, and proves its exact task lease before and
+    after the writes. Candidates must still be pending with no claim identity
+    or assignment; locked rows are skipped. Running tasks, previously assigned
+    retries, completed results, and ambiguous outcomes retain their normal
+    settlement path. A 500 ms lock timeout lets a later sibling retry cleanup
+    rather than holding up lease renewal behind another writer.
+    Status: implemented; compile passed. Deployment and live cancellation
+    counts remain to verify. No tests were run under the manual-first policy.
+
 ## Delivery state
 
 Current server: `maraithon-00215-64f`, code through `8f4d5f35`, deployed by
@@ -917,3 +932,19 @@ read/locking 13.61%, and partition renewal 2.78%. Expensive storage verification
 was not in the top twelve. Discovery continued advancing; closure watermarks
 still lagged. The larger Slack batches averaged 309 seconds, motivating
 finding 31 rather than a claim of improved latency.
+
+
+Execution `maraithon-todo-validation-nvp6z` completed successfully at 23:32:28.
+Its 23:28 and 23:30 samples retained all 64 ready/live partitions on revision
+215, with no new restart-guard crash or task awaiting termination. Discovery
+cursors continued advancing. At 23:30, Slack replacement acquisition
+`ab0bea85-bbd1-4bc8-b39a-f4ec258a9e67` had two completed, three running, and
+20 pending children. Both completed batches checked all 40 todos against 476
+source items in nine calls, with complete coverage and no fetch/evaluation
+error. Closure catch-up remained incomplete.
+
+The preparation log appeared on revision 215, but its numeric fields were
+silently excluded by the closed safe-metadata schema. Use the existing
+approved numeric keys instead: `candidate_count` (todos), `item_count`
+(evidence), `count` (chunks), and `duration_ms` (packing time). This exposes
+only counts and duration, with no source content or schema expansion.
