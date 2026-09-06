@@ -204,8 +204,8 @@ defmodule Maraithon.Runtime.PeriodicJobs do
         } = job
       ) do
     case source_graph_publication_status(job) do
-      :ready ->
-        execute_model(job)
+      {:ready, result} ->
+        execute_source_graph_model(job, result)
 
       :pending ->
         {:ok, %{outcome: "waiting_for_graph_publication"},
@@ -213,6 +213,26 @@ defmodule Maraithon.Runtime.PeriodicJobs do
 
       {:error, reason} ->
         {:error, {:discard, reason}}
+    end
+  end
+
+  def execute(%BackgroundJob{queue: @model_queue, job_type: type} = job)
+      when type in [@source_discovery_reason_job, @todo_account_closure_reason_job] do
+    # Older graphs predate staged publication, but their completed acquisition
+    # still names every child. Avoid spending model capacity on their remaining
+    # children once a terminal failure has made finalization impossible.
+    with {:ok, %BackgroundJob{status: "completed"} = acquisition} <-
+           source_graph_acquisition(job),
+         acquisition <- BackgroundJob.hydrate_payloads(acquisition),
+         result <- acquisition.result || %{},
+         true <- published_source_graph_child?(job, result) do
+      execute_source_graph_model(job, result)
+    else
+      {:ok, %BackgroundJob{status: status}} when status in ["failed", "cancelled"] ->
+        {:error, {:discard, :source_graph_parent_failed}}
+
+      _legacy ->
+        execute_model(job)
     end
   end
 
@@ -224,17 +244,14 @@ defmodule Maraithon.Runtime.PeriodicJobs do
   # transaction publishes the complete child-ID list; no staged child may do
   # model work or advance a cursor before that publication commits.
   defp source_graph_publication_status(job) do
-    with {:ok, acquisition_id} <- payload_string(job, "acquisition_job_id"),
-         %BackgroundJob{} = acquisition <- Repo.get(BackgroundJob, acquisition_id),
-         true <- acquisition.user_id == job.user_id,
-         true <- acquisition.job_type == source_graph_parent_type(job.job_type) do
+    with {:ok, acquisition} <- source_graph_acquisition(job) do
       case acquisition.status do
         "completed" ->
           acquisition = BackgroundJob.hydrate_payloads(acquisition)
           result = acquisition.result || %{}
 
           if published_source_graph_child?(job, result),
-            do: :ready,
+            do: {:ready, result},
             else: {:error, :source_graph_child_not_published}
 
         status when status in @active_statuses ->
@@ -246,6 +263,31 @@ defmodule Maraithon.Runtime.PeriodicJobs do
     else
       _invalid -> {:error, :source_graph_parent_invalid}
     end
+  end
+
+  defp source_graph_acquisition(job) do
+    with {:ok, acquisition_id} <- payload_string(job, "acquisition_job_id"),
+         %BackgroundJob{} = acquisition <- Repo.get(BackgroundJob, acquisition_id),
+         true <- acquisition.user_id == job.user_id,
+         true <- acquisition.job_type == source_graph_parent_type(job.job_type) do
+      {:ok, acquisition}
+    else
+      _invalid -> {:error, :source_graph_parent_invalid}
+    end
+  end
+
+  defp execute_source_graph_model(job, result) do
+    ids = List.wrap(result["reason_job_ids"]) ++ List.wrap(result["finalizer_job_id"])
+
+    failed? =
+      BackgroundJob
+      |> where([child], child.user_id == ^job.user_id and child.id in ^ids)
+      |> where([child], child.status in ["failed", "cancelled"])
+      |> Repo.exists?()
+
+    if failed?,
+      do: {:error, {:discard, :source_graph_abandoned}},
+      else: execute_model(job)
   end
 
   defp source_graph_parent_type(type)

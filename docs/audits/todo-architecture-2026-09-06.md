@@ -340,6 +340,23 @@ for `kent@runner.now`, using the manual-first development policy.
     `34062219205` successfully deployed revision `maraithon-00209-mw8` at
     21:53 UTC. Fresh sustained processing evidence is pending.
 
+24. **Failed source graphs keep consuming model capacity.**
+    Execution `maraithon-todo-validation-gnrlk` confirmed that Gmail acquisition
+    `2029a98b` had four ambiguous children and a failed finalizer, yet 21 children
+    were pending and one was running. Slack acquisition `845cd582` likewise had
+    17 ambiguous children, a failed finalizer, eight pending children, and two
+    running children. These graphs cannot finalize, but their old reasoning
+    jobs keep blocking healthy newer work and fresh recovery cycles.
+
+    Before model execution, check the completed acquisition's published child
+    and finalizer IDs for a terminal failure. Settle remaining work as
+    `source_graph_abandoned` through the ordinary exact runner, without a model
+    call. Apply this to staged graphs and older graphs with a proven child list.
+    Preserve ambiguous outcomes, completed results, and cursors. The recurring
+    scheduler can admit a fresh cycle when the abandoned work has cleared.
+    Status: implemented; `make build` passed. Tests were not run under the
+    manual-first policy. Deployment and live abandonment are pending.
+
 ## Delivery state
 
 Current server: `maraithon-00209-mw8`, code through `6ed443ba`, deployed by
