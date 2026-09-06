@@ -52,8 +52,13 @@ struct CalendarCursor: @unchecked Sendable {
     /// timestamp. (Always re-pushing nil-dated rows sounds safe but
     /// wastes a batch slot every cycle, and under a batch cap the
     /// rows sorted after them can be starved forever.)
-    func shouldPush(guid: String, modifiedAt: Date?) -> Bool {
-        guard let last = snapshot[guid] else { return true }
+    /// A scan passes one prior snapshot to avoid deserializing it per event.
+    func shouldPush(
+        guid: String,
+        modifiedAt: Date?,
+        since priorSnapshot: [String: Date]? = nil
+    ) -> Bool {
+        guard let last = (priorSnapshot ?? snapshot)[guid] else { return true }
         guard let modifiedAt else { return false }
         return modifiedAt > last
     }

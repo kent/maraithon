@@ -199,8 +199,9 @@ final class ContactsSource: SourceProtocol {
             try await reader.fetchAllContacts()
         }.value
 
+        let priorSnapshot = cursor.snapshot
         let candidates = snapshots.filter {
-            cursor.shouldPush(guid: $0.guid, payloadHash: $0.payloadHash)
+            cursor.shouldPush(guid: $0.guid, payloadHash: $0.payloadHash, since: priorSnapshot)
         }
         let sortedCandidates = candidates.sorted {
             let left = $0.displayName ?? $0.organizationName ?? $0.guid

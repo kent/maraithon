@@ -30,9 +30,14 @@ struct ContactsCursor: @unchecked Sendable {
         return out
     }
 
-    func shouldPush(guid: String, payloadHash: String) -> Bool {
+    /// A scan passes one prior snapshot to avoid deserializing it per contact.
+    func shouldPush(
+        guid: String,
+        payloadHash: String,
+        since priorSnapshot: [String: String]? = nil
+    ) -> Bool {
         guard !guid.isEmpty, !payloadHash.isEmpty else { return true }
-        return snapshot[guid] != payloadHash
+        return (priorSnapshot ?? snapshot)[guid] != payloadHash
     }
 
     func advance(_ entries: [(guid: String, payloadHash: String)]) {

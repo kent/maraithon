@@ -276,7 +276,11 @@ for `kent@runner.now`, using the manual-first development policy.
     UserDefaults cursor on the main actor (4,213 calendar occurrences against
     6,899 cursor entries, plus 2,166 contacts). Snapshot each cursor once per
     cycle while retaining advancement only after acknowledged ingestion.
-    Status: identified; implementation pending.
+    Status: each scan now reuses a single cursor snapshot. Existing single-item
+    callers retain their behavior, and acknowledged batches still advance the
+    persisted cursor. `swift build` and signed `make deploy-companion` passed.
+    The 21:09 startup fetched all 953 todos in 7.098 seconds; Calendar and
+    Contacts retained the same scanned/tracked counts without new uploads.
 
 ## Delivery state
 
@@ -285,7 +289,8 @@ successful workflow `34059647528`. Current iPhone release: TestFlight `1.0.1`
 build `20260906200907`, code through `26191c62`, available to Founders via
 workflow `34057077032`. The signed local Mac development app is installed at
 `~/Applications/Maraithon.app`; its 21:07 UTC refresh showed 953 active items
-in 6.792 seconds with lazy source context.
+in 6.792 seconds with lazy source context. The subsequent cursor optimization
+loaded all 953 items in 7.098 seconds on startup at 21:09 UTC.
 No public Sparkle release was made.
 
 
@@ -508,5 +513,16 @@ an idle snapshot at 21:00:42. All 1,118 outcome-known Effects had matching
 evidence. Three tasks were running and no task awaited termination. The
 independent completion backstop and Agent ingestion both completed around
 20:59. Closure/discovery cursors still awaited full coverage. Revision 207's
-post-deployment health observation is pending in execution
-`maraithon-todo-validation-k6gj7`.
+post-deployment observation (`maraithon-todo-validation-k6gj7`, successful)
+followed at 21:08:06 UTC: all 64 partitions were ready/live on node `c7f08a86`,
+the Chief held a live lease, three tasks were running, and none awaited
+termination. The restart guard had no new crash since 20:18 and no recovery
+requirement. All 18 recurring schedules had no persisted error. Slack discovery
+advanced again at 21:03:15; Gmail and closure cursors still lagged. Since 21:02,
+six discovery reasoning jobs, five closure reasoning jobs, and seven briefs
+completed. Pending work included 58 discovery jobs and 81 briefs. The next Chief
+wakeup was due at 21:10:42 and checkpoint at 21:13:15, so fresh periodic-cycle
+proof on 207 remains outstanding. Between the 21:01 and 21:08 observations,
+expensive verification accounted for about 2.53% of query execution time and
+node renewal 7.71%. Cloud SQL recorded no error after the deployment through
+the 21:08 log check.

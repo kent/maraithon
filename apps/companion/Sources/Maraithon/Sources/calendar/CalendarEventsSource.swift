@@ -265,10 +265,10 @@ final class CalendarEventsSource: SourceProtocol {
 
         // Diff against the cursor: only re-push rows whose
         // lastModifiedDate is strictly newer than the persisted one.
-        // Events without a modifiedAt always push — fresh sighting from
-        // EventKit's perspective.
+        // Events without a modifiedAt push only on their first sighting.
+        let priorSnapshot = cursor.snapshot
         let candidates = snapshots.filter { snap in
-            cursor.shouldPush(guid: snap.guid, modifiedAt: snap.modifiedAt)
+            cursor.shouldPush(guid: snap.guid, modifiedAt: snap.modifiedAt, since: priorSnapshot)
         }
         // Newest-modified first so the most relevant events ship before
         // historical ones. Events without `modifiedAt` sort to the tail;
