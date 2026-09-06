@@ -430,8 +430,12 @@ for `kent@runner.now`, using the manual-first development policy.
     20-todo handoffs stay valid; newly acquired graphs use the shared limit.
     Status: implemented in `cf6b6cc0`; `make build` passed. Tests were not run
     under the manual-first policy. Workflow `34065190230` successfully deployed
-    revision `maraithon-00213-vbb` with 100% traffic. Measured improvement remains
-    pending.
+    revision `maraithon-00213-vbb` with 100% traffic. On revision 214, the first
+    three fresh Slack batches each checked 40 todos against 472 source items
+    in nine model calls, with complete coverage and no evaluation/fetch error.
+    The preceding Slack sample checked 20 todos against 468 items in 13 calls.
+    This demonstrates fewer calls per todo, but does not establish a latency
+    improvement; time before and during model execution still needs profiling.
 
 30. **One source account monopolizes its model-workload turn.** At 23:00 UTC,
     execution `maraithon-todo-validation-wf5kw` observed Gmail account 2 using
@@ -447,13 +451,37 @@ for `kent@runner.now`, using the manual-first development policy.
     with the exact reservation under the existing tenant lock. This preserves
     tenant quotas, job-type fairness, due-time admission, execution partitions,
     and task fences; it adds no ownership table or permission change.
+    Status: implemented in `b5722b36`; `make build` passed. Tests were not run
+    under the manual-first policy. Workflow `34065675520` successfully deployed
+    revision `maraithon-00214-47d`, serving 100% of traffic. Execution `xr547`
+    observed closure starts for accounts 2, 1, and 6 at 23:06:03, 23:06:07, and
+    23:06:10 respectively. Gmail account 1 completed its first batch at
+    23:07:00. Slack's last abandoned child cleared and its replacement acquired
+    a 25-batch graph at 23:06:51. Account rotation is verified; source catch-up
+    remains in progress.
+
+31. **Exact prompt packing repeatedly rebuilds the whole request.** Execution
+    `maraithon-todo-validation-t4g6s` measured the first three 40-todo Slack
+    batches at 309 seconds on average, versus 107 seconds for the preceding
+    fifteen 20-todo batches. Fewer model calls did not translate into faster
+    processing. Inspection found that both evidence splitting and candidate
+    packing rebuilt the todo projection, serialized the growing prompt, and
+    parsed its evidence JSON for every candidate item.
+
+    Compute the empty-request budget once, measure each evidence fragment's
+    exact outer JSON escaping once, and accumulate fragment/separator sizes
+    in one pass. Preserve fragment order, UTF-8 splitting, source-reference
+    coverage, and the existing complete-request check before every model call.
+    Emit a preparation-time/count log for each successfully packed batch so
+    further latency analysis can distinguish preparation from model execution.
     Status: implemented; `make build` passed. Tests were not run under the
-    manual-first policy. Deployment and live account-rotation proof are pending.
+    manual-first policy. Deployment and preparation-time measurements remain
+    pending.
 
 ## Delivery state
 
-Current server: `maraithon-00213-vbb`, code through `cf6b6cc0`, deployed by
-successful workflow `34065190230`. Current iPhone release: TestFlight `1.0.1`
+Current server: `maraithon-00214-47d`, code through `b5722b36`, deployed by
+successful workflow `34065675520`. Current iPhone release: TestFlight `1.0.1`
 build `20260906211723`, code through `871e245c`, available to Founders via
 workflow `34060595850`. The signed local Mac development app, code through
 `caa7f517`, is installed at `~/Applications/Maraithon.app`. Live checks verified
@@ -812,3 +840,30 @@ a minute of the observation. Closure watermarks still lagged on September 2
 (Gmail) and September 5 (Slack). Fresh closure cycles, automatic-completion
 provenance, and sustained post-deploy processing remain outstanding. The
 `62hsg` observation execution was still running at the 22:41 status check.
+
+Execution `maraithon-todo-validation-62hsg` completed successfully at 22:44:39.
+The subsequent watch, `maraithon-todo-validation-wf5kw`, completed successfully
+at 23:00:36. Revision 212 persisted its scheduled checkpoint at 22:47:49 and
+ran its next wakeup at 22:50:31, completing two Effects by 22:50:58. No Cloud SQL
+error was recorded from 22:37 through the deployment handoff.
+
+The packing change deployed successfully in workflow `34065190230`, revision
+`maraithon-00213-vbb`. The Chief recovered at 22:55:11. All 64 partitions were
+ready/live on the same node (`2ff4f1ac`) at 22:56, 22:58, and 23:00, with no new
+restart-guard crash. At 23:00 there were three running tasks and none awaiting
+termination; all 1,136 outcome-known Effects had matching exact evidence.
+
+Eight Gmail account 2 batches had completed on 213. Sampled results covered
+all 20 requested todos, used four to eight model calls for 12–41 source items,
+and had no fetch/evaluation error. Those already-published handoffs retain
+their original batch size. Their evidence differs from the prior Slack
+samples, so this is successful processing evidence, not a measured speedup.
+Gmail account 1 still had 550 pending children. Slack's two deployment-
+interrupted children retained ambiguous outcomes, 32 further children had
+settled as abandoned, and one remained pending; its finalizer was failed.
+This remaining account-level starvation motivated finding 30.
+
+Discovery cursors continued advancing, while closure cursors still lagged.
+No fresh automatic completion was recorded. A new observation execution,
+`maraithon-todo-validation-xr547`, was submitted to observe account rotation
+and subsequent closure processing; it was starting at 23:03 UTC.

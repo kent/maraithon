@@ -1284,67 +1284,105 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
   defp exact_acknowledgement_resolution?(_todo, _resolution, _evidence), do: false
 
   defp partition_exact_prompt_evidence(user_id, todos, evidence, now, opts) do
-    with {:ok, fragments} <-
-           split_exact_prompt_evidence(user_id, todos, evidence, now, opts),
-         {:ok, chunks} <- pack_exact_prompt_evidence(user_id, todos, fragments, now, opts),
+    started_at = System.monotonic_time(:millisecond)
+
+    with {:ok, budget} <- exact_prompt_evidence_budget(todos, now, opts),
+         {:ok, fragments} <- split_exact_prompt_evidence(evidence, budget),
+         {:ok, chunks} <- pack_exact_prompt_evidence(fragments, budget),
          :ok <- validate_exact_partition_refs(evidence, chunks) do
+      Logger.info("Cross-source exact prompt prepared",
+        user_fingerprint: Maraithon.Redaction.fingerprint(user_id),
+        todo_count: length(todos),
+        evidence_items: length(evidence),
+        prompt_chunks: length(chunks),
+        preparation_ms: System.monotonic_time(:millisecond) - started_at
+      )
+
       {:ok, chunks}
     end
   end
 
-  defp split_exact_prompt_evidence(user_id, todos, evidence, now, opts) do
-    Enum.reduce_while(evidence, {:ok, []}, fn item, {:ok, fragments} ->
-      case split_exact_prompt_item(user_id, todos, item, now, opts) do
-        {:ok, item_fragments} -> {:cont, {:ok, fragments ++ item_fragments}}
+  defp exact_prompt_evidence_budget(todos, now, opts) do
+    todos_json = todos |> Enum.map(&prompt_todo/1) |> Jason.encode!()
+
+    base_bytes =
+      todos_json
+      |> render_prompt("[]", now, Keyword.get(opts, :exhaustive_completion, false))
+      |> prompt_request_bytes()
+
+    if base_bytes <= @max_prompt_bytes,
+      do: {:ok, @max_prompt_bytes - base_bytes},
+      else: {:error, {:prompt_base_exceeds_budget, base_bytes, @max_prompt_bytes}}
+  end
+
+  defp split_exact_prompt_evidence(evidence, budget) do
+    evidence
+    |> Enum.reduce_while({:ok, []}, fn item, {:ok, groups} ->
+      case split_exact_prompt_item(item, budget) do
+        {:ok, fragments} -> {:cont, {:ok, [fragments | groups]}}
         {:error, _reason} = error -> {:halt, error}
       end
     end)
-  end
-
-  defp split_exact_prompt_item(user_id, todos, item, now, opts) when is_map(item) do
-    case build_prompt(user_id, todos, [item], now, opts) do
-      {:ok, _prompt} ->
-        {:ok, [item]}
-
-      {:error, {:prompt_base_exceeds_budget, _actual, _limit}} = error ->
-        error
-
-      {:error, _reason} ->
-        with text when is_binary(text) <- exact_string(item, "text", nil),
-             {:ok, left, right} <- split_utf8_text(text),
-             {:ok, left_fragments} <-
-               split_exact_prompt_item(user_id, todos, Map.put(item, "text", left), now, opts),
-             {:ok, right_fragments} <-
-               split_exact_prompt_item(user_id, todos, Map.put(item, "text", right), now, opts) do
-          {:ok, left_fragments ++ right_fragments}
-        else
-          _invalid -> exact_item_budget_error(item)
-        end
+    |> case do
+      {:ok, groups} -> {:ok, groups |> Enum.reverse() |> List.flatten()}
+      {:error, _reason} = error -> error
     end
   end
 
-  defp split_exact_prompt_item(_user_id, _todos, item, _now, _opts),
+  defp split_exact_prompt_item(item, budget) when is_map(item) do
+    bytes = exact_evidence_request_bytes(item)
+
+    if bytes <= budget do
+      {:ok, [{item, bytes}]}
+    else
+      with text when is_binary(text) <- exact_string(item, "text", nil),
+           {:ok, left, right} <- split_utf8_text(text),
+           {:ok, left_fragments} <- split_exact_prompt_item(Map.put(item, "text", left), budget),
+           {:ok, right_fragments} <- split_exact_prompt_item(Map.put(item, "text", right), budget) do
+        {:ok, left_fragments ++ right_fragments}
+      else
+        _invalid -> exact_item_budget_error(item)
+      end
+    end
+  end
+
+  defp split_exact_prompt_item(item, _budget),
     do: exact_item_budget_error(item)
 
-  defp pack_exact_prompt_evidence(user_id, todos, fragments, now, opts) do
+  # Evidence is JSON embedded in the request's content string. Encoding each
+  # item as a string measures its outer escaping exactly; remove only that
+  # string's two enclosing quotes. Array brackets are already in the empty
+  # prompt, and each separator adds one byte. The final build_prompt/5 check
+  # still verifies the complete serialized request before every model call.
+  defp exact_evidence_request_bytes(item) do
+    item
+    |> compact_exact_prompt_evidence_item()
+    |> Jason.encode!()
+    |> PromptStability.encode!()
+    |> byte_size()
+    |> Kernel.-(2)
+  end
+
+  defp pack_exact_prompt_evidence(fragments, budget) do
     fragments
-    |> Enum.reduce_while({:ok, [], []}, fn fragment, {:ok, chunks, current} ->
-      candidate = current ++ [fragment]
+    |> Enum.reduce_while({:ok, [], [], 0}, fn {fragment, bytes},
+                                              {:ok, chunks, current, current_bytes} ->
+      candidate_bytes = current_bytes + bytes + if(current == [], do: 0, else: 1)
 
-      case build_prompt(user_id, todos, candidate, now, opts) do
-        {:ok, _prompt} ->
-          {:cont, {:ok, chunks, candidate}}
+      cond do
+        candidate_bytes <= budget ->
+          {:cont, {:ok, chunks, [fragment | current], candidate_bytes}}
 
-        {:error, _reason} when current != [] ->
-          {:cont, {:ok, chunks ++ [current], [fragment]}}
+        current != [] and bytes <= budget ->
+          {:cont, {:ok, [Enum.reverse(current) | chunks], [fragment], bytes}}
 
-        {:error, _reason} ->
+        true ->
           {:halt, exact_item_budget_error(fragment)}
       end
     end)
     |> case do
-      {:ok, chunks, []} -> {:ok, chunks}
-      {:ok, chunks, current} -> {:ok, chunks ++ [current]}
+      {:ok, chunks, [], _bytes} -> {:ok, Enum.reverse(chunks)}
+      {:ok, chunks, current, _bytes} -> {:ok, Enum.reverse([Enum.reverse(current) | chunks])}
       {:error, _reason} = error -> error
     end
   end
