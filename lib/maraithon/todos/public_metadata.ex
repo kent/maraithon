@@ -182,6 +182,7 @@ defmodule Maraithon.Todos.PublicMetadata do
   # Substring-matching the key blocklist here vetoed normal business
   # language ("400-agent brokerage", "credit score", "20% discount").
   @internal_value_terms ~w(llm stacktrace source_backed source_health dedupe_key tracking_key)
+  @internal_value_pattern ~r/(?<![\p{L}\p{N}_])(?:#{Enum.map_join(@internal_value_terms, "|", &Regex.escape/1)})(?![\p{L}\p{N}_])/iu
 
   @internal_label_pattern ~r/\b(?:confidence|score|reasoning|rationale|model|prompt|metadata|threshold|heuristic)\s*[:=]\s*\S/iu
   @internal_model_confidence_pattern ~r/\b(?:the\s+model|model\s+score)\b.*\b\d+\s*%/iu
@@ -192,10 +193,6 @@ defmodule Maraithon.Todos.PublicMetadata do
     Regex.match?(~r/^\s*[\{\[]\s*"/u, normalized) or
       Regex.match?(@internal_label_pattern, value) or
       Regex.match?(@internal_model_confidence_pattern, value) or
-      Enum.any?(@internal_value_terms, &value_term_present?(normalized, &1))
-  end
-
-  defp value_term_present?(text, term) do
-    Regex.match?(~r/(?<![\p{L}\p{N}_])#{Regex.escape(term)}(?![\p{L}\p{N}_])/iu, text)
+      Regex.match?(@internal_value_pattern, normalized)
   end
 end

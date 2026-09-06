@@ -142,9 +142,10 @@ defmodule Maraithon.ActionCards do
   def for_todo(%Todo{} = todo, opts) when is_list(opts) do
     todo = polish_todo_copy(todo)
     metadata = todo.metadata || %{}
+    public_metadata = PublicMetadata.todo(metadata)
     profile = AttentionRanker.profile(todo)
-    quality = SurfaceQuality.assess(todo)
-    context_pack = context_pack(todo, metadata, profile)
+    quality = SurfaceQuality.assess(todo, attention_profile: profile)
+    context_pack = context_pack(todo, metadata, profile, public_metadata)
     attention_mode = card_attention_mode(todo, profile)
     source_health = source_health_snapshot(todo.user_id, todo, profile, opts)
 
@@ -157,7 +158,8 @@ defmodule Maraithon.ActionCards do
         "headline" => headline(todo, context_pack, attention_mode),
         "decision_prompt" => decision_prompt(todo, context_pack, attention_mode),
         "rank_reason" => rank_reason(profile),
-        "why_now" => why_now(todo, metadata, profile, attention_mode, opts, context_pack),
+        "why_now" =>
+          why_now(todo, metadata, profile, attention_mode, opts, context_pack, public_metadata),
         "context_pack" => context_pack,
         "next_best_action" => next_best_action(todo, attention_mode),
         "prepared_actions" => prepared_actions(todo, profile),
@@ -165,7 +167,7 @@ defmodule Maraithon.ActionCards do
         "available_buttons" => available_buttons(todo, attention_mode),
         "estimated_effort" => estimated_effort(todo),
         "attention_mode" => attention_mode,
-        "confidence" => confidence(metadata, quality, source_health),
+        "confidence" => confidence(metadata, quality, source_health, public_metadata),
         "source_health" => source_health,
         "created_from" => created_from(metadata),
         "quality" => quality
@@ -418,7 +420,7 @@ defmodule Maraithon.ActionCards do
 
   defp public_context_string(_value), do: nil
 
-  defp context_pack(%Todo{} = todo, metadata, profile) do
+  defp context_pack(%Todo{} = todo, metadata, profile, public_metadata) do
     record = read_map(metadata, "record")
     person_context = first_person_context(metadata)
 
@@ -479,7 +481,7 @@ defmodule Maraithon.ActionCards do
       "source_evidence" => source_evidence(todo, metadata, record),
       "related_open_loops" => [],
       "last_interaction" => last_interaction(todo, metadata),
-      "confidence_reason" => confidence_reason(metadata),
+      "confidence_reason" => confidence_reason(public_metadata),
       "missing_context" => missing_context(todo, metadata, person)
     }
   end
@@ -631,7 +633,7 @@ defmodule Maraithon.ActionCards do
 
   defp useful_source_decision_label?(_source), do: false
 
-  defp why_now(todo, _metadata, profile, "stale_check", _opts, _context) do
+  defp why_now(todo, _metadata, profile, "stale_check", _opts, _context, _public_metadata) do
     age_days = read_field(profile, "age_days")
 
     cond do
@@ -646,9 +648,7 @@ defmodule Maraithon.ActionCards do
     end
   end
 
-  defp why_now(todo, metadata, profile, _attention_mode, opts, context) do
-    public_metadata = PublicMetadata.todo(metadata)
-
+  defp why_now(todo, metadata, profile, _attention_mode, opts, context, public_metadata) do
     first_present([
       read_string(public_metadata, "why_now"),
       read_string(public_metadata, "why_it_matters"),
@@ -929,7 +929,7 @@ defmodule Maraithon.ActionCards do
     end
   end
 
-  defp confidence(metadata, quality, source_health) do
+  defp confidence(metadata, quality, source_health, public_metadata) do
     explicit = read_string(metadata, "confidence") || read_string(metadata, "scope_confidence")
     source_issue? = read_field(source_health, "blocking_gaps") |> List.wrap() |> Enum.any?()
 
@@ -945,7 +945,7 @@ defmodule Maraithon.ActionCards do
     %{
       "level" => level,
       "reason" =>
-        confidence_reason(metadata) ||
+        confidence_reason(public_metadata) ||
           "Based on saved work, evidence, and available context."
     }
   end
@@ -1282,9 +1282,7 @@ defmodule Maraithon.ActionCards do
     ])
   end
 
-  defp confidence_reason(metadata) do
-    public_metadata = PublicMetadata.todo(metadata)
-
+  defp confidence_reason(public_metadata) do
     first_present([
       read_string(public_metadata, "why_it_matters"),
       read_string(public_metadata, "why_now")

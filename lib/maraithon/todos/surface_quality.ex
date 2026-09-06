@@ -36,10 +36,13 @@ defmodule Maraithon.Todos.SurfaceQuality do
   @doc """
   Returns a compact scorecard for a todo or serialized todo map.
   """
-  def assess(todo_or_map) do
+  def assess(todo_or_map, opts \\ []) do
     todo = todo_map(todo_or_map)
     metadata = read_map(todo, "metadata")
-    profile = attention_profile(todo_or_map, todo)
+
+    profile =
+      Keyword.get_lazy(opts, :attention_profile, fn -> attention_profile(todo_or_map, todo) end)
+
     named_person? = named_person?(todo, metadata, profile)
     familiar? = familiar_relationship?(metadata, profile)
 
