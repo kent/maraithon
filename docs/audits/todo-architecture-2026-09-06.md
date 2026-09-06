@@ -335,14 +335,15 @@ for `kent@runner.now`, using the manual-first development policy.
     existing state, epoch, action-token, and database-clock expiry checks;
     expired incarnations still cannot be revived. This removes avoidable lease
     loss from the two renewal waits, but does not claim that arbitrary lock
-    starvation is impossible. Status: implemented; `make build` passed. Tests
-    were not run under the manual-first policy. Deployment and fresh sustained
-    processing evidence are pending.
+    starvation is impossible. Status: implemented in `6ed443ba`; `make build`
+    passed. Tests were not run under the manual-first policy. Workflow
+    `34062219205` successfully deployed revision `maraithon-00209-mw8` at
+    21:53 UTC. Fresh sustained processing evidence is pending.
 
 ## Delivery state
 
-Current server: `maraithon-00208-tvb`, code through `49ab9b6b`, deployed by
-successful workflow `34061363751`. Current iPhone release: TestFlight `1.0.1`
+Current server: `maraithon-00209-mw8`, code through `6ed443ba`, deployed by
+successful workflow `34062219205`. Current iPhone release: TestFlight `1.0.1`
 build `20260906211723`, code through `871e245c`, available to Founders via
 workflow `34060595850`. The signed local Mac development app is installed at
 `~/Applications/Maraithon.app`; its 21:07 UTC refresh showed 953 active items
@@ -625,3 +626,48 @@ Agent lease at 21:43:33. The Chief's guard recorded one new crash, and Gmail
 closure acquisition `1f5d8240` became `provider_outcome_ambiguous`. Source
 catch-up, graph publication, and fresh automatic-completion provenance remain
 outstanding. The ten-minute lock watch completed successfully at 21:48:35.
+
+At 21:52:39 UTC, execution `maraithon-todo-validation-zxlc5` confirmed the
+failed node's stored deadline was 21:42:28.854226, calculated at
+21:41:58.854227 before its renewal lock wait completed. Normal recovery had
+since restored all 64 ready/live partitions on revision 208; the Chief recovered
+at 21:47:29, completed two Effects, and had matching evidence for all 1,124
+outcome-known Effects. No task awaited termination. The workload still included
+41 pending discovery reasoning jobs and 26 pending closure reasoning jobs.
+No new staged graph or fresh automatic-completion provenance was visible.
+
+Revision 209 recovered the Chief at 21:54:32 UTC. The observation execution
+`maraithon-todo-validation-4w6j6` saw all 64 partitions ready/live on the same
+node (`d07d5487`) at 21:55, 21:57, 21:59, and 22:01, with no new restart-guard
+crash. Gmail closure acquisition `20ced29a` published 336 reasoning jobs and
+completed at 21:56:26, demonstrating that large graphs now finish preparation
+without the old long transaction. The scheduled Chief wakeup fired at 21:57:28
+and completed two Effects by 21:58:16. Its next checkpoint remains to observe.
+
+Execution `maraithon-todo-validation-64w64` inspected 12 completed closure
+jobs. Each covered all 20 requested todos with no fetch/evaluation error and
+found no supported closure. The sampled Slack batches each used nine model
+calls for 411–415 source items, explaining part of catch-up latency. This proves
+successful negative decisions, not a fresh automatic completion. Over the
+21:59:07–22:01:07 query window, PostgreSQL spent 5.08 seconds executing queries
+in total. The largest query accounted for 12.03%; the node write-lock query
+accounted for 9.4%, and partition renewal for 4.92%. Expensive verification was
+not among the top 12 queries. The execution completed successfully at 22:01:13.
+
+The installed Mac app refreshed from 953 to 958 active items at 21:55 UTC.
+Opening a todo loaded its source excerpt, Gmail link, suggested reply, and
+actions successfully. No todo was completed, dismissed, or replied to during
+this inspection; the app was left on its refreshed list.
+
+The watch completed successfully at 22:05:42 UTC. Its final observation at
+22:05:38 retained all 64 ready/live partitions on the same revision-209 node,
+with a live Chief lease, no new guard crash, four running tasks, and nothing
+awaiting termination. The scheduled checkpoint persisted at 22:04:32.512192;
+all 1,126 outcome-known Effects had matching exact evidence. Four sampled
+new Gmail children carried `parent_completion_v1` and belonged to their
+completed parent's published 336-child list. They were still pending, so
+execution of those new children remains to observe. At this point 25 discovery
+reasoning jobs and 348 closure reasoning jobs were pending. Gmail account 2
+discovery advanced at 22:04:40; Gmail account 1 discovery and all closure
+cursors still lagged. Automatic completion with fresh provenance is still
+unproven. These are remaining product outcomes, despite the improved runtime.
