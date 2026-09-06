@@ -1109,15 +1109,18 @@ struct MobileAPIClient: Sendable {
     /// `MobileAPIError.notModified` is thrown. Follow-up pages are never
     /// conditional. Old servers that lack pagination return no `pagination`
     /// key; that single response is treated as the complete set.
+    /// A page consumer receives smaller batches so refreshed work is usable
+    /// while later pages, with their full decision context, are still loading.
     func listTodos(
         sessionToken: String,
         includeCards: Bool,
-        conditional: Bool
+        conditional: Bool,
+        onPage: (@MainActor @Sendable ([RemoteTodo]) async throws -> Void)? = nil
     ) async throws -> TodoListing {
-        let pageSize = 500
+        let pageSize = onPage == nil ? 500 : 200
         // Hard cap keeps a misbehaving endpoint (e.g. one that ignores offset)
-        // from looping forever; 10 pages x 500 is far beyond any real queue.
-        let maxPages = 10
+        // from looping forever without lowering the existing 5,000-item bound.
+        let maxPages = 5_000 / pageSize
         var offset = 0
         var todos: [RemoteTodo] = []
 
@@ -1135,6 +1138,8 @@ struct MobileAPIClient: Sendable {
                 responseType: TodosResponse.self
             )
 
+            try Task.checkCancellation()
+            try await onPage?(response.todos)
             todos.append(contentsOf: response.todos)
 
             // No pagination object -> old server; the response is the full set.

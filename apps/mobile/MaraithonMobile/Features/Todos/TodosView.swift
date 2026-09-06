@@ -36,6 +36,14 @@ struct TodosView: View {
             VStack(spacing: 0) {
                 TodoFilterStrip(selection: $filter, counts: lists.counts)
 
+                if isRefreshing {
+                    ProgressView("Refreshing work")
+                        .controlSize(.small)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
+                }
+
                 if let refreshErrorMessage {
                     SyncIssueBanner(
                         message: refreshErrorMessage,
@@ -56,7 +64,7 @@ struct TodosView: View {
                 }
 
                 List {
-                    if lists.filtered.isEmpty {
+                    if lists.filtered.isEmpty && !isRefreshing {
                         ContentUnavailableView(
                             emptyState.title,
                             systemImage: emptyState.systemImage,

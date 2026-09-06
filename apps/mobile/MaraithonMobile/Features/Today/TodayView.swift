@@ -44,6 +44,12 @@ struct TodayView: View {
         let snapshot = self.snapshot ?? TodaySnapshot(todos: todos)
         NavigationStack {
             List {
+                if isRefreshing {
+                    ProgressView("Refreshing work")
+                        .controlSize(.small)
+                        .listRowSeparator(.hidden)
+                }
+
                 if let refreshErrorMessage {
                     Section {
                         SyncIssueBanner(

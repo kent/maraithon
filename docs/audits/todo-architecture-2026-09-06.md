@@ -282,6 +282,20 @@ for `kent@runner.now`, using the manual-first development policy.
     The 21:09 startup fetched all 953 todos in 7.098 seconds; Calendar and
     Contacts retained the same scanned/tracked counts without new uploads.
 
+21. **Mobile hides refreshed work until every rich-card page has arrived.**
+    Today and Todos need card fields for their decision filters, so dropping
+    cards from their list would change the product. Stream 200-item pages into
+    SwiftData as they arrive, retaining full cards and the existing 5,000-item
+    bound. Show a refresh indicator while later pages remain. Reconcile absent
+    rows and retain the collection validator only after complete pagination;
+    interrupted or capped listings retain useful pages and require another
+    fetch. Reject late pages after sign-out, ignore rows older than local edits,
+    and preserve locally created/changed items during deletion reconciliation.
+    Validation: iOS 26.4 iPhone 17 simulator build passed. No project regeneration
+    or schema change was needed. The app launched to sign-in; authenticated
+    paging was not exercised locally because this simulator has no saved session.
+    Tests were not run under the manual-first policy. TestFlight delivery pending.
+
 ## Delivery state
 
 Current server: `maraithon-00207-8zf`, code through `9ce17d46`, deployed by
@@ -526,3 +540,15 @@ proof on 207 remains outstanding. Between the 21:01 and 21:08 observations,
 expensive verification accounted for about 2.53% of query execution time and
 node renewal 7.71%. Cloud SQL recorded no error after the deployment through
 the 21:08 log check.
+
+
+At 21:13:46 UTC (`maraithon-todo-validation-z26vr`, successful), revision 207
+still held all 64 ready/live partitions. Its scheduled wakeup fired at
+21:10:43.484417, completed two Effects by 21:11:27, and created a checkpoint
+at 21:13:15.590830. No new restart-guard crash was recorded. Discovery backlog
+fell from 58 pending jobs at 21:08 to 24; briefs fell from 81 to 55. At 21:16:29
+(`maraithon-todo-validation-xxsdc`), only one discovery reasoning job remained
+pending, along with 38 briefs. However, Gmail account 1 closure repeatedly
+references discovery acquisition `e5a82073`, whose finalizer failed. Discovery
+and all closure cursors for that account still lag. This is a failed dependency
+that needs inspection, not proof that catch-up has completed.

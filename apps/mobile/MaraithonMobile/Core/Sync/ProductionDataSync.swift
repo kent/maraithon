@@ -28,6 +28,10 @@ enum ProductionDataSync {
         force: Bool = false
     ) async throws {
         guard let sessionToken = sessionStore.user?.sessionToken else { return }
+        let originalVersions = Dictionary(
+            try modelContext.fetch(FetchDescriptor<TodoItem>()).map { ($0.id, $0.updatedAt) },
+            uniquingKeysWith: { first, _ in first }
+        )
 
         // The first page supplies a validator for the entire collection. Keep it
         // only after every page has been fetched and the local merge is saved;
@@ -44,30 +48,71 @@ enum ProductionDataSync {
             listing = try await MobileAPIClient().listTodos(
                 sessionToken: sessionToken,
                 includeCards: includeCards,
-                conditional: !force
+                conditional: !force,
+                onPage: { page in
+                    try await mergeTodoPage(
+                        page,
+                        sessionStore: sessionStore,
+                        sessionToken: sessionToken,
+                        modelContext: modelContext,
+                        includeCards: includeCards
+                    )
+                }
             )
         } catch MobileAPIError.notModified {
             // The server vouched the collection is unchanged; skip the merge
             // and the save entirely.
+            try Task.checkCancellation()
+            guard sessionStore.user?.sessionToken == sessionToken else { throw CancellationError() }
             keepValidator = true
             return
         }
-        let remoteTodos = listing.todos
+        try Task.checkCancellation()
+        guard sessionStore.user?.sessionToken == sessionToken else { throw CancellationError() }
+        guard listing.isComplete else {
+            throw MobileAPIError.server("The work list is incomplete. Refresh to try again.")
+        }
+
+        // Absence is meaningful only after the complete collection arrives.
+        // Keep items created or changed locally while pagination was in flight.
+        let seenRemoteIDs = Set(listing.todos.compactMap { UUID(uuidString: $0.id) })
+        let localTodos = try modelContext.fetch(FetchDescriptor<TodoItem>())
+        for todo in localTodos where !seenRemoteIDs.contains(todo.id) &&
+            originalVersions[todo.id] == todo.updatedAt {
+            modelContext.delete(todo)
+        }
+
+        try modelContext.save()
+        keepValidator = listing.isComplete
+    }
+
+    /// Save each page before requesting the next. Partial progress stays useful,
+    /// but only refreshTodos can retain a validator or reconcile absent rows.
+    private static func mergeTodoPage(
+        _ remoteTodos: [MobileAPIClient.RemoteTodo],
+        sessionStore: SessionStore,
+        sessionToken: String,
+        modelContext: ModelContext,
+        includeCards: Bool
+    ) async throws {
+        try Task.checkCancellation()
+        guard sessionStore.user?.sessionToken == sessionToken else { throw CancellationError() }
 
         // All regex-heavy string cleaning runs off the main actor; the loop
         // below only assigns precomputed values to @Model objects.
         let preparedTodos = await Task.detached(priority: .userInitiated) {
             prepare(remoteTodos)
         }.value
+        try Task.checkCancellation()
+        guard sessionStore.user?.sessionToken == sessionToken else { throw CancellationError() }
 
         let localTodos = try modelContext.fetch(FetchDescriptor<TodoItem>())
         let localByID = Dictionary(localTodos.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let localContacts = try modelContext.fetch(FetchDescriptor<CRMContact>())
         let contactsByID = Dictionary(localContacts.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        var seenRemoteIDs = Set<UUID>()
-
         for prepared in preparedTodos {
-            seenRemoteIDs.insert(prepared.id)
+            if let local = localByID[prepared.id], let updatedAt = prepared.updatedAt,
+               updatedAt < local.updatedAt { continue }
 
             guard prepared.keep else {
                 if let todo = localByID[prepared.id] {
@@ -83,16 +128,7 @@ enum ProductionDataSync {
             }
         }
 
-        // Reconcile deletions only against a complete listing; a capped
-        // (truncated) listing may omit live remote rows.
-        if listing.isComplete {
-            for todo in localTodos where !seenRemoteIDs.contains(todo.id) {
-                modelContext.delete(todo)
-            }
-        }
-
         try modelContext.save()
-        keepValidator = listing.isComplete
     }
 
     static func refreshPeople(
