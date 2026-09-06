@@ -198,13 +198,24 @@ for `kent@runner.now`, using the manual-first development policy.
     therefore prevented a full scheduled skill cycle. Preserve an earlier
     active wakeup within the periodic scope, atomically cancelling duplicates;
     still allow an earlier deadline and preserve unrelated one-shot scopes.
-    Status: implemented; `make build` passed. Deployment and live periodic
-    cycle verification remain pending.
+    Status: implemented in `cb580599`; `make build` passed. Workflow
+    `34057595625` deployed `maraithon-00203-llz` successfully. Live periodic
+    cycle verification remains pending.
+
+15. **A source-event backlog delays already-delivered maintenance and scans.**
+    At 20:19:21 UTC, checkpoint and heartbeat jobs due at 20:05 and 20:10 were
+    delivered as durable Directives but still pending. At 20:22:21, 46 source
+    events remained queued behind work from 19:21. Strict global oldest-first
+    selection delays maintenance until the whole backlog drains. After eight
+    ordinary directives, give the oldest due scheduled directive a turn, then
+    resume ordinary selection. Keep all queued events and existing exact
+    claim/settlement fences. Status: implemented; `make build` passed;
+    deployment and live maintenance verification pending.
 
 ## Delivery state
 
-Current server: `maraithon-00202-fg4`, code through `03765c85`, deployed by
-successful workflow `34056034289`. Current iPhone release: TestFlight `1.0.1`
+Current server: `maraithon-00203-llz`, code through `cb580599`, deployed by
+successful workflow `34057595625`. Current iPhone release: TestFlight `1.0.1`
 build `20260906200907`, code through `26191c62`, available to Founders via
 workflow `34057077032`. The signed local Mac development app is installed at
 `~/Applications/Maraithon.app`; direct UI inspection showed 627 active items.
@@ -345,3 +356,19 @@ were scheduled ahead without persisted errors. Source cursors still awaited
 complete graph coverage. No application errors were recorded on the current
 revision between the Agent recovery and the 20:16 check. The moving periodic
 wakeup described in finding 14 prevents calling the full loop verified yet.
+
+
+At 20:19:21 UTC (`maraithon-todo-validation-98fj6`), Gmail account 2 discovery
+had advanced at 20:14:44 and Slack discovery at 20:14:58. Open todos increased
+to 942, with fresh source-backed discovery through 20:14:51. The second incident
+assignment settled normally at 19:55:52 as `cancelled_before_provider`.
+
+This sample also disproved sustained health: Cloud SQL reported another expired
+node revival at 20:18:39 after a background task held a connection for 30 seconds.
+This happened before the wakeup-fix deployment began. The runtime failed closed,
+recorded one Agent crash, and settled four interrupted jobs as ambiguous instead
+of inventing outcomes. No reserved task remained stranded; all 64 partitions
+were ready/live again at 20:22:21. Execution
+`maraithon-todo-validation-xcxn7` watches live database blockers to isolate the
+remaining long transaction. Gmail account 1 and all closure cursors remain to
+catch up, and full periodic work remains unverified.

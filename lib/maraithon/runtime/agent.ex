@@ -50,6 +50,7 @@ defmodule Maraithon.Runtime.Agent do
   @min_exact_activation_timeout_ms 1_000
   @directive_poll_interval_ms 5_000
   @max_deferred_messages 200
+  @max_ordinary_directive_burst 8
   @periodic_wakeup_scope {"_schedule_key", "agent_periodic_wakeup"}
   @periodic_wakeup_opts [include_legacy_empty_payload: true, preserve_earlier: true]
 
@@ -87,6 +88,7 @@ defmodule Maraithon.Runtime.Agent do
     :guard_generation,
     :lease_ttl_ms,
     :lease_renew_interval_ms,
+    ordinary_directive_burst: 0,
     exact_owner?: false,
     exact_activated?: false,
     clean_shutdown?: false
@@ -1103,12 +1105,19 @@ defmodule Maraithon.Runtime.Agent do
   end
 
   defp claim_and_activate_directive(data) do
-    case AgentDirectives.claim_next(data.agent_id, data.user_id, data.owner_token) do
+    opts = [prefer_scheduled: data.ordinary_directive_burst >= @max_ordinary_directive_burst]
+
+    case AgentDirectives.claim_next(data.agent_id, data.user_id, data.owner_token, opts) do
       {:ok, nil} ->
         {:keep_state, data}
 
       {:ok, directive} ->
-        activate_claimed_directive(data, directive)
+        burst =
+          if directive.kind == "scheduled_wakeup",
+            do: 0,
+            else: min(data.ordinary_directive_burst + 1, @max_ordinary_directive_burst)
+
+        activate_claimed_directive(%{data | ordinary_directive_burst: burst}, directive)
 
       {:error, reason} when reason in [:node_authority_lost, :partition_authority_lost] ->
         if durable_authority_draining?(data) do

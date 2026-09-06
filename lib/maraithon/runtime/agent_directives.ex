@@ -116,7 +116,7 @@ defmodule Maraithon.Runtime.AgentDirectives do
             nil
 
           :available ->
-            case lock_next_due(agent_id) do
+            case lock_next_due(agent_id, Keyword.get(opts, :prefer_scheduled, false)) do
               nil ->
                 nil
 
@@ -1020,8 +1020,8 @@ defmodule Maraithon.Runtime.AgentDirectives do
     update!(directive, failure_attrs(directive, now, retry_delay_ms, "timeout"))
   end
 
-  defp lock_next_due(agent_id) do
-    Repo.one(
+  defp lock_next_due(agent_id, prefer_scheduled?) do
+    query =
       from(directive in AgentDirective,
         where: directive.agent_id == ^agent_id,
         where: directive.status == "pending",
@@ -1031,7 +1031,16 @@ defmodule Maraithon.Runtime.AgentDirectives do
         limit: 1,
         lock: "FOR UPDATE SKIP LOCKED"
       )
-    )
+
+    # A bounded burst of ordinary work must yield to due maintenance and
+    # periodic scans. Keep FIFO order inside each selection and never discard
+    # the source events that accumulated while an Agent was stopped.
+    if prefer_scheduled? do
+      Repo.one(where(query, [directive], directive.kind == "scheduled_wakeup")) ||
+        Repo.one(query)
+    else
+      Repo.one(query)
+    end
   end
 
   defp get_terminal_proof(ids, terminal_status) do
@@ -1345,7 +1354,9 @@ defmodule Maraithon.Runtime.AgentDirectives do
   end
 
   defp claim_opts(opts) do
-    if Keyword.keyword?(opts) and Enum.all?(Keyword.keys(opts), &(&1 == :ttl_ms)) do
+    if Keyword.keyword?(opts) and
+         Enum.all?(Keyword.keys(opts), &(&1 in [:ttl_ms, :prefer_scheduled])) and
+         is_boolean(Keyword.get(opts, :prefer_scheduled, false)) do
       ttl_ms = Keyword.get(opts, :ttl_ms, @default_claim_ttl_ms)
 
       if is_integer(ttl_ms) and ttl_ms in @min_claim_ttl_ms..@max_claim_ttl_ms,
