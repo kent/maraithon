@@ -108,7 +108,8 @@ for `kent@runner.now`, using the manual-first development policy.
    rejects malformed/nonterminating pagination. Swift build passed; the signed
    local app was rebuilt, installed, and launched at `~/Applications/Maraithon.app`.
    iPhone pagination and manual create/reopen paths already use the shared API.
-   Direct Mac verification showed all 627 active work items after loading.
+   Direct Mac verification initially showed 627 active work items; a refresh at
+   20:33 UTC showed 941 after further source discovery.
    Source catch-up remains in progress.
 
 8. **Todo deduplication blocks the Agent's lease renewal.**
@@ -209,16 +210,31 @@ for `kent@runner.now`, using the manual-first development policy.
     selection delays maintenance until the whole backlog drains. After eight
     ordinary directives, give the oldest due scheduled directive a turn, then
     resume ordinary selection. Keep all queued events and existing exact
-    claim/settlement fences. Status: implemented; `make build` passed;
-    deployment and live maintenance verification pending.
+    claim/settlement fences. Status: implemented in `89284da8`; `make build`
+    passed; workflow `34057858237` deployed `maraithon-00204-r9k`.
+    The 20:42:30 UTC observation had no pending/processing directives; fresh
+    periodic-cycle and maintenance evidence on that worker remains pending.
+
+16. **Native todo refresh spends most of its time building action cards.**
+    The Mac's five 200-item pages took about a minute to load at 20:32 UTC.
+    A Cloud Run read profile measured 617 ms for the 200-row list, 122 ms for
+    source health, 47 ms for timezone, and 43 ms for related people. Serialization
+    without cards took 813 ms; with cards it took 8,967 ms. Preserve the card's
+    source evidence and actions while removing the repeated work identified by
+    a narrower profile. The narrower sample found no per-item database queries:
+    action cards took 6,843 ms, including a repeated 1,048 ms ranking pass.
+    Reuse each card's ranking and sanitized metadata, and compile the public
+    text-boundary expression once (`7e13bea0`). `make build` passed. A local synthetic
+    200-card profile fell from 768 ms to 484 ms; the same-row Cloud Run
+    comparison and deployment remain pending.
 
 ## Delivery state
 
-Current server: `maraithon-00203-llz`, code through `cb580599`, deployed by
-successful workflow `34057595625`. Current iPhone release: TestFlight `1.0.1`
+Current server: `maraithon-00204-r9k`, code through `89284da8`, deployed by
+successful workflow `34057858237`. Current iPhone release: TestFlight `1.0.1`
 build `20260906200907`, code through `26191c62`, available to Founders via
 workflow `34057077032`. The signed local Mac development app is installed at
-`~/Applications/Maraithon.app`; direct UI inspection showed 627 active items.
+`~/Applications/Maraithon.app`; its 20:33 UTC refresh showed 941 active items.
 No public Sparkle release was made.
 
 
@@ -372,3 +388,37 @@ were ready/live again at 20:22:21. Execution
 `maraithon-todo-validation-xcxn7` watches live database blockers to isolate the
 remaining long transaction. Gmail account 1 and all closure cursors remain to
 catch up, and full periodic work remains unverified.
+
+
+At 20:42:30 UTC, all 64 partitions were ready/live on `maraithon-00204-r9k`.
+The retired `maraithon-00202-fg4` node was draining and owned zero partitions.
+The deployment's earlier best-effort HTTP drain had received 429. A temporary
+zero-traffic revision tag reached a dormant instance, so no drain was requested
+there; the tag was removed. A subsequent identity-checked invocation of
+`Authority.begin_node_drain/1` committed the topology fence but returned
+`partition_authority_lost` during workload cleanup. Ordinary reconciliation
+completed the handoff; no incident attestation or outcome relabeling was used.
+Two in-flight closure jobs were recorded as `provider_outcome_ambiguous` at
+20:38:33 and require ordinary coverage recovery, not invented outcomes.
+
+The latest sample had three running tasks, no termination requests, and no
+queued/processing Agent directives. The Chief started at 20:39:10; its periodic
+wakeup was due at 20:42:37. Fresh effects and checkpoints on this incarnation
+still need observation. Closure reasoning had completed 75 jobs since initial
+recovery, with 28 pending and two running. Discovery reasoning had completed
+163, with 68 pending. Gmail account 1 and all closure cursors still lagged.
+All 1,108 outcome-known Effects had matching exact evidence. The eight-minute
+lock watch ending at 20:30:18 saw no transaction longer than 0.95 seconds; it
+does not explain the earlier 30-second timeout.
+
+
+At 20:46:00 UTC, the Chief's lease belonged to `maraithon-00204-r9k` and
+remained live. Its scheduled wakeup fired at 20:42:37.783749, followed by two
+settled, outcome-known completed Effects and a third running Effect. All 64
+partitions remained ready/live. The retired 202 revision had no live Agent
+lease, no owned partitions, and no active task assignments; its six historical
+ambiguous outcomes remain intact. The 429 drain response was Cloud Run's
+"no available instance" response, not an application authorization rejection.
+
+The drained, zero-traffic revision `maraithon-00202-fg4` was deleted at
+20:47 UTC after those ownership checks. No task outcome or proof was changed.
