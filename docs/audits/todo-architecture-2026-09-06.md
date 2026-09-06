@@ -97,6 +97,16 @@ for `kent@runner.now`, using the manual-first development policy.
    builds and installation/release only for affected apps.
    Status: remaining review and direct verification.
 
+8. **Todo deduplication blocks the Agent's lease renewal.**
+   At 19:14:11 UTC the Chief completed an effect, then entered another model
+   call inside a skill's result callback. At 19:15:55 its next write failed
+   with `runtime_lease_expired`. Morning briefing, commitment tracker, and
+   holiday ingestion all contain this synchronous path. Move those ingestions
+   to the durable model queue, retaining encrypted candidates and idempotent
+   queue keys; attach results to the originating brief after ingestion.
+   Yield between skills and renew authority at each continuation boundary.
+   Status: implemented locally; build passed; deployment pending.
+
 ## Delivery state
 
 The first batch through `f3dfb2d8` deployed successfully using GitHub's existing
@@ -117,7 +127,8 @@ and the other checked credentials lack deployment access. No credentials or
 IAM grants were changed. Later fixes listed above are committed locally and
 were delivered by the second workflow. `591e1ba7` separately records physical
 Cloud Run revision/service identity on new runtime nodes and logs their node
-IDs; its build passed and deployment is pending.
+IDs. This and the reopening fix (`3ffe1482`) deployed successfully in workflow
+`34054377367`, revision `maraithon-00197-thz`, serving 100% of traffic.
 
 ## Stranded partition recovery
 
@@ -155,6 +166,14 @@ effects; all 1,104 outcome-known effect assignments matched complete outcome
 evidence. Source watermarks and the latest checkpoint had not yet advanced;
 the backlog and the active agent cycle still needed to finish. These observations
 prove recovery, not yet complete source catch-up or full runtime health.
+
+At 19:16:20 UTC, 21 discovery reasoning jobs had completed since recovery,
+with ten left pending/running in that graph. All 64 partitions remained live.
+Across the 205-second interval since the prior sample, storage verification
+used 245 ms of 106,778 ms total database execution time (0.23%). Node renewal
+used 17,194 ms (16.1%), and partition renewal 523 ms (0.49%). Verification is
+no longer the dominant load. The Agent restart described in finding 8 still
+prevented a fresh checkpoint, and account cursors awaited finalization.
 
 ## Verification policy
 

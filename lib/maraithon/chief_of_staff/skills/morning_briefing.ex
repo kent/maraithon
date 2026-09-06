@@ -512,7 +512,10 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
 
             {todo_result, todo_elapsed_ms} =
               timed(fn ->
-                persist_model_todos(context[:user_id] || state.user_id, brief, brief_input)
+                queued_input =
+                  Map.put(brief_input, "todo_target_brief_dedupe_key", brief_record.dedupe_key)
+
+                persist_model_todos(context[:user_id] || state.user_id, brief, queued_input)
               end)
 
             {brief_record, linked_todo_ids, todo_link_error} =
@@ -4853,6 +4856,9 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
 
   defp important_words(_value), do: []
 
+  defp attach_model_todos_to_brief(brief_record, {:ok, %{pending: true}}),
+    do: {brief_record, [], nil}
+
   defp attach_model_todos_to_brief(brief_record, {:ok, result}) when is_map(result) do
     linked_todo_ids =
       result
@@ -4907,12 +4913,21 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         {:ok, :no_todos}
 
       candidates ->
-        ingest_todos_with_retry(user_id, candidates,
-          source: "chief_of_staff_morning_briefing",
-          max_tokens: @default_llm_max_tokens,
-          timeout_ms: 1_200_000,
-          reasoning_effort: @default_llm_reasoning_effort
-        )
+        case read_string(brief_input, "todo_target_brief_dedupe_key", nil) do
+          nil ->
+            ingest_todos_with_retry(user_id, candidates,
+              source: "chief_of_staff_morning_briefing",
+              max_tokens: @default_llm_max_tokens,
+              timeout_ms: 1_200_000,
+              reasoning_effort: @default_llm_reasoning_effort
+            )
+
+          brief_dedupe_key ->
+            Maraithon.Todos.DeferredIngestion.enqueue(user_id, candidates,
+              source: "chief_of_staff_morning_briefing",
+              brief_dedupe_key: brief_dedupe_key
+            )
+        end
     end
   end
 
@@ -5016,6 +5031,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
 
     %{
       todo_count: length(todos),
+      todo_queued_count: Map.get(result, :queued_count, 0),
       todo_skipped_count: Map.get(result, :skipped_count, 0),
       todo_usage: Map.get(result, :usage, %{})
     }

@@ -328,6 +328,15 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
           )
         end
 
+        brief_dedupe_key =
+          read_string(pending_effect, "dedupe_key", nil) ||
+            "commitment_tracker:#{read_string(tracker_input, "date", "unknown")}"
+
+        tracker_input =
+          if is_binary(context[:agent_id]) and not admin_open_work_rebuild_context?(context),
+            do: Map.put(tracker_input, "todo_target_brief_dedupe_key", brief_dedupe_key),
+            else: tracker_input
+
         todo_result =
           if generation_mode == "llm" or Map.has_key?(report, "linked_todo_ids") do
             persist_model_todos(context[:user_id] || state.user_id, report, tracker_input)
@@ -345,9 +354,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
               "generated_at",
               DateTime.utc_now() |> DateTime.to_iso8601()
             ),
-          "dedupe_key" =>
-            read_string(pending_effect, "dedupe_key", nil) ||
-              "commitment_tracker:#{read_string(tracker_input, "date", "unknown")}",
+          "dedupe_key" => brief_dedupe_key,
           "status" => "pending",
           "title" =>
             report
@@ -1802,14 +1809,26 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
         {:ok, :no_todos}
 
       candidates ->
-        ingest_todos_with_fallback(user_id, candidates,
-          source: "chief_of_staff_commitment_tracker",
-          now: read_string(tracker_input, "generated_at", nil)
-        )
+        case read_string(tracker_input, "todo_target_brief_dedupe_key", nil) do
+          nil ->
+            ingest_todos_with_fallback(user_id, candidates,
+              source: "chief_of_staff_commitment_tracker",
+              now: read_string(tracker_input, "generated_at", nil)
+            )
+
+          brief_dedupe_key ->
+            Maraithon.Todos.DeferredIngestion.enqueue(user_id, candidates,
+              source: "chief_of_staff_commitment_tracker",
+              brief_dedupe_key: brief_dedupe_key
+            )
+        end
     end
   end
 
   defp persist_model_todos(_user_id, _report, _tracker_input), do: {:ok, :no_todos}
+
+  defp attach_model_todos_to_brief(brief_record, {:ok, %{pending: true}}),
+    do: {brief_record, [], nil}
 
   defp attach_model_todos_to_brief(brief_record, {:ok, result}) when is_map(result) do
     linked_todo_ids =
@@ -2163,6 +2182,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
   defp todo_event_payload({:ok, result}) when is_map(result) do
     %{
       todo_count: length(Map.get(result, :todos, [])),
+      todo_queued_count: Map.get(result, :queued_count, 0),
       todo_skipped_count: Map.get(result, :skipped_count, 0)
     }
   end
@@ -2182,6 +2202,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
   defp summarize_todo_result({:ok, result}) when is_map(result) do
     %{
       "todo_count" => length(Map.get(result, :todos, [])),
+      "queued_count" => Map.get(result, :queued_count, 0),
+      "status" => if(Map.get(result, :pending, false), do: "pending", else: "completed"),
       "skipped_count" => Map.get(result, :skipped_count, 0),
       "decisions" => Map.get(result, :decisions, [])
     }

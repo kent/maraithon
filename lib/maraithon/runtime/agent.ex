@@ -711,7 +711,8 @@ defmodule Maraithon.Runtime.Agent do
   end
 
   def working(:internal, :execute_behavior, %{exact_owner?: true} = data) do
-    if AgentLeases.ready?(data.agent_id, data.owner_token) do
+    if renew_effect_admission_authority(data) == :ok and
+         AgentLeases.ready?(data.agent_id, data.owner_token) do
       execute_behavior(data)
     else
       {:stop, :exact_runtime_not_ready, data}

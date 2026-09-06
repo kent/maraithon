@@ -1770,6 +1770,10 @@ defmodule Maraithon.Runtime.PeriodicJobs do
     end
   end
 
+  defp execute_model(%BackgroundJob{job_type: "runtime_partition:todo_ingestion"} = job) do
+    Maraithon.Todos.DeferredIngestion.execute(job) |> normalize_work_result()
+  end
+
   defp execute_model(%BackgroundJob{} = job),
     do: {:error, {:unknown_model_partition, job.job_type}}
 

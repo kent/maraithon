@@ -9,7 +9,6 @@ defmodule Maraithon.ChiefOfStaff.Skills.HolidayRadar do
   alias Maraithon.Briefs.Brief
   alias Maraithon.ChiefOfStaff.HolidayCalendar
   alias Maraithon.ChiefOfStaff.SourceBundle
-  alias Maraithon.OpenLoops
   alias Maraithon.Projects
   alias Maraithon.Projects.Project
   alias Maraithon.Repo
@@ -308,7 +307,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.HolidayRadar do
   defp persist_holiday_todos(_user_id, []), do: {:ok, []}
 
   defp persist_holiday_todos(user_id, attrs_list) do
-    case OpenLoops.ingest_todos(user_id, Enum.reverse(attrs_list),
+    case Maraithon.Todos.DeferredIngestion.enqueue(user_id, Enum.reverse(attrs_list),
            source: "chief_of_staff_holiday"
          ) do
       {:ok, result} -> {:ok, result.todos}

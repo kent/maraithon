@@ -137,7 +137,7 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
               |> Map.put(:pending_effect_skill_id, nil)
               |> stash_emit(emit, skill_id, index)
 
-            run_from_index(state.resume_index || 0, state, context)
+            {:continue, state}
 
           {:continue, next_skill_state} ->
             {:continue,
@@ -152,7 +152,7 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
               |> put_skill_state(skill_id, next_skill_state)
               |> Map.put(:pending_effect_skill_id, nil)
 
-            run_from_index(state.resume_index || 0, state, context)
+            {:continue, state}
         end
     end
   end
@@ -191,7 +191,7 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
                 |> Map.put(:pending_effect_skill_id, nil)
                 |> stash_emit(emit, skill_id, index)
 
-              run_from_index(state.resume_index || 0, state, context)
+              {:continue, state}
 
             {:continue, next_skill_state} ->
               {:continue,
@@ -206,7 +206,7 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
                 |> put_skill_state(skill_id, next_skill_state)
                 |> Map.put(:pending_effect_skill_id, nil)
 
-              run_from_index(state.resume_index || 0, state, context)
+              {:continue, state}
           end
         else
           # R1 (SPEC 07): a skill without handle_effect_error/4 must not
@@ -216,8 +216,8 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
           # any later trigger would resume against old data. Log, record an
           # operator event, and resume at the next skill; resume_index was
           # already stashed at effect-request time (run_from_index/3 set it
-          # to index + 1) — do not recompute it. Return run_from_index/3's
-          # result unmodified: all four callback shapes are legal here.
+          # to index + 1) — do not recompute it. Yield to the runtime so it
+          # renews authority before starting the next skill.
           Logger.warning("ChiefOfStaff skill effect failed; continuing cycle at next skill",
             skill_id: skill_id,
             effect_type: effect_type_label(effect_type),
@@ -228,7 +228,7 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
           record_skill_effect_error(state, skill_id, effect_type, reason)
 
           state = %{state | pending_effect_skill_id: nil}
-          run_from_index(state.resume_index || 0, state, context)
+          {:continue, state}
         end
     end
   end
@@ -530,7 +530,7 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
             |> put_skill_state(skill_id, next_skill_state)
             |> stash_emit(emit, skill_id, index)
 
-          run_from_index(index + 1, state, context)
+          {:continue, %{state | resume_index: index + 1}}
 
         {:continue, next_skill_state} ->
           {:continue,
@@ -543,7 +543,7 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
             state
             |> put_skill_state(skill_id, next_skill_state)
 
-          run_from_index(index + 1, state, context)
+          {:continue, %{state | resume_index: index + 1}}
       end
     end
   end
