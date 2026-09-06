@@ -180,9 +180,10 @@ if [[ "${current_role}" != "combined" && "${runtime_service_json}" != "{}" ]]; t
   fi
 fi
 
-# Subsequent fast deploys replace the combined web/runtime revision. Drain its
-# exact-runtime authority first and wait for the database-backed handoff proof
-# so Cloud Run cannot retire it while leased work is still running.
+# Give the combined runtime a head start on graceful shutdown while Cloud Run
+# prepares its replacement. This is best-effort in test-app mode: the runtime's
+# PostgreSQL leases and write fences remain authoritative, and a full drain
+# proof belongs to the explicitly requested hardened deployment path.
 source_revision="$(
   jq -r '
     [.status.traffic[]? | select((.percent // 0) > 0) | .revisionName][0] //
@@ -236,53 +237,16 @@ if [[ "${current_role}" == "combined" && -n "${source_revision}" && -n "${source
       --secret maraithon-api-bearer-token \
       --project "${project}" 2>/dev/null
   )" || [[ -z "${fast_api_token}" ]]; then
-    echo "Unable to read the API bearer token required for the runtime drain" >&2
-    exit 1
-  fi
-
-  trap restore_drained_source_on_exit EXIT
-
-  if ! curl --silent --show-error --fail --max-time 15 \
+    echo "Skipping best-effort runtime drain: API bearer token unavailable" >&2
+  elif curl --silent --show-error --fail --max-time 15 \
     --request POST \
     --header "Authorization: Bearer ${fast_api_token}" \
     "${source_service_url}/api/v1/runtime/drain" >/dev/null; then
-    echo "Runtime drain request failed; refusing to replace the serving revision" >&2
-    exit 1
-  fi
-
-  source_drain_requested=true
-  echo "Draining combined revision ${source_revision} before replacement"
-  runtime_drained=false
-
-  for _attempt in $(seq 1 48); do
-    status_json="$(
-      curl --silent --show-error --fail --max-time 15 \
-        --header "Authorization: Bearer ${fast_api_token}" \
-        "${source_service_url}/api/v1/runtime/status" 2>/dev/null || true
-    )"
-
-    if jq -e '
-      type == "object" and
-      .phase == "draining" and
-      .node_fenced == true and
-      .admitting_nodes == 0 and
-      .admitting_partitions == 0 and
-      .open_tasks == 0 and
-      .unproven_tasks == 0 and
-      .local_agent_leases == 0 and
-      .agent_leases == 0
-    ' >/dev/null 2>&1 <<<"${status_json}"; then
-      runtime_drained=true
-      break
-    fi
-
-    sleep 5
-  done
-
-  if [[ "${runtime_drained}" != "true" ]]; then
-    echo "Combined runtime did not reach a strong drain boundary" >&2
-    echo "Last runtime status: ${status_json:-unknown}" >&2
-    exit 1
+    source_drain_requested=true
+    trap restore_drained_source_on_exit EXIT
+    echo "Requested graceful shutdown of ${source_revision}; continuing rolling deploy"
+  else
+    echo "Best-effort runtime drain unavailable; continuing rolling deploy" >&2
   fi
 fi
 
