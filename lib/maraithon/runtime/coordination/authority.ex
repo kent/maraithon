@@ -533,6 +533,10 @@ defmodule Maraithon.Runtime.Coordination.Authority do
     with :ok <- valid_ttl(ttl_ms) do
       Repo.transaction(fn ->
         _ = Protocol.locked_active!()
+        # Compute the next deadline only after the row lock is ours. UPDATE
+        # evaluates its new values before waiting on concurrent SHARE lockers,
+        # which otherwise consumes the renewed lease while it is still queued.
+        _ = lock_node!(session)
         set_local!("maraithon.runtime_node_action", session.id)
 
         update_node!(
@@ -546,6 +550,28 @@ defmodule Maraithon.Runtime.Coordination.Authority do
         )
       end)
     end
+  end
+
+  @doc "Renews node and partition leases while retaining one node write lock."
+  def renew_ownership(%NodeIncarnation{} = session, node_ttl_ms, partition_ttl_ms) do
+    Repo.transaction(fn ->
+      case renew_node(session, node_ttl_ms) do
+        {:ok, %NodeIncarnation{state: "ready"} = renewed} ->
+          # Committing the node first lets busy pollers acquire SHARE locks
+          # again before partition renewal, spending the fresh lease in a
+          # second lock queue. Nested transactions retain the node lock here.
+          case renew_partitions(renewed, partition_ttl_ms) do
+            {:ok, _partitions} -> renewed
+            {:error, reason} -> Repo.rollback({:renew_partitions, reason})
+          end
+
+        {:ok, renewed} ->
+          renewed
+
+        {:error, reason} ->
+          Repo.rollback({:renew_node, reason})
+      end
+    end)
   end
 
   def begin_node_drain(%NodeIncarnation{} = session) do

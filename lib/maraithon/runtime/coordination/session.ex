@@ -319,23 +319,21 @@ defmodule Maraithon.Runtime.Coordination.Session do
   defp renew_ownership(%{phase: phase} = state) when phase != :ready, do: state
 
   defp renew_ownership(state) do
-    with {:renew_node, {:ok, %NodeIncarnation{state: "ready"} = session}} <-
-           {:renew_node, Authority.renew_node(state.session, state.node_ttl_ms)},
-         {:renew_partitions, {:ok, _partitions}} <-
-           {:renew_partitions, Authority.renew_partitions(session, state.partition_ttl_ms)} do
-      %{state | session: session} |> refresh_leader()
-    else
-      {:renew_node, {:ok, %NodeIncarnation{state: "draining"} = session}} ->
+    case Authority.renew_ownership(state.session, state.node_ttl_ms, state.partition_ttl_ms) do
+      {:ok, %NodeIncarnation{state: "ready"} = session} ->
+        %{state | session: session} |> refresh_leader()
+
+      {:ok, %NodeIncarnation{state: "draining"} = session} ->
         # A database-side drain is an explicit retirement request, not a lost
         # lease to recover by registering a new incarnation. Finish local proof
         # cleanup without renewing leadership or readmitting this process.
         %{state | session: session} |> mark_drain_pending() |> coordinate()
 
-      {:renew_node, _error} ->
-        fail_closed(state, :renew_node)
+      {:error, {stage, _reason}} when stage in [:renew_node, :renew_partitions] ->
+        fail_closed(state, stage)
 
-      {:renew_partitions, _error} ->
-        fail_closed(state, :renew_partitions)
+      _error ->
+        fail_closed(state, :renew_ownership)
     end
   end
 

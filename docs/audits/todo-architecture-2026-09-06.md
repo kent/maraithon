@@ -314,13 +314,35 @@ for `kent@runner.now`, using the manual-first development policy.
     that parent; staged children discard after parent failure, and a fresh
     source cycle retries. Reject reuse of a changed handoff. Finalizers retain
     the existing complete-coverage proof and atomic watermark settlement.
-    Status: implemented; `make build` passed. Tests were not run under the
-    manual-first policy. Deployment and live graph verification are pending.
+    Status: implemented in `49ab9b6b`; `make build` passed. Tests were not run
+    under the manual-first policy. Workflow `34061363751` deployed revision
+    `maraithon-00208-tvb` successfully at 21:35:23 UTC. The normal Agent start
+    endpoint returned 200 and cleared its restart guard at 21:36:58; the Chief
+    recovered to idle at 21:37:03. Live graph and sustained lease verification
+    are pending.
+
+23. **Contended renewals spend the next lease before it is committed.**
+    Revision 208 lost ownership again at 21:42:29. The lock watch
+    `maraithon-todo-validation-gbtr4` captured renewal backend 1106519 waiting
+    18.63 seconds behind changing short transactions, rather than one long
+    graph transaction. New shared lockers kept entering while renewal waited.
+    The node UPDATE calculated its next deadline before acquiring the row lock;
+    the Session then committed and entered a second lock queue to renew its
+    partitions. Both waits depleted the available ownership window.
+
+    Lock the live node before calculating its new deadline and retain that
+    lock through partition renewal in the same transaction. Preserve the
+    existing state, epoch, action-token, and database-clock expiry checks;
+    expired incarnations still cannot be revived. This removes avoidable lease
+    loss from the two renewal waits, but does not claim that arbitrary lock
+    starvation is impossible. Status: implemented; `make build` passed. Tests
+    were not run under the manual-first policy. Deployment and fresh sustained
+    processing evidence are pending.
 
 ## Delivery state
 
-Current server: `maraithon-00207-8zf`, code through `9ce17d46`, deployed by
-successful workflow `34059647528`. Current iPhone release: TestFlight `1.0.1`
+Current server: `maraithon-00208-tvb`, code through `49ab9b6b`, deployed by
+successful workflow `34061363751`. Current iPhone release: TestFlight `1.0.1`
 build `20260906211723`, code through `871e245c`, available to Founders via
 workflow `34060595850`. The signed local Mac development app is installed at
 `~/Applications/Maraithon.app`; its 21:07 UTC refresh showed 953 active items
@@ -584,3 +606,22 @@ remaining jobs finished, normal recurring discovery created acquisition
 partitions. This is ordinary recovery from an interrupted cycle; no receipt,
 cursor, or ambiguous outcome was changed manually. The replacement cycle and
 its dependent closure remain to finish before calling Gmail current.
+
+
+The later observations supersede the earlier stable-looking revision-207
+samples: further graph-preparation stalls interrupted work and tripped the
+Chief's guard, as recorded in finding 22. Following that fix, execution
+`maraithon-todo-validation-794nq` observed all 64 partitions ready/live on
+revision 208 at 21:40:31 UTC, owned by node `8f5813b3`. The Chief had a ready,
+live lease and zero new guard crashes; all 1,122 outcome-known Effects had
+matching evidence. Its next wakeup and checkpoint were due at 21:47:01.
+The large Gmail closure acquisition was still running, and no newly staged
+graph was visible yet, so this sample does not prove graph publication.
+
+That stable sample was superseded at 21:42:29 by another expired-node rejection.
+Execution `maraithon-todo-validation-42sfn` observed three expired draining
+partitions, 57 expired ready partitions, four unassigned partitions, and no
+Agent lease at 21:43:33. The Chief's guard recorded one new crash, and Gmail
+closure acquisition `1f5d8240` became `provider_outcome_ambiguous`. Source
+catch-up, graph publication, and fresh automatic-completion provenance remain
+outstanding. The ten-minute lock watch completed successfully at 21:48:35.
