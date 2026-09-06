@@ -46,6 +46,7 @@ defmodule Maraithon.Runtime.PeriodicJobs do
   @default_retry_after_seconds 30
   @source_finalizer_retry_seconds 10
   @source_dependency_retry_ms 10_000
+  @source_graph_publication "parent_completion_v1"
   @slack_reconciliation_fanout_spacing_seconds 6
   @slack_reconciliation_plan_cooldown_seconds 55
   @completion_backstop_interval_seconds 30 * 60
@@ -195,8 +196,76 @@ defmodule Maraithon.Runtime.PeriodicJobs do
 
   @doc "Executes one claimed provider/model partition row."
   def execute(%BackgroundJob{queue: @provider_queue} = job), do: execute_provider(job)
+
+  def execute(
+        %BackgroundJob{
+          queue: @model_queue,
+          payload: %{"source_graph_publication" => @source_graph_publication}
+        } = job
+      ) do
+    case source_graph_publication_status(job) do
+      :ready ->
+        execute_model(job)
+
+      :pending ->
+        {:ok, %{outcome: "waiting_for_graph_publication"},
+         {:reschedule_in, @source_dependency_retry_ms}}
+
+      {:error, reason} ->
+        {:error, {:discard, reason}}
+    end
+  end
+
   def execute(%BackgroundJob{queue: @model_queue} = job), do: execute_model(job)
   def execute(%BackgroundJob{} = job), do: {:error, {:invalid_periodic_lane, job.queue}}
+
+  # Child inserts commit independently so even a large catch-up graph never
+  # holds the User fence across the whole fanout. The parent's exact outcome
+  # transaction publishes the complete child-ID list; no staged child may do
+  # model work or advance a cursor before that publication commits.
+  defp source_graph_publication_status(job) do
+    with {:ok, acquisition_id} <- payload_string(job, "acquisition_job_id"),
+         %BackgroundJob{} = acquisition <- Repo.get(BackgroundJob, acquisition_id),
+         true <- acquisition.user_id == job.user_id,
+         true <- acquisition.job_type == source_graph_parent_type(job.job_type) do
+      case acquisition.status do
+        "completed" ->
+          acquisition = BackgroundJob.hydrate_payloads(acquisition)
+          result = acquisition.result || %{}
+
+          if published_source_graph_child?(job, result),
+            do: :ready,
+            else: {:error, :source_graph_child_not_published}
+
+        status when status in @active_statuses ->
+          :pending
+
+        _terminal ->
+          {:error, :source_graph_parent_failed}
+      end
+    else
+      _invalid -> {:error, :source_graph_parent_invalid}
+    end
+  end
+
+  defp source_graph_parent_type(type)
+       when type in [@source_discovery_reason_job, @source_discovery_finalize_job],
+       do: @source_discovery_job
+
+  defp source_graph_parent_type(type)
+       when type in [@todo_account_closure_reason_job, @todo_account_closure_finalize_job],
+       do: @todo_account_closure_acquire_job
+
+  defp source_graph_parent_type(_type), do: nil
+
+  defp published_source_graph_child?(%BackgroundJob{job_type: type, id: id}, result)
+       when type in [@source_discovery_reason_job, @todo_account_closure_reason_job] do
+    ids = Map.get(result, "reason_job_ids")
+    is_list(ids) and id in ids
+  end
+
+  defp published_source_graph_child?(%BackgroundJob{id: id}, result),
+    do: id == Map.get(result, "finalizer_job_id")
 
   defp schedule_token_refreshes do
     now = database_now!()
@@ -1797,11 +1866,14 @@ defmodule Maraithon.Runtime.PeriodicJobs do
          %{handoffs: handoffs, finalizer: finalizer} = result
        )
        when is_list(handoffs) and is_map(finalizer) do
-    case enqueue_source_graph(fn ->
+    case prepare_source_graph(fn ->
            with {:ok, reason_jobs} <-
                   enqueue_discovery_fanouts(acquisition_job, account, handoffs),
                 reason_job_ids <- Enum.map(reason_jobs, & &1.id),
-                finalizer_payload <- Map.put(finalizer, "reason_job_ids", reason_job_ids),
+                finalizer_payload <-
+                  finalizer
+                  |> Map.put("reason_job_ids", reason_job_ids)
+                  |> Map.put("source_graph_publication", @source_graph_publication),
                 {:ok, %BackgroundJob{} = finalizer_job} <-
                   BackgroundJobs.enqueue(@source_discovery_finalize_job, %{
                     user_id: account.user_id,
@@ -1834,10 +1906,10 @@ defmodule Maraithon.Runtime.PeriodicJobs do
          |> Map.put(:finalizer_job_id, finalizer_job_id)}
 
       {:error, :source_discovery_stale_finalizer} ->
-        {:error, :source_discovery_stale_finalizer}
+        {:error, {:discard, :source_discovery_stale_finalizer}}
 
       {:error, reason} ->
-        {:error, {:source_discovery_handoff_failed, reason}}
+        {:error, {:discard, {:source_discovery_handoff_failed, reason}}}
     end
   end
 
@@ -1868,7 +1940,7 @@ defmodule Maraithon.Runtime.PeriodicJobs do
         max_attempts: 3,
         scheduled_at: database_now!(),
         result: replay_activity_result(handoff),
-        payload: handoff
+        payload: Map.put(handoff, "source_graph_publication", @source_graph_publication)
       }
 
       case enqueue_cycle_job(@source_discovery_reason_job, attrs) do
@@ -1891,7 +1963,13 @@ defmodule Maraithon.Runtime.PeriodicJobs do
     end
   end
 
-  defp enqueue_cycle_job(job_type, %{dedupe_key: dedupe_key} = attrs) do
+  defp enqueue_cycle_job(job_type, attrs) do
+    with {:ok, payload} <- SourceAccountDiscovery.bound_handoff(attrs.payload) do
+      enqueue_prepared_cycle_job(job_type, %{attrs | payload: payload})
+    end
+  end
+
+  defp enqueue_prepared_cycle_job(job_type, %{dedupe_key: dedupe_key} = attrs) do
     existing =
       BackgroundJob
       |> where([job], job.dedupe_key == ^dedupe_key)
@@ -1900,8 +1978,16 @@ defmodule Maraithon.Runtime.PeriodicJobs do
       |> Repo.one()
 
     case existing do
-      %BackgroundJob{} = job -> {:ok, BackgroundJob.hydrate_payloads(job)}
-      nil -> BackgroundJobs.enqueue(job_type, attrs)
+      %BackgroundJob{} = job ->
+        job = BackgroundJob.hydrate_payloads(job)
+
+        if job.job_type == job_type and job.user_id == attrs.user_id and
+             job.payload == attrs.payload,
+           do: {:ok, job},
+           else: {:error, :source_graph_handoff_changed}
+
+      nil ->
+        BackgroundJobs.enqueue(job_type, attrs)
     end
   end
 
@@ -1940,10 +2026,13 @@ defmodule Maraithon.Runtime.PeriodicJobs do
          %{handoffs: handoffs, finalizer: finalizer} = result
        )
        when is_list(handoffs) and is_map(finalizer) do
-    case enqueue_source_graph(fn ->
+    case prepare_source_graph(fn ->
            with {:ok, reason_jobs} <- enqueue_closure_fanouts(acquisition_job, account, handoffs),
                 reason_job_ids <- Enum.map(reason_jobs, & &1.id),
-                finalizer_payload <- Map.put(finalizer, "reason_job_ids", reason_job_ids),
+                finalizer_payload <-
+                  finalizer
+                  |> Map.put("reason_job_ids", reason_job_ids)
+                  |> Map.put("source_graph_publication", @source_graph_publication),
                 {:ok, %BackgroundJob{} = finalizer_job} <-
                   BackgroundJobs.enqueue(@todo_account_closure_finalize_job, %{
                     user_id: account.user_id,
@@ -1976,10 +2065,10 @@ defmodule Maraithon.Runtime.PeriodicJobs do
          |> Map.put(:finalizer_job_id, finalizer_job_id)}
 
       {:error, :source_closure_stale_finalizer} ->
-        {:error, :source_closure_stale_finalizer}
+        {:error, {:discard, :source_closure_stale_finalizer}}
 
       {:error, reason} ->
-        {:error, {:source_closure_handoff_failed, reason}}
+        {:error, {:discard, {:source_closure_handoff_failed, reason}}}
     end
   end
 
@@ -2015,7 +2104,7 @@ defmodule Maraithon.Runtime.PeriodicJobs do
         max_attempts: 3,
         scheduled_at: database_now!(),
         result: replay_activity_result(handoff),
-        payload: handoff
+        payload: Map.put(handoff, "source_graph_publication", @source_graph_publication)
       }
 
       case enqueue_cycle_job(@todo_account_closure_reason_job, attrs) do
@@ -2036,6 +2125,12 @@ defmodule Maraithon.Runtime.PeriodicJobs do
       {:ok, jobs} -> {:ok, Enum.reverse(jobs)}
       {:error, _reason} = error -> error
     end
+  end
+
+  defp prepare_source_graph(enqueue_fun) when is_function(enqueue_fun, 0) do
+    if Repo.in_transaction?(),
+      do: {:error, :source_graph_preparation_requires_short_transactions},
+      else: enqueue_fun.()
   end
 
   defp enqueue_source_graph(enqueue_fun) when is_function(enqueue_fun, 0) do

@@ -298,6 +298,25 @@ for `kent@runner.now`, using the manual-first development policy.
     successful workflow `34060595850` delivered TestFlight `1.0.1` build
     `20260906211723` and verified Founders access for Kent at 21:22:33 UTC.
 
+22. **Large source graphs hold the User fence long enough to expire runtime leases.**
+    Fresh stalls at 21:18:48 and 21:22:35 disproved sustained health. The live
+    lock watch (`maraithon-todo-validation-q6l49`) captured the cause at 21:28:
+    backend 1106004 kept one graph-preparation transaction open while repeatedly
+    looking up and inserting child jobs. Its User lock blocked backend 1105011,
+    which retained runtime authority locks and blocked node renewal on backend
+    1106080. At 21:28:31, graph preparation had held its transaction for 27.35
+    seconds; node renewal expired at 21:28:34. The Chief's restart guard tripped
+    after three recent failures.
+
+    Prepare child jobs in individual short transactions. Mark new children as
+    staged and admit them only when the parent has completed and its exact
+    outcome transaction has published their IDs. Failed preparation abandons
+    that parent; staged children discard after parent failure, and a fresh
+    source cycle retries. Reject reuse of a changed handoff. Finalizers retain
+    the existing complete-coverage proof and atomic watermark settlement.
+    Status: implemented; `make build` passed. Tests were not run under the
+    manual-first policy. Deployment and live graph verification are pending.
+
 ## Delivery state
 
 Current server: `maraithon-00207-8zf`, code through `9ce17d46`, deployed by
