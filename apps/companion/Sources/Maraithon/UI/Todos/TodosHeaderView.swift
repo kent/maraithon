@@ -4,6 +4,7 @@ import SwiftUI
 struct TodosHeaderView: View {
     let store: TodosStore
     let showShortcuts: () -> Void
+    let createTodo: () -> Void
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: Tokens.Spacing.medium) {
@@ -15,6 +16,12 @@ struct TodosHeaderView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
+            Button(action: createTodo) {
+                Label("New Todo", systemImage: "plus")
+            }
+            .keyboardShortcut("n", modifiers: .command)
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
             if store.isLoading {
                 ProgressView()
                     .controlSize(.small)

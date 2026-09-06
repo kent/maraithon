@@ -10,6 +10,7 @@ struct TodosView: View {
     @State private var markedTodoIDs: Set<String> = []
     @State private var inspectorShown = false
     @State private var shortcutHelpShown = false
+    @State private var newTodoShown = false
     @FocusState private var searchFocused: Bool
 
     var body: some View {
@@ -18,15 +19,16 @@ struct TodosView: View {
         VStack(alignment: .leading, spacing: 0) {
             TodosHeaderView(
                 store: store,
-                showShortcuts: { shortcutHelpShown = true }
+                showShortcuts: { shortcutHelpShown = true },
+                createTodo: { newTodoShown = true }
             )
             Divider()
-            controls(store: store)
+            TodosFilterView(store: store, searchFocused: $searchFocused)
             Divider()
             content(store: store)
         }
         .navigationTitle("Todos")
-        .focusedSceneValue(\.todoShortcutActions, focusedShortcutActions(store: store))
+        .focusedSceneValue(\.todoShortcutActions, newTodoShown ? nil : focusedShortcutActions(store: store))
         .inspector(isPresented: $inspectorShown) {
             TodoDetailView(
                 todo: activeTodo,
@@ -48,6 +50,13 @@ struct TodosView: View {
         .sheet(isPresented: $shortcutHelpShown) {
             TodoShortcutHelpView()
         }
+        .sheet(isPresented: $newTodoShown) {
+            NewTodoView(store: store) { todo in
+                activeTodoID = todo.id
+                inspectorShown = true
+                Task { await store.load() }
+            }
+        }
         .task {
             if store.phase == .idle {
                 await store.load()
@@ -66,61 +75,6 @@ struct TodosView: View {
     private var activeTodo: CompanionTodo? {
         guard let activeTodoID else { return nil }
         return env.todos.todos.first(where: { $0.id == activeTodoID })
-    }
-
-    private func controls(store: TodosStore) -> some View {
-        @Bindable var store = store
-
-        return HStack(spacing: Tokens.Spacing.small) {
-            HStack(spacing: Tokens.Spacing.small) {
-                Image(systemName: "magnifyingglass")
-                    .foregroundStyle(.secondary)
-                TextField("Search title, next action, or source", text: $store.query)
-                    .textFieldStyle(.plain)
-                    .focused($searchFocused)
-                    .onSubmit {
-                        Task { await store.load() }
-                    }
-                if !store.query.isEmpty {
-                    Button {
-                        store.query = ""
-                        Task { await store.load() }
-                    } label: {
-                        Label("Clear search", systemImage: "xmark.circle.fill")
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
-                }
-            }
-            .padding(.horizontal, Tokens.Spacing.small)
-            .padding(.vertical, Tokens.Spacing.xsmall)
-            .background(.background, in: RoundedRectangle(cornerRadius: Tokens.CornerRadius.small))
-            .overlay {
-                RoundedRectangle(cornerRadius: Tokens.CornerRadius.small)
-                    .stroke(Color.secondary.opacity(0.25), lineWidth: 1)
-            }
-
-            Picker("Status", selection: $store.filter) {
-                ForEach(TodoListFilter.allCases) { filter in
-                    Text(filter.title).tag(filter)
-                }
-            }
-            .labelsHidden()
-            .pickerStyle(.segmented)
-            .frame(width: 180)
-            .onChange(of: store.filter) { _, _ in
-                Task { await store.load() }
-            }
-
-            Button("Search") {
-                Task { await store.load() }
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(store.isLoading)
-        }
-        .padding(.horizontal, Tokens.Spacing.large)
-        .padding(.vertical, Tokens.Spacing.small)
-        .background(.bar)
     }
 
     @ViewBuilder

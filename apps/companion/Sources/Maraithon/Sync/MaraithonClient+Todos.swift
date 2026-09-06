@@ -3,6 +3,18 @@
 import Foundation
 
 extension MaraithonClient {
+    func createTodo(_ draft: CompanionTodoDraft) async throws -> CompanionTodoDetailsResponse {
+        let request = try await makeRequest(
+            method: "POST",
+            path: "/api/v1/companion/todos",
+            body: try JSONEncoder().encode(draft),
+            extraHeaders: ["Content-Type": "application/json"]
+        )
+        let (data, response) = try await transport(request)
+        try Self.validate(response: response, data: data)
+        return try JSONDecoder().decode(CompanionTodoDetailsResponse.self, from: data)
+    }
+
     func listTodos(
         filter: TodoListFilter,
         query: String? = nil

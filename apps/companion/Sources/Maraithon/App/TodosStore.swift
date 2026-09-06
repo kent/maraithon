@@ -29,6 +29,7 @@ final class TodosStore {
     private let eventLog: EventLog
     private let unauthorizedHandler: UnauthorizedHandler
     private var loadGeneration = 0
+    private var accountGeneration = 0
     private var detailRequestTokens: [String: UUID] = [:]
 
     init(
@@ -43,6 +44,29 @@ final class TodosStore {
 
     var isLoading: Bool {
         phase == .loading
+    }
+
+    func create(_ draft: CompanionTodoDraft) async throws -> CompanionTodo {
+        let generation = accountGeneration
+        eventLog.debug("todos.create_started", source: .cloud)
+        do {
+            let response = try await client.createTodo(draft)
+            guard generation == accountGeneration else { throw CancellationError() }
+            loadGeneration += 1
+            if filter != .active || normalizedQuery != nil { todos = [] }
+            filter = .active
+            query = ""
+            apply(response.todo)
+            phase = .loaded
+            eventLog.info("todos.create_finished", source: .cloud, payload: ["todo_id": response.todo.id])
+            return response.todo
+        } catch MaraithonClientError.unauthorized {
+            if generation == accountGeneration { rejectToken() }
+            throw MaraithonClientError.unauthorized
+        } catch {
+            eventLog.warning("todos.create_failed", source: .cloud)
+            throw error
+        }
     }
 
     func load() async {
@@ -173,6 +197,7 @@ final class TodosStore {
     }
 
     func clear() {
+        accountGeneration += 1
         loadGeneration += 1
         todos = []
         pendingActionIDs = []

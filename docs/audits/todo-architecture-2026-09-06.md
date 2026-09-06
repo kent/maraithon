@@ -379,9 +379,12 @@ for `kent@runner.now`, using the manual-first development policy.
     for retry, use one device-scoped UUID per draft to avoid duplicate rows,
     and retain ordinary ranking, briefs, and user activity records. The server
     allows only manual-entry fields; identity and source come from the server.
-    Status: server endpoint implemented and `make build` passed. Native UI
-    implemented and `swift build` passed; signed packaging, server deployment,
-    installation, and live entry verification are pending. Tests were not run.
+    Status: server endpoint implemented in `70589a6d` and `make build` passed.
+    Native UI passed `swift build` and signed `make build-companion` packaging
+    with the same Apple Development identity as the installed app. Server
+    deployment, installation, and live entry verification are pending. Tests
+    were not run. The next server push is held while the newly admitted source
+    work makes progress, to avoid another immediate interruption.
 
 ## Delivery state
 
