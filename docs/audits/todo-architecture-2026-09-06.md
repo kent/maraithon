@@ -1058,3 +1058,21 @@ partitions stayed ready/live at each observation, and the restart guard had
 no new crash. Closure cursors had not advanced. The next wakeup is due at
 23:46:28 and checkpoint at 23:48:17. A two-minute performance/final-runtime
 probe was submitted as `maraithon-todo-validation-pnbvp`.
+
+Execution `maraithon-todo-validation-pnbvp` completed successfully at 23:51:21.
+At 23:51:15, all 64 partitions were ready/live, with no task awaiting
+termination or new restart-guard crash. The Chief's scheduled checkpoint
+persisted at 23:48:18, following its 23:46:29 wakeup; all 1,144 outcome-known
+Effects had matching evidence. Discovery cursors advanced, while Gmail and
+Slack closure cursors still lagged. The 23:49:14–23:51:15 SQL window totaled
+15.85 seconds: fair scheduling contributed 30.1% (4.77 seconds across 246
+calls), node read/locking 8.03%, and partition renewal 1.93%. Expensive storage
+verification did not dominate this window. Completed revision-216 batches
+averaged 75.7 seconds for Gmail account 2 (six samples) and 109.0 seconds for
+Slack (seven samples). These measurements precede evidence coalescing.
+
+Findings 35 and 36 were pushed through `d5cc439c` in two semantic commits;
+deployment workflow `34068079615` is running. A new read-only graph watch will
+measure replacement graph sizes, completed coverage, and runtime progress:
+`maraithon-todo-validation-ddc6q`, submitted at 23:52:59. It is still waiting
+to start; the successful `pnbvp` execution is terminal and has not been rerun.
