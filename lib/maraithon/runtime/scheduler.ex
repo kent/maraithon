@@ -117,6 +117,10 @@ defmodule Maraithon.Runtime.Scheduler do
   Set `:include_legacy_empty_payload` while migrating an older unscoped timer;
   empty active payloads of the same job type are then cancelled in the same
   transaction. Jobs in other non-empty scopes are preserved.
+
+  Set `:preserve_earlier` for recurring wakeups that must not be postponed by
+  intervening activity. An earlier active job is retained, including its
+  payload, while duplicate active jobs in that scope are cancelled.
   """
   def schedule_scoped_unique_at(
         agent_id,
@@ -423,16 +427,28 @@ defmodule Maraithon.Runtime.Scheduler do
           lock_schedule_agent(agent_id)
           lock_unique_jobs(agent_id, job_type)
 
+          active_jobs = active_jobs_query(agent_id, job_type, scope, opts)
+          earlier_job = earlier_active_job(active_jobs, fire_at, opts)
+
+          jobs_to_cancel =
+            case earlier_job do
+              nil -> active_jobs
+              job -> where(active_jobs, [active], active.id != ^job.id)
+            end
+
           {cancelled_count, _} =
-            agent_id
-            |> active_jobs_query(job_type, scope, opts)
+            jobs_to_cancel
             |> private_update_all(
               set: [status: "cancelled", claimed_by: nil, claimed_at: nil, dispatched_at: nil]
             )
 
-          case %ScheduledJob{} |> ScheduledJob.changeset(attrs) |> Repo.insert() do
-            {:ok, job} -> {job, cancelled_count}
-            {:error, reason} -> Repo.rollback(reason)
+          if earlier_job do
+            {earlier_job, cancelled_count}
+          else
+            case %ScheduledJob{} |> ScheduledJob.changeset(attrs) |> Repo.insert() do
+              {:ok, job} -> {job, cancelled_count}
+              {:error, reason} -> Repo.rollback(reason)
+            end
           end
         end)
       end)
@@ -440,7 +456,7 @@ defmodule Maraithon.Runtime.Scheduler do
     case result do
       {:ok, {:ok, {job, cancelled_count}}} ->
         Logger.debug(
-          "Scheduled unique #{job_type} for #{agent_id} at #{fire_at}",
+          "Scheduled unique #{job_type} for #{agent_id} at #{job.fire_at}",
           cancelled_jobs: cancelled_count
         )
 
@@ -454,6 +470,20 @@ defmodule Maraithon.Runtime.Scheduler do
         {:error, reason}
     end
   end
+
+  defp earlier_active_job(query, %DateTime{} = fire_at, opts) do
+    if Keyword.get(opts, :preserve_earlier, false) do
+      query
+      |> where([job], job.fire_at <= ^fire_at)
+      |> order_by([job], asc: job.fire_at, asc: job.id)
+      |> limit(1)
+      |> lock("FOR UPDATE")
+      |> select([job], %{id: job.id, fire_at: job.fire_at})
+      |> Repo.one()
+    end
+  end
+
+  defp earlier_active_job(_query, _fire_at, _opts), do: nil
 
   defp lock_schedule_agent(agent_id) do
     # Exact delivery owns Agent before ScheduledJob. Take the FK-equivalent

@@ -51,7 +51,7 @@ defmodule Maraithon.Runtime.Agent do
   @directive_poll_interval_ms 5_000
   @max_deferred_messages 200
   @periodic_wakeup_scope {"_schedule_key", "agent_periodic_wakeup"}
-  @periodic_wakeup_opts [include_legacy_empty_payload: true]
+  @periodic_wakeup_opts [include_legacy_empty_payload: true, preserve_earlier: true]
 
   defstruct [
     :agent_id,
