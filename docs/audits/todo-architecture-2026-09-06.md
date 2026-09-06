@@ -294,14 +294,16 @@ for `kent@runner.now`, using the manual-first development policy.
     Validation: iOS 26.4 iPhone 17 simulator build passed. No project regeneration
     or schema change was needed. The app launched to sign-in; authenticated
     paging was not exercised locally because this simulator has no saved session.
-    Tests were not run under the manual-first policy. TestFlight delivery pending.
+    Tests were not run under the manual-first policy. Implemented in `871e245c`;
+    successful workflow `34060595850` delivered TestFlight `1.0.1` build
+    `20260906211723` and verified Founders access for Kent at 21:22:33 UTC.
 
 ## Delivery state
 
 Current server: `maraithon-00207-8zf`, code through `9ce17d46`, deployed by
 successful workflow `34059647528`. Current iPhone release: TestFlight `1.0.1`
-build `20260906200907`, code through `26191c62`, available to Founders via
-workflow `34057077032`. The signed local Mac development app is installed at
+build `20260906211723`, code through `871e245c`, available to Founders via
+workflow `34060595850`. The signed local Mac development app is installed at
 `~/Applications/Maraithon.app`; its 21:07 UTC refresh showed 953 active items
 in 6.792 seconds with lazy source context. The subsequent cursor optimization
 loaded all 953 items in 7.098 seconds on startup at 21:09 UTC.
@@ -552,3 +554,14 @@ pending, along with 38 briefs. However, Gmail account 1 closure repeatedly
 references discovery acquisition `e5a82073`, whose finalizer failed. Discovery
 and all closure cursors for that account still lag. This is a failed dependency
 that needs inspection, not proof that catch-up has completed.
+
+
+Execution `maraithon-todo-validation-wwdhh` explained the Gmail dependency:
+63 of acquisition `e5a82073`'s 64 reasoning jobs completed, while job
+`089197e1` became `provider_outcome_ambiguous` during the 21:02 deployment.
+The finalizer correctly failed as `source_discovery_child_failed`. After the
+remaining jobs finished, normal recurring discovery created acquisition
+`2029a98b-1b2a-457c-ba3d-fecbd76b6b9d` at 21:17:22 with 66 fresh reasoning
+partitions. This is ordinary recovery from an interrupted cycle; no receipt,
+cursor, or ambiguous outcome was changed manually. The replacement cycle and
+its dependent closure remain to finish before calling Gmail current.
