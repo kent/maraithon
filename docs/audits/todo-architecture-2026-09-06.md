@@ -28,7 +28,7 @@ for `kent@runner.now`, using the manual-first development policy.
    without duplicating mailbox or Slack acquisition. Also propagate completion
    errors to the durable runner so failed model calls retry.
    Status: implemented in `581e8fa5`; build passed; deployed in
-   `maraithon-00195-x7j`. Live execution pending runtime recovery.
+   `maraithon-00195-x7j`. Runtime recovered; live backstop execution pending behind source catch-up.
 
 2. **Fast deploy contains a drain-proof gate contrary to development policy.**
    It polls up to 48 times and refuses replacement without a strong drain
@@ -52,7 +52,10 @@ for `kent@runner.now`, using the manual-first development policy.
    prevent a delayed model response from closing work the user changed.
    Review reopening and feedback across clients as part of this change.
    Status: provenance and row-locked snapshot protection implemented in
-   `93bf5406`; build passed. Reopening/feedback review remains open.
+   `93bf5406`; build passed and deployed in `maraithon-00196-k5d`.
+   Reopening now records a correction and requires newer evidence across
+   deterministic and model checks. Existing mobile and companion reopen
+   actions use this shared server path; build passed, deployment pending.
 
 5. **Completion rotation stops at a fixed 500-row pool.**
    The general cross-source pass loads the oldest-updated 500 todos before
@@ -60,8 +63,8 @@ for `kent@runner.now`, using the manual-first development policy.
    `updated_at`, so todos outside that pool can remain excluded indefinitely.
    Order or page the durable candidate pool by completion coverage itself.
    Status: fixed in `c109e4e3`; the query orders by the completion-check stamp
-   before applying its bound and applies the age filter in SQL. Build passed;
-   deployment pending.
+   before applying its bound and applies the age filter in SQL. Build passed
+   and deployed in `maraithon-00196-k5d`.
 
 6. **Live Gmail catch-up and runtime health require current evidence.**
    The September 5 report explicitly left Gmail catch-up unfinished. Inspect
@@ -69,7 +72,7 @@ for `kent@runner.now`, using the manual-first development policy.
    checkpoints, exact outcome evidence, and interval database load before
    calling this complete. Repair underlying causes instead of advancing
    unevaluated cursors or relabeling ambiguous outcomes.
-   Status: **unhealthy**, verified at 18:56 UTC on revision
+   Initial status: **unhealthy**, verified at 18:56 UTC on revision
    `maraithon-00194-xqs`. One partition is draining with an expired lease;
    63 are ready/live. Gmail and Slack source queues have pending work dating
    to September 5 at 21:05–21:09. Gmail discovery cursors last advanced on
@@ -84,7 +87,8 @@ for `kent@runner.now`, using the manual-first development policy.
    One trigger rejected revival of an expired node incarnation. `3b62894f`
    catches database failures in the coordination tick, retains the incarnation
    for cleanup, and publishes uncertainty before cleanup; build passed.
-   The existing stranded partition still needs diagnosis and recovery.
+   Deployed in `maraithon-00196-k5d`. The stranded partition was recovered
+   as described below; source catch-up remains in progress.
 
 7. **Verify the complete product loop for Kent.**
    Confirm source-backed discovery and closure, ranked manual work, useful
@@ -97,16 +101,60 @@ for `kent@runner.now`, using the manual-first development policy.
 
 The first batch through `f3dfb2d8` deployed successfully using GitHub's existing
 keyless `make deploy` workflow, run `34053264882`. Revision
-`maraithon-00195-x7j` serves 100% of traffic. The previously unpushed history was
+`maraithon-00195-x7j` initially served 100% of traffic. The previously unpushed history was
 already deployed through `d2608e73`; this delivery adds the backstop and fast
 deployment changes. The same push triggered the configured mobile release
-workflow for the already-present native updates (`34053264885`).
+workflow for the already-present native updates (`34053264885`). It completed
+successfully: TestFlight version `1.0.1`, build `20260906185611`, Founders group.
+
+The second server batch through `4a2ded25` deployed successfully in workflow
+`34053477349`. Revision `maraithon-00196-k5d` serves 100% of traffic and
+`/health` reports `ok` with the combined process role.
 
 Local deployment was unavailable: the shell's active service account belongs
 to another project, Kent's cached organizational logins require reauthentication,
 and the other checked credentials lack deployment access. No credentials or
 IAM grants were changed. Later fixes listed above are committed locally and
-will form the next small deployment after the first run settles.
+were delivered by the second workflow. `591e1ba7` separately records physical
+Cloud Run revision/service identity on new runtime nodes and logs their node
+IDs; its build passed and deployment is pending.
+
+## Stranded partition recovery
+
+The 19:03 UTC snapshot isolated partition 31, epoch 160. No Agent leases or
+unreconciled Agent incidents remain. The blocker is reserved background-task
+assignment `efde0e1f-c57f-499d-9be8-26f8cfcade5a`, for closure acquisition job
+`b7b6e422-b6d4-40ab-b42c-702db7a86748`, node
+`0f3f3c54-7106-45dd-b55d-500de76ef9e2`. Its provider boundary is `not_entered`.
+It blocks 148 connector, 99 model, and 13 provider jobs at that observation.
+
+A reconciled Agent incident on that exact node carries owner generation
+`3bbe378e-e0a9-4266-b8e7-f2e83f5760c9`. Cloud Run's 21:11:37 September 5 crash
+log names that exact owner under revision `maraithon-00194-xqs`, establishing
+the hosting revision independently of the reused protocol/deployment revision.
+
+After verifying no traffic targeted it and the replacement served normally,
+the retired revision was deleted. Its absence and successful deletion audit
+were verified. Destruction evidence is retained outside the repo at
+`~/.config/maraithon/agent-termination-evidence/task-efde0e1f-c57f-499d-9be8-26f8cfcade5a-destruction.json`,
+SHA-256 `408e3071957eda76ed7fdc36f0cc0c0a05e7f26ccb6c264954f587a55d071d9c`.
+
+Execution `maraithon-runtime-recovery-b778p` recorded the identity-bound
+proof at 19:10:48 UTC through `TaskTerminationAttestations.record/4` and the
+existing incident-role secret inside Cloud Run with two database connections.
+Ordinary runtime reconciliation settled the task as `cancelled_before_provider`
+at 19:10:49. The Chief of Staff recovered at 19:10:54. The temporary incident-role
+job was deleted after saving its successful execution receipt outside the repo.
+The first recovery execution was cancelled before use to add the API-token
+secret reference required by release startup configuration.
+
+At 19:12:54 UTC, all 64 partitions were ready with live leases, with no pending
+termination requests. Eight discovery reasoning jobs had completed since
+recovery, with more source work running. The Chief of Staff completed two
+effects; all 1,104 outcome-known effect assignments matched complete outcome
+evidence. Source watermarks and the latest checkpoint had not yet advanced;
+the backlog and the active agent cycle still needed to finish. These observations
+prove recovery, not yet complete source catch-up or full runtime health.
 
 ## Verification policy
 

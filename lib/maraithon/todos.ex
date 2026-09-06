@@ -1842,8 +1842,34 @@ defmodule Maraithon.Todos do
     |> update_text_attr(attrs, "counterparty_person_id", "counterparty_person_id")
     |> update_text_attr(attrs, "counterparty_label", "counterparty_label")
     |> update_metadata_attr(todo, attrs)
+    |> record_completion_reopening(todo)
     |> UserFacingCopy.polish_attrs()
   end
+
+  defp record_completion_reopening(changes, %Todo{status: status} = todo)
+       when status in ["done", "dismissed"] do
+    if Map.get(changes, "status") in ["open", "snoozed"] do
+      reopened_at = DateTime.to_iso8601(DateTime.utc_now())
+
+      metadata =
+        Map.get(changes, "metadata", todo.metadata || %{})
+        |> Map.put("completion_reopened_at", reopened_at)
+        |> Map.put("completion_correction", %{
+          "reopened_at" => reopened_at,
+          "previous_status" => status,
+          "previous_automatic_completion" => (todo.metadata || %{})["automatic_completion"]
+        })
+        |> Map.drop(["automatic_completion", "resolution_note"])
+
+      changes
+      |> Map.put("metadata", metadata)
+      |> Map.put("last_completion_checked_at", nil)
+    else
+      changes
+    end
+  end
+
+  defp record_completion_reopening(changes, _todo), do: changes
 
   defp update_text_attr(changes, attrs, key, field) do
     if attr_present?(attrs, key) do

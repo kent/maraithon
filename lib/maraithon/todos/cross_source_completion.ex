@@ -1468,7 +1468,7 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
       "title" => bounded_prompt_string(todo.title, 240),
       "summary" => bounded_prompt_string(todo.summary, 480),
       "next_action" => bounded_prompt_string(todo.next_action, 320),
-      "captured_at" => DateTime.to_iso8601(todo.source_occurred_at || todo.inserted_at),
+      "captured_at" => DateTime.to_iso8601(Todo.completion_evidence_after(todo)),
       # SPEC 05 R5: structured linkage so the model can match a specific piece
       # of inbound evidence to a specific waiting-on item.
       "direction" => bounded_prompt_string(todo.direction, 64),
@@ -1730,7 +1730,9 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
     - Use intelligence, not keyword overlap. Compare the object, counterparty,
       timing, source references, and the actual action requested. Source search
       terms or topic similarity alone are not completion.
-    - Evidence must be AFTER the item's captured_at timestamp.
+    - Evidence must be AFTER the item's captured_at timestamp. For reopened
+      work this is the user's correction time; earlier evidence was rejected
+      and cannot be used to close it again.
     - Topic overlap alone is NOT completion. Future intent ("will pay
       tomorrow"), questions, reminders, or partial progress are NOT
       completion.
@@ -1984,7 +1986,7 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
   defp matching_evidence(todo, resolution, evidence, kind_authorized?) do
     quote = bounded_prompt_string(resolution["evidence_quote"], 500)
     channel = bounded_prompt_string(resolution["evidence_channel"], 64)
-    todo_at = todo.source_occurred_at || todo.inserted_at
+    todo_at = Todo.completion_evidence_after(todo)
     confidence = resolution["confidence"]
 
     if is_number(confidence) and confidence >= @min_confidence and is_binary(quote) and

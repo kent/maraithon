@@ -113,6 +113,22 @@ defmodule Maraithon.Todos.Todo do
     :last_completion_checked_at
   ]
 
+  @doc "The earliest instant after which new evidence may automatically close this todo."
+  def completion_evidence_after(%__MODULE__{} = todo) do
+    [todo.source_occurred_at || todo.inserted_at, reopened_at(todo)]
+    |> Enum.filter(&is_struct(&1, DateTime))
+    |> Enum.max(DateTime, fn -> nil end)
+  end
+
+  def reopened_at(%__MODULE__{metadata: metadata}) do
+    with value when is_binary(value) <- Map.get(metadata || %{}, "completion_reopened_at"),
+         {:ok, at, _offset} <- DateTime.from_iso8601(value) do
+      at
+    else
+      _ -> nil
+    end
+  end
+
   def changeset(todo, attrs) do
     todo
     |> cast(attrs, @required_fields ++ @optional_fields)

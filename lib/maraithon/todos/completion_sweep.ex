@@ -10,7 +10,7 @@ defmodule Maraithon.Todos.CompletionSweep do
     * Dropped-commitment todos whose backing local reminder is completed.
     * Local calendar-conflict todos whose conflict start passed more than 24h ago.
 
-  All mutations go through `Maraithon.Todos.mark_done/3` so linked insight state
+  All mutations go through `Maraithon.Todos.mark_done_if_current/3` so linked insight state
   and resolution metadata stay consistent with manual todo actions.
   """
 
@@ -104,6 +104,7 @@ defmodule Maraithon.Todos.CompletionSweep do
     todos =
       Todo
       |> where([todo], todo.user_id == ^user_id and todo.status in ^@open_statuses)
+      |> where([todo], todo.source in ["gmail", "local_patterns"])
       |> maybe_scope_source_account(opts)
       |> maybe_scope_todo_ids(opts)
       |> maybe_exclude_account_messages(opts)
@@ -315,16 +316,7 @@ defmodule Maraithon.Todos.CompletionSweep do
     end
   end
 
-  # `source_occurred_at` can be nil on some ingested todos; fall back to when
-  # the todo was captured so those items still get completion-checked instead
-  # of staying :open forever.
-  defp source_anchor_datetime(%Todo{source_occurred_at: %DateTime{} = source_at}), do: source_at
-  defp source_anchor_datetime(%Todo{inserted_at: %DateTime{} = inserted_at}), do: inserted_at
-
-  defp source_anchor_datetime(%Todo{inserted_at: %NaiveDateTime{} = inserted_at}),
-    do: DateTime.from_naive!(inserted_at, "Etc/UTC")
-
-  defp source_anchor_datetime(_todo), do: nil
+  defp source_anchor_datetime(todo), do: Todo.completion_evidence_after(todo)
 
   defp dropped_commitment_completion_evidence(%Todo{} = todo) do
     metadata = todo.metadata || %{}
@@ -334,8 +326,16 @@ defmodule Maraithon.Todos.CompletionSweep do
 
     case completed_reminder(todo.user_id, reminder_id) do
       %LocalReminder{} = reminder ->
-        {:done, :completed_local_reminder,
-         "Scheduled completion sweep: Backing local reminder #{reminder_id} was completed at #{format_dt(reminder.completed_at)}."}
+        reopened_at = Todo.reopened_at(todo)
+
+        if is_nil(reopened_at) or
+             (is_struct(reminder.completed_at, DateTime) and
+                DateTime.compare(reminder.completed_at, reopened_at) == :gt) do
+          {:done, :completed_local_reminder,
+           "Scheduled completion sweep: Backing local reminder #{reminder_id} was completed at #{format_dt(reminder.completed_at)}."}
+        else
+          :open
+        end
 
       nil ->
         :open
@@ -345,7 +345,7 @@ defmodule Maraithon.Todos.CompletionSweep do
   defp calendar_conflict_completion_evidence(%Todo{} = todo, %DateTime{} = now) do
     cutoff = DateTime.add(now, -@calendar_conflict_grace_hours, :hour)
 
-    if is_struct(todo.source_occurred_at, DateTime) and
+    if is_nil(Todo.reopened_at(todo)) and is_struct(todo.source_occurred_at, DateTime) and
          DateTime.compare(todo.source_occurred_at, cutoff) == :lt do
       {:done, :expired_calendar_conflict,
        "Scheduled completion sweep: Calendar conflict window passed more than #{@calendar_conflict_grace_hours} hours before this sweep."}
