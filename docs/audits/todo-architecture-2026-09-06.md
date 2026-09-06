@@ -167,12 +167,22 @@ for `kent@runner.now`, using the manual-first development policy.
     Refresh node, partition, and leader ownership before planning whenever
     preparation consumed a renewal interval. Reject expired provider-entry
     attempts with an ordinary authority-loss result before the trigger rejects
-    them. Status: implemented locally; `make build` passed; deployment pending.
+    them. Status: implemented in `03765c85`; `make build` passed; workflow
+    `34056034289` deployed successfully.
 
     The Chief of Staff's three-failure guard tripped at 19:25:29 UTC and left it
     stopped. Its normal explicit start action checks that prior leases,
     operations, processing directives, and termination incidents are clear before
     resetting the guard. Restart and sustained cycle verification remain pending.
+
+13. **An interrupted iPhone sync can retain a validator for unsaved data.**
+    The first todo page stores the collection ETag before later pages and the
+    SwiftData merge finish. A failure can then receive 304 on retry while the
+    local todo list is still old. Clear that validator unless the complete list
+    was fetched and saved; preserve a valid 304 response. The same cleanup also
+    applies to a capped listing and local save failure. Simulator app build
+    passed on iOS 26.4; no project generation was needed and tests were not run.
+    Status: implemented locally; TestFlight delivery pending.
 
 ## Delivery state
 

@@ -29,6 +29,16 @@ enum ProductionDataSync {
     ) async throws {
         guard let sessionToken = sessionStore.user?.sessionToken else { return }
 
+        // The first page supplies a validator for the entire collection. Keep it
+        // only after every page has been fetched and the local merge is saved;
+        // otherwise a later 304 could hide an interrupted sync indefinitely.
+        var keepValidator = false
+        defer {
+            if !keepValidator {
+                ETagStore.shared.set(nil, for: MobileAPIClient.ETagKey.todos(includeCards: includeCards))
+            }
+        }
+
         let listing: MobileAPIClient.TodoListing
         do {
             listing = try await MobileAPIClient().listTodos(
@@ -39,6 +49,7 @@ enum ProductionDataSync {
         } catch MobileAPIError.notModified {
             // The server vouched the collection is unchanged; skip the merge
             // and the save entirely.
+            keepValidator = true
             return
         }
         let remoteTodos = listing.todos
@@ -81,6 +92,7 @@ enum ProductionDataSync {
         }
 
         try modelContext.save()
+        keepValidator = listing.isComplete
     }
 
     static func refreshPeople(
