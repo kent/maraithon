@@ -17,7 +17,6 @@ defmodule Maraithon.Runtime.TodoCompletionSweep do
   alias Maraithon.Todos.{CompletionSweep, CrossSourceCompletion, Todo, UserBatch}
 
   @deterministic_batch_size 20
-  @cross_source_batch_size 20
 
   require Logger
 
@@ -345,7 +344,7 @@ defmodule Maraithon.Runtime.TodoCompletionSweep do
 
   defp run_cross_source_batches(user_id, todo_ids, opts) do
     todo_ids
-    |> Enum.chunk_every(@cross_source_batch_size)
+    |> Enum.chunk_every(CrossSourceCompletion.max_todos_per_request())
     |> Enum.with_index()
     |> Enum.reduce_while(
       %{

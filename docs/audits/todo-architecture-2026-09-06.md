@@ -414,6 +414,23 @@ for `kent@runner.now`, using the manual-first development policy.
     at 22:36 UTC: the completed row had no attention/next-step cue, the inspector
     showed Done and Notes, and Reopen remained available. Tests were not run.
 
+29. **Closure scans underfill model requests.** Execution
+    `maraithon-todo-validation-wf5kw` observed eight completed closure batches
+    averaging 113 seconds at 22:48 UTC. The six newest sampled Slack results
+    each used 13 model calls for 468 source items and 20 todos, with complete
+    coverage and no fetch/evaluation error. There were 940 pending closure
+    batches across the three connected source accounts.
+
+    Share the checker's existing 40-todo limit with both batching callers.
+    Exact scans now use the available evidence space and let the existing
+    final serialized-request check split/repack at 96,000 bytes, instead of
+    reserving half the space for worst-case escaping as well. Selective scans
+    retain that reserve. Source-reference coverage, exact todo-ID validation,
+    response limits, and the final request-size check remain intact. Existing
+    20-todo handoffs stay valid; newly acquired graphs use the shared limit.
+    Status: implemented; `make build` passed. Tests were not run under the
+    manual-first policy. Deployment and measured improvement remain pending.
+
 ## Delivery state
 
 Current server: `maraithon-00212-c5r`, code through `d12529a8`, deployed by

@@ -87,6 +87,9 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
     "lookback_hours" => @evidence_window_days * 24 * 2
   }
 
+  @doc "Maximum todo count accepted by one completion-model response."
+  def max_todos_per_request, do: @max_todos
+
   @doc """
   Runs the cross-source pass for every user with open todos.
   """
@@ -1396,9 +1399,16 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
     if base_bytes > @max_prompt_bytes do
       {:error, {:prompt_base_exceeds_budget, base_bytes, @max_prompt_bytes}}
     else
-      # The prompt is itself a JSON message string, so reserve worst-case
-      # outer escaping instead of treating raw prompt bytes as request bytes.
-      evidence_budget = div(max(@max_prompt_bytes - base_bytes + byte_size("[]"), 0), 2)
+      available_bytes = max(@max_prompt_bytes - base_bytes + byte_size("[]"), 0)
+
+      # Exact scans split and repack on the final serialized-size check below.
+      # Let that check account for actual escaping instead of spending half the
+      # evidence budget on a worst-case reserve. The selective path still needs
+      # that reserve because it selects its evidence before rendering the prompt.
+      evidence_budget =
+        if Keyword.get(opts, :exact_source_delta, false),
+          do: available_bytes,
+          else: div(available_bytes, 2)
 
       with {:ok, {evidence_json, included_evidence}} <-
              encode_evidence_for_mode(todos, evidence, evidence_budget, opts) do

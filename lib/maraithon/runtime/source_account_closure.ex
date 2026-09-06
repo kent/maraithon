@@ -18,9 +18,9 @@ defmodule Maraithon.Runtime.SourceAccountClosure do
   alias Maraithon.Runtime.SlackSourceReplay
   alias Maraithon.Runtime.SourceAccountDiscovery
   alias Maraithon.Runtime.TodoCompletionSweep
+  alias Maraithon.Todos.CrossSourceCompletion
   alias Maraithon.Todos.Todo
 
-  @todo_batch_size 20
   @max_replay_fanouts 500
   @allowed_watermark_kinds ~w(gmail_closure_watermark slack_closure_watermark)
 
@@ -99,7 +99,7 @@ defmodule Maraithon.Runtime.SourceAccountClosure do
   end
 
   defp build_fanout(account, source_partitions, watermarks, source_refs, todo_snapshots, opts) do
-    todo_batches = Enum.chunk_every(todo_snapshots, @todo_batch_size)
+    todo_batches = Enum.chunk_every(todo_snapshots, CrossSourceCompletion.max_todos_per_request())
     packed_partitions = pack_source_partitions(source_partitions)
 
     case build_bounded_handoffs(todo_batches, packed_partitions, account, opts) do
