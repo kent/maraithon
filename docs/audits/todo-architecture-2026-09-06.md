@@ -419,10 +419,12 @@ for `kent@runner.now`, using the manual-first development policy.
 Current server: `maraithon-00212-c5r`, code through `d12529a8`, deployed by
 successful workflow `34064359869`. Current iPhone release: TestFlight `1.0.1`
 build `20260906211723`, code through `871e245c`, available to Founders via
-workflow `34060595850`. The signed local Mac development app is installed at
-`~/Applications/Maraithon.app`; its 21:07 UTC refresh showed 953 active items
-in 6.792 seconds with lazy source context. The subsequent cursor optimization
-loaded all 953 items in 7.098 seconds on startup at 21:09 UTC.
+workflow `34060595850`. The signed local Mac development app, code through
+`caa7f517`, is installed at `~/Applications/Maraithon.app`. Live checks verified
+New Todo, saved wording and multiline notes after a fresh load, user completion,
+the completed-row display, and Command-N/Escape. The two manual check items
+are completed; these user actions are not automatic-closure evidence. The app
+was returned to the unfiltered active list, which contained 992 items.
 No public Sparkle release was made.
 
 
@@ -745,3 +747,32 @@ reasoning jobs and 348 closure reasoning jobs were pending. Gmail account 2
 discovery advanced at 22:04:40; Gmail account 1 discovery and all closure
 cursors still lagged. Automatic completion with fresh provenance is still
 unproven. These are remaining product outcomes, despite the improved runtime.
+
+At 22:27:01 UTC, Gmail account 1's discovery cursor advanced for the first time
+since September 2. Acquisition `13123827` completed all 69 reasoning jobs and
+its finalizer, covering 278 source items. Slack discovery advanced at 22:27:10.
+The observation execution `maraithon-todo-validation-2xv88` completed
+successfully at 22:29:33; its last sample caught revision 211's handoff and must
+not be treated as steady-state health.
+
+Execution `maraithon-todo-validation-62hsg` observed all 64 partitions ready/live
+on revision 212 at 22:40:34, with no new restart-guard crash. The Chief's
+scheduled wakeup fired at 22:39:59 and completed two Effects by 22:40:29. All
+1,134 outcome-known Effects had matching exact evidence; one task was running
+and none awaited termination. A fresh revision-212 checkpoint remains due.
+Cloud SQL showed no error after 22:37 through the 22:41 log check.
+
+By this sample the old Gmail account 2 graph had settled all 336 children:
+334 abandoned before model work, with its two ambiguous outcomes retained.
+The old Slack graph also cleared its last pending child as abandoned; its 30
+completed results and 17 ambiguous outcomes remain intact. The old Gmail
+account 1 discovery graph retained 49 completed results, four ambiguous
+outcomes, and 13 abandoned children. Eight staged closure children from an
+interrupted Gmail account 1 acquisition were still pending. No source cursor
+or outcome was manually relabeled.
+
+Discovery watermarks for both Gmail accounts and Slack were now within roughly
+a minute of the observation. Closure watermarks still lagged on September 2
+(Gmail) and September 5 (Slack). Fresh closure cycles, automatic-completion
+provenance, and sustained post-deploy processing remain outstanding. The
+`62hsg` observation execution was still running at the 22:41 status check.
