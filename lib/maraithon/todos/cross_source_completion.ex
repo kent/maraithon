@@ -366,9 +366,8 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
         ]
         |> Enum.reject(&is_nil/1)
 
-      acc = %{acc | item_ids: Enum.into(ids, acc.item_ids)}
-
       channel = read_string(item, "channel", nil)
+      acc = %{acc | item_ids: Enum.into(ids, acc.item_ids, &{channel, &1})}
       account = read_string(item, "account", nil)
       subject = read_string(item, "subject", nil)
 
@@ -382,7 +381,7 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
 
   defp evidence_linked?(todo, %{item_ids: item_ids, label_items: label_items}) do
     (is_binary(todo.source_item_id) and todo.source_item_id != "" and
-       MapSet.member?(item_ids, todo.source_item_id)) or
+       MapSet.member?(item_ids, {todo.source, todo.source_item_id})) or
       counterparty_label_linked?(todo, label_items)
   end
 
@@ -641,17 +640,17 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
       source_health_evidence(bundle, now),
       bundle
       |> SourceBundle.gmail_messages()
-      |> evidence_bucket(&gmail_source_evidence(&1, exact?), exact?),
+      |> evidence_bucket(&message_evidence_items(&1, exact?, :gmail), exact?),
       bundle |> SourceBundle.calendar_events() |> evidence_bucket(&calendar_source_evidence/1),
       bundle
       |> SourceBundle.calendar_local_events()
       |> evidence_bucket(&local_calendar_source_evidence/1),
       bundle
       |> SourceBundle.slack_messages()
-      |> evidence_bucket(&slack_source_evidence(&1, exact?), exact?),
+      |> evidence_bucket(&message_evidence_items(&1, exact?, :slack), exact?),
       bundle
       |> SourceBundle.slack_mentions()
-      |> evidence_bucket(&slack_mention_evidence(&1, exact?), exact?),
+      |> evidence_bucket(&message_evidence_items(&1, exact?, :slack_mention), exact?),
       bundle |> SourceBundle.imessage_messages() |> evidence_bucket(&imessage_source_evidence/1),
       bundle |> SourceBundle.notes() |> evidence_bucket(&note_source_evidence/1),
       bundle |> SourceBundle.reminders() |> evidence_bucket(&reminder_source_evidence/1),
@@ -766,7 +765,7 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
   defp evidence_bucket(items, mapper) when is_list(items) and is_function(mapper, 1) do
     items
     |> Enum.take(@max_live_evidence_per_source * 4)
-    |> Enum.map(mapper)
+    |> Enum.flat_map(&(mapper.(&1) |> List.wrap()))
     |> Enum.reject(&is_nil/1)
     |> Enum.sort_by(&evidence_sort_key/1, :desc)
     |> Enum.take(@max_live_evidence_per_source)
@@ -776,12 +775,56 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
 
   defp evidence_bucket(items, mapper, true) when is_list(items) and is_function(mapper, 1) do
     items
-    |> Enum.map(mapper)
+    |> Enum.flat_map(&(mapper.(&1) |> List.wrap()))
     |> Enum.reject(&is_nil/1)
     |> Enum.sort_by(&evidence_sort_key/1, :desc)
   end
 
   defp evidence_bucket(items, mapper, false), do: evidence_bucket(items, mapper)
+
+  # Context is useful evidence, but it must retain its own timestamp and
+  # author. Combining it with a newer message would make an old "done" reply
+  # appear to be fresh evidence, including after the user reopened the todo.
+  defp message_evidence_items(message, exact?, source) when is_map(message) do
+    {mapper, inherited_keys} =
+      case source do
+        :gmail ->
+          {&gmail_source_evidence/2,
+           ~w(thread_id account google_account_email google_provider subject)}
+
+        :slack ->
+          {&slack_source_evidence/2, ~w(team_id team_name channel_id channel_name thread_ts)}
+
+        :slack_mention ->
+          {&slack_mention_evidence/2, ~w(team_id team_name channel_id channel_name thread_ts)}
+      end
+
+    current = mapper.(message, exact?)
+    inherited = Map.new(inherited_keys, &{&1, read_value(message, &1)})
+
+    source_ref =
+      if(source == :gmail, do: gmail_source_ref(message), else: slack_source_ref(message))
+
+    context =
+      message
+      |> read_list("thread_context")
+      |> Enum.filter(&is_map/1)
+      |> Enum.map(fn reply ->
+        inherited
+        |> Map.merge(reply)
+        |> mapper.(exact?)
+        |> case do
+          nil -> nil
+          item -> Map.put(item, "source_ref", source_ref)
+        end
+      end)
+
+    # The coverage reference remains the acquired delta item; source_item_id,
+    # sender, and at identify the actual reply quoted as completion evidence.
+    [current | context]
+  end
+
+  defp message_evidence_items(_message, _exact?, _source), do: []
 
   defp gmail_source_evidence(message, exact?) when is_map(message) and is_boolean(exact?) do
     current_text =
@@ -791,33 +834,13 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
         exact?
       )
 
-    thread_context =
-      message
-      |> read_list("thread_context")
-      |> Enum.map(fn reply ->
-        sender = read_string(reply, "from", "Someone")
-
-        text =
-          source_evidence_text(
-            reply,
-            ~w(body_text text_body body snippet html_body),
-            exact?
-          )
-
-        if text, do: "#{sender}: #{text}"
-      end)
-      |> Enum.reject(&is_nil/1)
-      |> Enum.join("\n")
-
     evidence_item(
       %{
         "channel" => "gmail",
         "kind" => gmail_kind(message),
         "subject" => read_string(message, "subject", nil),
-        "text" =>
-          [current_text, thread_context]
-          |> Enum.reject(&blank?/1)
-          |> Enum.join("\nEarlier Gmail thread context:\n"),
+        "text" => current_text,
+        "sender" => read_string(message, "from", nil),
         "at" => evidence_time(message, ["internal_date", "date"]),
         "source_item_id" => read_string(message, "message_id", read_string(message, "id", nil)),
         "source_ref" => gmail_source_ref(message),
@@ -878,7 +901,7 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
       "kind" => kind,
       "subject" => summary,
       "text" => text,
-      "at" => evidence_time(event, ["start", "start_at", "created", "updated"]),
+      "at" => evidence_time(event, ["updated", "updated_at", "created", "created_at"]),
       "source_item_id" =>
         read_string(event, "event_id", read_string(event, "id", read_string(event, "guid", nil))),
       "account" => read_string(event, "account", read_string(event, "google_account_email", nil))
@@ -897,29 +920,14 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
         read_string(message, "thread_ts", message_ts)
       )
 
-    thread_context =
-      message
-      |> read_list("thread_context")
-      |> Enum.map(fn reply ->
-        sender =
-          read_string(reply, "user_display_name", read_string(reply, "user", "Someone"))
-
-        text = source_evidence_text(reply, ~w(text_resolved text), exact?)
-        if text, do: "#{sender}: #{text}"
-      end)
-      |> Enum.reject(&is_nil/1)
-      |> Enum.join("\n")
-
     evidence_item(
       %{
         "channel" => "slack",
         "kind" => "slack message",
         "subject" =>
           read_string(message, "channel_name", read_string(message, "channel_id", nil)),
-        "text" =>
-          [current_text, thread_context]
-          |> Enum.reject(&blank?/1)
-          |> Enum.join("\nThread context:\n"),
+        "text" => current_text,
+        "sender" => read_string(message, "user_display_name", read_string(message, "user", nil)),
         "at" => evidence_time(message, ["date", "ts"]),
         "source_item_id" => slack_source_item_id(channel_id, message_ts),
         "target_source_item_id" => slack_source_item_id(channel_id, target_ts),
@@ -1442,6 +1450,7 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
     %{
       "channel" => read_string(item, "channel", nil),
       "kind" => read_string(item, "kind", nil),
+      "sender" => read_string(item, "sender", nil),
       "subject" => read_string(item, "subject", nil),
       "text" => exact_string(item, "text", nil),
       "at" => read_string(item, "at", nil),
@@ -1588,7 +1597,8 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
   defp exact_evidence_link?(todo, item) do
     source_item_id = todo.source_item_id
 
-    is_binary(source_item_id) and source_item_id != "" and
+    todo.source == read_string(item, "channel", nil) and
+      is_binary(source_item_id) and source_item_id != "" and
       source_item_id in [
         read_string(item, "source_item_id", nil),
         read_string(item, "thread_id", nil),
@@ -1674,6 +1684,7 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
     %{
       "channel" => bounded_prompt_string(channel, 64),
       "kind" => bounded_prompt_string(read_string(item, "kind", nil), 160),
+      "sender" => bounded_prompt_string(read_string(item, "sender", nil), 200),
       "subject" => bounded_prompt_string(read_string(item, "subject", nil), 360),
       "text" => bounded_prompt_string(read_string(item, "text", nil), text_limit),
       "at" => bounded_prompt_string(read_string(item, "at", nil), 64),
@@ -1686,11 +1697,11 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
     }
     |> compact_map()
     |> PromptBudget.project_fields(
-      ~w(channel kind subject text at source_item_id target_source_item_id thread_id account permalink),
+      ~w(channel kind sender subject text at source_item_id target_source_item_id thread_id account permalink),
       if(channel == "source_health", do: 13_000, else: 1_200),
       string_bytes: text_limit,
       list_items: 4,
-      map_entries: 11,
+      map_entries: 12,
       max_depth: 2,
       key_bytes: 64
     )
@@ -1730,6 +1741,15 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
     - Use intelligence, not keyword overlap. Compare the object, counterparty,
       timing, source references, and the actual action requested. Source search
       terms or topic similarity alone are not completion.
+    - Evidence may come from a different source or thread, including for a
+      manually added todo. In that case supply relationship_anchor: the exact
+      distinctive object/name/reference appearing in BOTH the todo's title,
+      summary or next_action and the evidence's subject or text. Use a specific
+      phrase with at least two meaningful words (e.g. "Acme renewal"), or an
+      exact URL, email, or ticket reference. Generic phrases like "all done"
+      are not a relationship. The anchor establishes which work this is;
+      evidence_quote must separately prove that work is finished. If no such
+      relationship can be verified, leave the item open.
     - Evidence must be AFTER the item's captured_at timestamp. For reopened
       work this is the user's correction time; earlier evidence was rejected
       and cannot be used to close it again.
@@ -1768,6 +1788,7 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
           "completed": true,
           "evidence_channel": "slack | gmail | google_calendar | local_calendar | imessage | reminders | notes | files | browser_history | voice_memos | crm",
           "evidence_quote": "the exact activity text that proves completion",
+          "relationship_anchor": "shared distinctive object/name/reference when crossing sources or threads",
           "reasoning": "one short sentence",
           "confidence": 0.0,
           "reply_outcome": "answered | acknowledged_only | no_reply — only for owed_to_me items with a counterparty-reply signal; omit otherwise"
@@ -1942,8 +1963,9 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
         "method" => "cross_source_llm",
         "confidence" => confidence,
         "evidence_quote" => bounded_prompt_string(quote_text, 500),
+        "relationship_anchor" => bounded_prompt_string(resolution["relationship_anchor"], 200),
         "evidence" =>
-          Map.take(matched, ~w(channel at source_ref source_item_id thread_id account))
+          Map.take(matched, ~w(channel at sender source_ref source_item_id thread_id account))
       }
 
       case Todos.mark_done_if_current(todo, provenance, note: note) do
@@ -1994,15 +2016,53 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
       Enum.find(evidence, fn item ->
         evidence_channel = read_string(item, "channel", nil)
         evidence_at = item |> read_string("at", nil) |> parse_datetime()
-        text = read_string(item, "text", "")
+        text = exact_string(item, "text", "")
         subject = read_string(item, "subject", "")
 
         kind_authorized?.(item) and evidence_channel == channel and
-          evidence_channel != "source_health" and evidence_linked_to_todo?(todo, item) and
+          evidence_channel != "source_health" and resolution_linked?(todo, resolution, item) and
           match?(%DateTime{}, evidence_at) and DateTime.compare(evidence_at, todo_at) == :gt and
           evidence_quote_matches?(quote, text, subject)
       end)
     end
+  end
+
+  defp resolution_linked?(todo, resolution, item) do
+    account = read_string(item, "account", nil)
+
+    same_account? =
+      is_nil(todo.source_account_label) or is_nil(account) or todo.source_account_label == account
+
+    (same_account? and evidence_linked_to_todo?(todo, item)) or
+      shared_relationship_anchor?(todo, resolution, item)
+  end
+
+  @generic_relationship_words ~w(
+    a an and are as at be been by complete completed confirm confirmed do done for
+    from get got has have i in is it me my of on our please send sent task thanks
+    that the their them this to today tomorrow update updated we will with work you your
+  )
+
+  defp shared_relationship_anchor?(todo, resolution, item) do
+    anchor = normalize_evidence_quote(resolution["relationship_anchor"])
+
+    meaningful_words =
+      Regex.scan(~r/[\p{L}\p{N}]+/u, anchor)
+      |> List.flatten()
+      |> Enum.reject(&(String.length(&1) < 3 or &1 in @generic_relationship_words))
+      |> Enum.uniq()
+
+    specific_reference? =
+      Regex.match?(~r/\A(?:https?:\/\/\S+|[^\s@]+@[^\s@]+\.[^\s@]+|[a-z]+-\d{2,})\z/u, anchor)
+
+    byte_size(anchor) in 8..200 and
+      (length(meaningful_words) >= 2 or specific_reference?) and
+      Enum.any?([todo.title, todo.summary, todo.next_action], fn text ->
+        String.contains?(normalize_evidence_quote(text), anchor)
+      end) and
+      Enum.any?([read_string(item, "subject", ""), exact_string(item, "text", "")], fn text ->
+        String.contains?(normalize_evidence_quote(text), anchor)
+      end)
   end
 
   defp inbound_reply_evidence?(item) do
@@ -2173,6 +2233,10 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
     |> Enum.uniq_by(fn item ->
       {
         read_string(item, "channel", nil),
+        read_string(item, "source_ref", nil),
+        read_string(item, "account", nil),
+        read_string(item, "at", nil),
+        read_string(item, "kind", nil),
         read_string(item, "source_item_id", nil),
         read_string(item, "target_source_item_id", nil),
         read_string(item, "thread_id", nil),

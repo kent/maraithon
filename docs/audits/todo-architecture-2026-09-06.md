@@ -43,7 +43,12 @@ for `kent@runner.now`, using the manual-first development policy.
    reply normally has a different ID and channel from a Gmail todo, so a valid
    model decision can be rejected. Replace this with evidence-grounded
    cross-source relationship validation while retaining quote and time checks.
-   Status: open; inspect identity fields and implement the complete path.
+   Status: implemented locally with a quoted, distinctive shared relationship
+   anchor for cross-source/manual work, while retaining confidence, exact quote,
+   timestamp, account, and stale-row checks. Thread context now keeps each
+   reply's actual timestamp and sender instead of inheriting the delta timestamp.
+   Calendar evidence uses creation/update time rather than a future event start.
+   Build passed; deployment pending.
 
 4. **Automatic closure needs explicit provenance and stale-decision protection.**
    Cross-source completion writes a free-text resolution note through ordinary
@@ -105,7 +110,7 @@ for `kent@runner.now`, using the manual-first development policy.
    to the durable model queue, retaining encrypted candidates and idempotent
    queue keys; attach results to the originating brief after ingestion.
    Yield between skills and renew authority at each continuation boundary.
-   Status: implemented locally; build passed; deployment pending.
+   Status: implemented in `97362cfd`; build passed; deployment in progress.
 
 ## Delivery state
 
@@ -181,3 +186,9 @@ Use `make build` and direct production observations. No automated tests are
 authorized for this routine iteration. Run database diagnostics only inside
 Cloud Run job executions with an `eval` override and `POOL_SIZE=2`. This report
 is a working list, not a claim that the objective is complete.
+
+At 19:22:43 UTC, all 64 partitions remained ready/live and a new idle snapshot
+was saved at 19:22:39. Since recovery, 28 discovery reasoning jobs and 44 closure
+reasoning jobs had completed, with 1,108 outcome-known Effects and no missing
+evidence. The cursors still awaited graph finalization. This sample predates
+the deferred-ingestion deployment and does not validate that fix.
