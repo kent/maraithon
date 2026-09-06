@@ -239,6 +239,18 @@ for `kent@runner.now`, using the manual-first development policy.
     table, updated atomically with the exact reservation under the tenant lock.
     Preserve due-time admission, FIFO within each type, tenant quotas, urgent
     nudge/push precedence, and every execution-partition/task fence.
+    Status: implemented in `40f630f9`; `make build` passed; workflow
+    `34059463117` deployed successfully. Live workload rotation remains to verify.
+
+18. **A drained process can rejoin after a later coordination error.**
+    A database-side drain stopped node `d31038e4` from owning partitions, but
+    its Session continued attempting leadership. At 20:50:45 UTC PostgreSQL
+    rejected that attempt because the node was draining. The generic error
+    recovery registered a fresh incarnation (`ee73283c`) at 20:50:49, which
+    later owned 30 partitions despite the intended retirement. Persist local
+    drain intent as a non-admitting `drain_pending` phase; observe a draining
+    node on renewal, retry cleanup without leadership, and only allow explicit
+    rejoin after drain completes. Retain the exact local proof and task fences.
     Status: implemented; `make build` passed; deployment pending.
 
 ## Delivery state
@@ -445,3 +457,18 @@ Google accounts and Slack workspace have tokens and are connected; the old
 `kent@voteagora.com` Google connection has no tokens and reports `error`.
 Its failed watch renewal does not explain the connected accounts' catch-up
 backlog and must not be represented as a working source.
+
+
+At 20:53:23 UTC, all 64 partitions were ready/live and the Chief was on revision
+205. The database role can read/write the existing scheduling-watermark table.
+The refreshed Mac displayed all 942 active items. Its five page requests ran
+from 20:52:01.686762 through 20:52:38.658156, about 37 seconds in total; the
+last three pages took 3.3–4.2 seconds each.
+
+Deleting revision 202 did not immediately end its existing process: revision
+logs and a newly registered node proved it remained alive. The companion has
+a persistent WebSocket. Closing and relaunching the installed Mac app released
+that connection, immediately followed by the old instance's SIGTERM at
+20:58:16 UTC. This establishes that revision absence alone was not physical
+termination evidence. No new incident attestation was recorded. Post-shutdown
+ownership and proof cleanup remain to verify.

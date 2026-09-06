@@ -172,7 +172,7 @@ defmodule Maraithon.Runtime.Coordination.Session do
     do: {:reply, {:error, {:coordination_not_ready, state.phase}}, state}
 
   def handle_call(:prepare_shutdown, _from, state) do
-    {reply, state} = drain(state)
+    {reply, state} = drain_safely(state)
     publish(state)
     {:reply, reply, state}
   end
@@ -191,22 +191,7 @@ defmodule Maraithon.Runtime.Coordination.Session do
   def handle_cast(:drain, %{phase: :draining} = state), do: {:noreply, state}
 
   def handle_cast(:drain, state) do
-    state =
-      try do
-        {_reply, state} = drain(state)
-        state
-      rescue
-        error ->
-          Logger.warning(
-            "RUNTIME_COORDINATION_ERROR=drain:#{Maraithon.Redaction.error_class(error)}"
-          )
-
-          %{state | phase: :draining, leader: nil}
-      catch
-        :exit, _reason ->
-          Logger.warning("RUNTIME_COORDINATION_ERROR=drain:exit")
-          %{state | phase: :draining, leader: nil}
-      end
+    {_reply, state} = drain_safely(state)
 
     publish(state)
     {:noreply, state}
@@ -231,7 +216,8 @@ defmodule Maraithon.Runtime.Coordination.Session do
         failure_code: Maraithon.Redaction.error_class(error)
       )
 
-      %{state | phase: :uncertain, leader: nil}
+      phase = if state.phase == :drain_pending, do: :drain_pending, else: :uncertain
+      %{state | phase: phase, leader: nil}
   end
 
   @impl true
@@ -292,6 +278,11 @@ defmodule Maraithon.Runtime.Coordination.Session do
 
   defp coordinate(%{phase: :ready} = state), do: ready_cycle(state)
 
+  defp coordinate(%{phase: :drain_pending} = state) do
+    {_reply, state} = drain_safely(state)
+    state
+  end
+
   defp coordinate(%{phase: :uncertain} = state) do
     # Uncertain work remains fenced to its expired incarnation. After local
     # termination and proof reconciliation, rejoin with a fresh identity so
@@ -328,14 +319,23 @@ defmodule Maraithon.Runtime.Coordination.Session do
   defp renew_ownership(%{phase: phase} = state) when phase != :ready, do: state
 
   defp renew_ownership(state) do
-    with {:renew_node, {:ok, %NodeIncarnation{} = session}} <-
+    with {:renew_node, {:ok, %NodeIncarnation{state: "ready"} = session}} <-
            {:renew_node, Authority.renew_node(state.session, state.node_ttl_ms)},
          {:renew_partitions, {:ok, _partitions}} <-
            {:renew_partitions, Authority.renew_partitions(session, state.partition_ttl_ms)} do
       %{state | session: session} |> refresh_leader()
     else
-      {:renew_node, _error} -> fail_closed(state, :renew_node)
-      {:renew_partitions, _error} -> fail_closed(state, :renew_partitions)
+      {:renew_node, {:ok, %NodeIncarnation{state: "draining"} = session}} ->
+        # A database-side drain is an explicit retirement request, not a lost
+        # lease to recover by registering a new incarnation. Finish local proof
+        # cleanup without renewing leadership or readmitting this process.
+        %{state | session: session} |> mark_drain_pending() |> coordinate()
+
+      {:renew_node, _error} ->
+        fail_closed(state, :renew_node)
+
+      {:renew_partitions, _error} ->
+        fail_closed(state, :renew_partitions)
     end
   end
 
@@ -520,6 +520,25 @@ defmodule Maraithon.Runtime.Coordination.Session do
     end
   end
 
+  defp drain_safely(state) do
+    state = mark_drain_pending(state)
+
+    try do
+      drain(state)
+    rescue
+      error ->
+        Logger.warning(
+          "RUNTIME_COORDINATION_ERROR=drain:#{Maraithon.Redaction.error_class(error)}"
+        )
+
+        {{:error, :drain_cleanup_failed}, state}
+    catch
+      :exit, _reason ->
+        Logger.warning("RUNTIME_COORDINATION_ERROR=drain:exit")
+        {{:error, :drain_cleanup_failed}, state}
+    end
+  end
+
   defp drain(%{session: %NodeIncarnation{} = session} = state) do
     # PostgreSQL revocation happens before any local termination attempt.
     case Authority.begin_node_drain(session) do
@@ -538,11 +557,21 @@ defmodule Maraithon.Runtime.Coordination.Session do
         {:ok, %{state | phase: :draining, leader: nil}}
 
       {:error, reason} ->
-        {{:error, reason}, fail_closed(state)}
+        # The topology fence may already have committed before workload cleanup
+        # failed. Retain drain intent across retries; an automatic rejoin would
+        # undo the operator's retirement request with a fresh node identity.
+        state = cleanup_uncertain(state)
+        {{:error, reason}, mark_drain_pending(state)}
     end
   end
 
-  defp drain(state), do: {:ok, state}
+  defp drain(state), do: {:ok, %{state | phase: :draining, leader: nil}}
+
+  defp mark_drain_pending(state) do
+    state = %{state | phase: :drain_pending, leader: nil}
+    publish(state)
+    state
+  end
 
   defp revoke_drained_node(session) do
     result =
@@ -618,8 +647,6 @@ defmodule Maraithon.Runtime.Coordination.Session do
   catch
     :exit, _ -> :blocked
   end
-
-  defp fail_closed(state), do: fail_closed(state, :unspecified)
 
   defp fail_closed(state, stage) do
     Logger.error("RUNTIME_COORDINATION_ERROR=#{stage}")
