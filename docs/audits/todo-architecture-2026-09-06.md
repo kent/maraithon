@@ -510,6 +510,22 @@ for `kent@runner.now`, using the manual-first development policy.
     Status: implemented; compile passed. Deployment and live cancellation
     counts remain to verify. No tests were run under the manual-first policy.
 
+34. **iPhone completion detail also retains stale actions.** The iOS decoder
+    ignores the public resolution note, while completed rows and detail still
+    use active recommendations, urgency signals, suggested replies, and action
+    prompts. Persist the existing `metadata.resolution_note`, show it with the
+    completed date and historical request, and limit active recommendations
+    and drafts to open/snoozed work. Preserve the original source link, work
+    chat, and Reopen action.
+
+    The added SwiftData string is optional for lightweight migration. Advance
+    the todo ETag cache key to v5 so unchanged existing rows receive their note
+    on the first refresh. No server payload change is required. `make
+    build-mobile` regenerated the Xcode project and passed its simulator app
+    build; no generated project is committed. Tests were not run under the
+    manual-first policy. TestFlight delivery and device inspection remain
+    pending.
+
 ## Delivery state
 
 Current server: `maraithon-00215-64f`, code through `8f4d5f35`, deployed by
@@ -948,3 +964,13 @@ silently excluded by the closed safe-metadata schema. Use the existing
 approved numeric keys instead: `candidate_count` (todos), `item_count`
 (evidence), `count` (chunks), and `duration_ms` (packing time). This exposes
 only counts and duration, with no source content or schema expansion.
+
+
+The revision-215 latency probe `maraithon-todo-validation-p2s8g` observed eight
+completed 40-todo Slack batches averaging 118.1 seconds against 476 source
+items. The preceding revision-214 graph's six completed 40-todo batches
+averaged 311.6 seconds against 472 items. This is a measured reduction in
+completed-batch time with very similar input sizes, though it does not isolate
+model latency from local packing. Every sampled successful new batch retained
+complete coverage and nine model calls. The two-minute query window started
+at 23:35:18; its final runtime measurements remain pending.

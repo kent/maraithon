@@ -21,6 +21,8 @@ final class TodoItem {
     /// lightweight migration; the first v2 todo sync backfills server time.
     var updatedAt: Date = Date()
     var completedAt: Date?
+    /// Optional for lightweight migration; refreshed from public todo metadata.
+    var resolutionNote: String?
     var decisionPrompt: String?
     var decisionContextSummary: String?
     var whyNow: String?
@@ -92,6 +94,7 @@ final class TodoItem {
         createdAt: Date = Date(),
         updatedAt: Date? = nil,
         completedAt: Date? = nil,
+        resolutionNote: String? = nil,
         decisionPrompt: String? = nil,
         decisionContextSummary: String? = nil,
         whyNow: String? = nil,
@@ -133,6 +136,7 @@ final class TodoItem {
         self.createdAt = createdAt
         self.updatedAt = updatedAt ?? createdAt
         self.completedAt = completedAt
+        self.resolutionNote = resolutionNote
         self.decisionPrompt = decisionPrompt
         self.decisionContextSummary = decisionContextSummary
         self.whyNow = whyNow
@@ -168,8 +172,8 @@ final class TodoItem {
             providerLabel: sourceProviderLabel,
             openURLString: sourceOpenURLString,
             openLabel: sourceOpenLabel,
-            draftText: draftText,
-            draftKind: draftKind,
+            draftText: isActive ? draftText : nil,
+            draftKind: isActive ? draftKind : nil,
             recipient: draftRecipient,
             recipientHandle: draftRecipientHandle,
             subject: sourceSubject,

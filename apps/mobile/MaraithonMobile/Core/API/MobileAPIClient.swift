@@ -130,8 +130,8 @@ struct MobileAPIClient: Sendable {
         static let chatThreads = "chat-threads"
 
         static func todos(includeCards: Bool) -> String {
-            // Older validators may describe a page set that never reached SwiftData.
-            includeCards ? "todos.v4.cards" : "todos.v4"
+            // Refetch once so existing completed rows acquire their resolution note.
+            includeCards ? "todos.v5.cards" : "todos.v5"
         }
     }
 
@@ -282,6 +282,7 @@ struct MobileAPIClient: Sendable {
         let status: String
         let snoozedUntil: Date?
         let closedAt: Date?
+        let resolutionNote: String?
         let sourceOccurredAt: Date?
         let insertedAt: Date?
         let updatedAt: Date?
@@ -306,6 +307,7 @@ struct MobileAPIClient: Sendable {
             case status
             case snoozedUntil = "snoozed_until"
             case closedAt = "closed_at"
+            case metadata
             case sourceOccurredAt = "source_occurred_at"
             case insertedAt = "inserted_at"
             case updatedAt = "updated_at"
@@ -331,6 +333,7 @@ struct MobileAPIClient: Sendable {
             status = try container.decode(String.self, forKey: .status)
             snoozedUntil = try container.decodeIfPresent(Date.self, forKey: .snoozedUntil)
             closedAt = try container.decodeIfPresent(Date.self, forKey: .closedAt)
+            resolutionNote = try container.decodeIfPresent(ResolutionMetadata.self, forKey: .metadata)?.note
             sourceOccurredAt = try container.decodeIfPresent(Date.self, forKey: .sourceOccurredAt)
             insertedAt = try container.decodeIfPresent(Date.self, forKey: .insertedAt)
             updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt)
@@ -356,6 +359,7 @@ struct MobileAPIClient: Sendable {
             status: String,
             snoozedUntil: Date? = nil,
             closedAt: Date?,
+            resolutionNote: String? = nil,
             sourceOccurredAt: Date? = nil,
             insertedAt: Date? = nil,
             updatedAt: Date? = nil,
@@ -379,6 +383,7 @@ struct MobileAPIClient: Sendable {
             self.status = status
             self.snoozedUntil = snoozedUntil
             self.closedAt = closedAt
+            self.resolutionNote = resolutionNote
             self.sourceOccurredAt = sourceOccurredAt
             self.insertedAt = insertedAt
             self.updatedAt = updatedAt
@@ -386,6 +391,14 @@ struct MobileAPIClient: Sendable {
             self.actionCard = actionCard
             self.hasActionCardField = hasActionCardField
             self.relatedPeople = relatedPeople
+        }
+
+        private struct ResolutionMetadata: Decodable {
+            let note: String?
+
+            enum CodingKeys: String, CodingKey {
+                case note = "resolution_note"
+            }
         }
     }
 

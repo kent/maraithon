@@ -41,7 +41,7 @@ struct TodoDetailView: View {
                         } label: {
                             Label("Reopen", systemImage: "arrow.uturn.backward")
                         }
-                    } else {
+                    } else if todo.isActive {
                         Button {
                             Task { await performAction("done") }
                         } label: {
@@ -171,6 +171,7 @@ struct TodoDetailView: View {
     }
 
     private var todoContextHeader: ChatContextHeader {
+        guard todo.isActive else { return closedTodoContextHeader }
         let context = TodoDecisionContext(todo: todo)
         var items: [ChatContextHeader.Item] = []
 
@@ -207,7 +208,32 @@ struct TodoDetailView: View {
         )
     }
 
+    private var closedTodoContextHeader: ChatContextHeader {
+        var items: [ChatContextHeader.Item] = []
+        appendItem("resolution", todo.isCompleted ? "Completion" : "Resolution", todo.resolutionNote, "checkmark.circle", to: &items)
+
+        if todo.isCompleted, let completedAt = todo.completedAt {
+            appendItem("completed-at", "Completed", completedAt.formatted(date: .abbreviated, time: .shortened), "calendar", to: &items)
+        }
+
+        let originalRequest = cleanedText(todo.decisionContextSummary) ?? cleanedText(todo.notes)
+        appendItem("original-request", "Original request", originalRequest, "text.alignleft", to: &items)
+
+        if cleanedText(todo.notes) != originalRequest {
+            appendItem("notes", "Notes", todo.notes, "note.text", to: &items)
+        }
+
+        return ChatContextHeader(
+            title: todo.title,
+            subtitle: todoSubtitle,
+            systemImage: todo.isCompleted ? "checkmark.circle.fill" : "archivebox",
+            status: ChatContextHeader.Status(title: todo.status.title, tint: statusTint),
+            items: items
+        )
+    }
+
     private var todoSubtitle: String? {
+        guard todo.isActive else { return cleanedText(todo.sourceProviderLabel ?? todo.sourceSystem) }
         var parts = [todo.attentionMode.title, todo.priority.title]
 
         if let effort = todo.todoBrief?.effortLabel ?? cleanedText(todo.estimatedEffort) {
@@ -235,7 +261,8 @@ struct TodoDetailView: View {
     }
 
     private var todoQuickPrompts: [ChiefOfStaffPrompt] {
-        [
+        guard todo.isActive else { return [] }
+        return [
             ChiefOfStaffPrompt(
                 id: "todo-next-move",
                 title: "Next move",

@@ -58,11 +58,11 @@ struct TodoRow: View {
                         StatusPill(title: TodoAttentionMode.monitor.title, tint: .teal)
                     }
 
-                    if let signal = TodoDecisionSignals.signalPillTitle(for: todo) {
+                    if todo.isActive, let signal = TodoDecisionSignals.signalPillTitle(for: todo) {
                         StatusPill(title: signal, tint: .purple)
                     }
 
-                    if todo.priority == .critical || todo.priority == .high {
+                    if todo.isActive && (todo.priority == .critical || todo.priority == .high) {
                         StatusPill(title: todo.priority.title, tint: todo.priority.tint)
                     }
 
@@ -145,6 +145,19 @@ struct TodoDecisionContext: Equatable {
     let evidence: String?
 
     init(todo: TodoItem) {
+        if !todo.isActive {
+            contextSummary = todo.resolutionNote?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfBlank
+            decisionPrompt = nil
+            notesContext = nil
+            whyNow = nil
+            sourceContext = nil
+            preparedMove = nil
+            draftPreview = nil
+            rowMove = nil
+            evidence = nil
+            return
+        }
+
         let brief = todo.todoBrief
         let title = Self.cleanedText(todo.title)
         let notes = Self.cleanedText(todo.notes)

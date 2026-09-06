@@ -186,6 +186,7 @@ enum ProductionDataSync {
         let createdAt: Date?
         let updatedAt: Date?
         let completedAt: Date?
+        let resolutionNote: String?
         let actionPlan: String?
         let ownerLabel: String?
         let sourceOccurredAt: Date?
@@ -250,6 +251,7 @@ enum ProductionDataSync {
             createdAt: remoteTodo.insertedAt,
             updatedAt: remoteTodo.updatedAt,
             completedAt: remoteTodo.closedAt,
+            resolutionNote: remoteTodo.resolutionNote,
             actionPlan: cleanedText(remoteTodo.actionPlan),
             ownerLabel: cleanedText(remoteTodo.ownerLabel),
             sourceOccurredAt: remoteTodo.sourceOccurredAt,
@@ -324,6 +326,7 @@ enum ProductionDataSync {
             todo.updatedAt = updatedAt
         }
         todo.completedAt = prepared.completedAt
+        todo.resolutionNote = prepared.resolutionNote
         todo.actionPlan = prepared.actionPlan
         todo.ownerLabel = prepared.ownerLabel
         todo.sourceOccurredAt = prepared.sourceOccurredAt
@@ -491,6 +494,7 @@ enum ProductionDataSync {
             createdAt: createdAt,
             updatedAt: prepared.updatedAt ?? createdAt,
             completedAt: prepared.completedAt,
+            resolutionNote: prepared.resolutionNote,
             decisionPrompt: prepared.card.decisionPrompt,
             decisionContextSummary: prepared.card.decisionContextSummary,
             whyNow: prepared.card.whyNow,
