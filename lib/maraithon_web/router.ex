@@ -277,6 +277,7 @@ defmodule MaraithonWeb.Router do
     # paired device token in CompanionDeviceAuth.
     get "/todos", MobileTodoController, :index
     get "/todos/:id", MobileTodoController, :show
+    post "/todos", CompanionTodoController, :create
     post "/todos/:id/actions/done", CompanionTodoController, :done
     post "/todos/:id/actions/dismiss", CompanionTodoController, :dismiss
     post "/todos/:id/actions/reopen", CompanionTodoController, :reopen

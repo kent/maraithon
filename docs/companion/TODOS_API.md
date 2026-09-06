@@ -69,6 +69,35 @@ GET /api/v1/companion/todos/:id?include_cards=true
 
 The response is `{"todo": TODO}`. A missing or different-user ID returns 404.
 
+## Create a Manual Todo
+
+```http
+POST /api/v1/companion/todos
+Content-Type: application/json
+```
+
+```json
+{
+  "request_id": "a UUID retained across retries of this draft",
+  "title": "Review the launch checklist",
+  "notes": "Optional context",
+  "next_action": "Open the checklist and review outstanding items",
+  "priority": 50,
+  "due_at": "2026-09-07T17:00:00Z"
+}
+```
+
+`request_id` and a nonblank title are required. The title must be 4–240
+characters. Notes, next action, priority (0–100), and due time are optional.
+An omitted next action uses the title. The response is `201 {"todo": TODO}`;
+invalid input returns 422. Reusing a draft's request ID updates that same
+manual item rather than creating a duplicate. Its key is scoped to the paired
+device and user. A new draft must use a new UUID.
+
+The server sets the source to `manual`, records user creation activity, and
+uses the ordinary todo ranking and brief path. Input cannot choose another
+user, owner, source, source item, metadata, or status.
+
 ## Complete a Todo
 
 ```http
@@ -108,5 +137,6 @@ active list. It is idempotent for an already dismissed Todo.
 {"action":"dismiss","todo":{"id":"uuid","status":"dismissed"}}
 ```
 
-No companion route creates, deletes, edits, or reassigns a Todo. Completion,
-dismissal, and reopening are the only paired-device Todo mutations.
+The companion cannot delete, reassign, or arbitrarily edit existing Todos.
+Manual draft submission, completion, dismissal, and reopening are the only
+paired-device Todo mutations.

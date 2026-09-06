@@ -355,7 +355,10 @@ for `kent@runner.now`, using the manual-first development policy.
     Preserve ambiguous outcomes, completed results, and cursors. The recurring
     scheduler can admit a fresh cycle when the abandoned work has cleared.
     Status: implemented; `make build` passed. Tests were not run under the
-    manual-first policy. Deployment and live abandonment are pending.
+    manual-first policy. Workflow `34063346361` deployed `1f5cd979` in revision
+    `maraithon-00210-5p8`. Execution `maraithon-todo-validation-2xv88` observed
+    `source_graph_abandoned` settlements at 22:17 UTC. Replacement cycles and
+    source catch-up remain in progress.
 
 25. **Unchanged closure decisions generate unnecessary prose.** Exact closure
     sweeps require one explicit decision per todo, but the prompt also requested
@@ -365,13 +368,25 @@ for `kent@runner.now`, using the manual-first development policy.
     work without an acknowledgment. Completed work and acknowledgment-only
     replies retain full cited evidence, and the existing validator still requires
     the exact input todo-ID set with a Boolean decision for every item.
-    **Status: implemented; compile passed, deployment pending.** This reduces
+    **Status: implemented in `a37bfe8d`; compile passed and deployed in revision
+    210.** This reduces
     requested output; latency and token savings have not yet been measured.
+
+26. **The Mac todo list has no manual-entry action.** The paired-device API
+    only exposes reads and done/dismiss/reopen, so users must switch surfaces
+    to add their own work. Add a small native New Todo sheet with title, notes,
+    next action, priority, and optional due time. Keep failed drafts available
+    for retry, use one device-scoped UUID per draft to avoid duplicate rows,
+    and retain ordinary ranking, briefs, and user activity records. The server
+    allows only manual-entry fields; identity and source come from the server.
+    Status: server endpoint implemented and `make build` passed. Native UI
+    implemented and `swift build` passed; signed packaging, server deployment,
+    installation, and live entry verification are pending. Tests were not run.
 
 ## Delivery state
 
-Current server: `maraithon-00209-mw8`, code through `6ed443ba`, deployed by
-successful workflow `34062219205`. Current iPhone release: TestFlight `1.0.1`
+Current server: `maraithon-00210-5p8`, code through `a37bfe8d`, deployed by
+successful workflow `34063346361`. Current iPhone release: TestFlight `1.0.1`
 build `20260906211723`, code through `871e245c`, available to Founders via
 workflow `34060595850`. The signed local Mac development app is installed at
 `~/Applications/Maraithon.app`; its 21:07 UTC refresh showed 953 active items
