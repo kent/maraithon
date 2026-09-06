@@ -397,6 +397,26 @@ defmodule Maraithon.Todos do
 
   def mark_done(_user_id, _todo_id, _opts), do: {:error, :not_found}
 
+  @doc """
+  Records an evidence-based closure only if the evaluated todo is still current.
+
+  The snapshot check, provenance, linked insight, and activity event share the
+  same row-locked transaction. A delayed provider/model response cannot replace
+  a subsequent user edit, dismissal, or completion.
+  """
+  def mark_done_if_current(%Todo{} = todo, provenance, opts \\ []) when is_map(provenance) do
+    provenance = Map.put(provenance, "recorded_at", DateTime.to_iso8601(DateTime.utc_now()))
+
+    update_status(
+      todo.user_id,
+      todo.id,
+      "done",
+      Keyword.get(opts, :note),
+      %{"automatic_completion" => provenance},
+      opts |> Keyword.put(:expected_todo, todo) |> Keyword.put(:actor_type, "agent")
+    )
+  end
+
   def dismiss(user_id, todo_id, opts \\ [])
 
   def dismiss(user_id, todo_id, opts) when is_binary(user_id) and is_binary(todo_id) do
@@ -1499,6 +1519,7 @@ defmodule Maraithon.Todos do
 
     Repo.transaction(fn ->
       with %Todo{} = todo <- get_todo_for_update(user_id, todo_id),
+           :ok <- validate_status_snapshot(todo, Keyword.get(opts, :expected_todo)),
            {:ok, updated} <-
              todo
              |> Todo.changeset(%{
@@ -1524,6 +1545,21 @@ defmodule Maraithon.Todos do
       {:ok, %Todo{} = todo} -> {:ok, polish_todo_copy(todo)}
       {:error, :not_found} -> {:error, :not_found}
       {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp validate_status_snapshot(_todo, nil), do: :ok
+
+  defp validate_status_snapshot(%Todo{status: status}, %Todo{})
+       when status not in ["open", "snoozed"],
+       do: {:error, :todo_no_longer_open}
+
+  defp validate_status_snapshot(%Todo{} = current, %Todo{} = expected) do
+    if current.id == expected.id and current.user_id == expected.user_id and
+         current.updated_at == expected.updated_at do
+      :ok
+    else
+      {:error, :stale_todo}
     end
   end
 

@@ -716,12 +716,22 @@ defmodule Maraithon.Todos.CompletionSweep do
   end
 
   defp mark_done(summary, %Todo{} = todo, reason, note) do
-    case Todos.mark_done(todo.user_id, todo.id, note: note) do
+    provenance = %{
+      "method" => "deterministic",
+      "reason" => Atom.to_string(reason),
+      "source" => todo.source,
+      "source_item_id" => todo.source_item_id
+    }
+
+    case Todos.mark_done_if_current(todo, provenance, note: note) do
       {:ok, _updated} ->
         summary
         |> Map.update!(:completed, &(&1 + 1))
         |> increment_nested(:completed_by_source, todo.source)
         |> increment_nested(:completed_by_reason, Atom.to_string(reason))
+
+      {:error, :todo_no_longer_open} ->
+        summary
 
       {:error, error} ->
         Logger.warning("Todo completion sweep failed to mark todo done",

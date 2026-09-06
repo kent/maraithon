@@ -1932,10 +1932,19 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
            resolution["confidence"],
          quote_text when is_binary(quote_text) and quote_text != "" <-
            resolution["evidence_quote"],
-         true <- authorized_resolution_evidence?(todo, resolution, evidence) do
+         matched when is_map(matched) <-
+           matching_evidence(todo, resolution, evidence, fn _item -> true end) do
       note = resolution_note(todo, resolution, quote_text)
 
-      case Todos.mark_done(user_id, todo.id, note: note) do
+      provenance = %{
+        "method" => "cross_source_llm",
+        "confidence" => confidence,
+        "evidence_quote" => bounded_prompt_string(quote_text, 500),
+        "evidence" =>
+          Map.take(matched, ~w(channel at source_ref source_item_id thread_id account))
+      }
+
+      case Todos.mark_done_if_current(todo, provenance, note: note) do
         {:ok, _todo} ->
           Logger.info("Cross-source completion closed todo",
             user_fingerprint: Maraithon.Redaction.fingerprint(user_id),
@@ -1946,6 +1955,9 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
 
           maybe_push_completion_confirmation(user_id, todo, resolution, opts)
           {:ok, count + 1}
+
+        {:error, :todo_no_longer_open} ->
+          {:ok, count}
 
         {:error, reason} ->
           Logger.warning("Cross-source completion could not close todo",
@@ -1961,21 +1973,23 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
     end
   end
 
-  defp authorized_resolution_evidence?(todo, resolution, evidence),
-    do: authorized_evidence?(todo, resolution, evidence, fn _item -> true end)
+  defp authorized_resolution_evidence?(todo, resolution, evidence) do
+    not is_nil(matching_evidence(todo, resolution, evidence, fn _item -> true end))
+  end
 
-  defp authorized_acknowledgement_evidence?(todo, resolution, evidence),
-    do: authorized_evidence?(todo, resolution, evidence, &inbound_reply_evidence?/1)
+  defp authorized_acknowledgement_evidence?(todo, resolution, evidence) do
+    not is_nil(matching_evidence(todo, resolution, evidence, &inbound_reply_evidence?/1))
+  end
 
-  defp authorized_evidence?(todo, resolution, evidence, kind_authorized?) do
+  defp matching_evidence(todo, resolution, evidence, kind_authorized?) do
     quote = bounded_prompt_string(resolution["evidence_quote"], 500)
     channel = bounded_prompt_string(resolution["evidence_channel"], 64)
     todo_at = todo.source_occurred_at || todo.inserted_at
     confidence = resolution["confidence"]
 
-    is_number(confidence) and confidence >= @min_confidence and is_binary(quote) and
-      byte_size(quote) >= 4 and allowed_evidence_channel?(channel) and
-      Enum.any?(evidence, fn item ->
+    if is_number(confidence) and confidence >= @min_confidence and is_binary(quote) and
+         byte_size(quote) >= 4 and allowed_evidence_channel?(channel) do
+      Enum.find(evidence, fn item ->
         evidence_channel = read_string(item, "channel", nil)
         evidence_at = item |> read_string("at", nil) |> parse_datetime()
         text = read_string(item, "text", "")
@@ -1986,6 +2000,7 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
           match?(%DateTime{}, evidence_at) and DateTime.compare(evidence_at, todo_at) == :gt and
           evidence_quote_matches?(quote, text, subject)
       end)
+    end
   end
 
   defp inbound_reply_evidence?(item) do
