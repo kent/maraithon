@@ -225,13 +225,26 @@ for `kent@runner.now`, using the manual-first development policy.
     action cards took 6,843 ms, including a repeated 1,048 ms ranking pass.
     Reuse each card's ranking and sanitized metadata, and compile the public
     text-boundary expression once (`7e13bea0`). `make build` passed. A local synthetic
-    200-card profile fell from 768 ms to 484 ms; the same-row Cloud Run
-    comparison and deployment remain pending.
+    200-card profile fell from 768 ms to 484 ms. The same 200 production rows
+    serialized in 5,359 ms instead of 7,866 ms (32% faster), with all output
+    maps identical. Workflow `34059096574` deployed `maraithon-00205-lj6`.
+
+17. **A model-work backlog postpones other kinds of todo maintenance.**
+    At 20:51:22 UTC, 68 discovery reasoning jobs still awaited their first turn
+    since 20:15, while closure reasoning advanced from 65 to 82 completions.
+    Another 88 todo briefs and a new Agent ingestion were pending. Exact tenant
+    fairness preserves oldest-first ordering within one user, so an older
+    fanout can occupy all model capacity before discovery or ingestion starts.
+    Rotate model job types using the existing durable scheduling-watermark
+    table, updated atomically with the exact reservation under the tenant lock.
+    Preserve due-time admission, FIFO within each type, tenant quotas, urgent
+    nudge/push precedence, and every execution-partition/task fence.
+    Status: implemented; `make build` passed; deployment pending.
 
 ## Delivery state
 
-Current server: `maraithon-00204-r9k`, code through `89284da8`, deployed by
-successful workflow `34057858237`. Current iPhone release: TestFlight `1.0.1`
+Current server: `maraithon-00205-lj6`, code through `7e13bea0`, deployed by
+successful workflow `34059096574`. Current iPhone release: TestFlight `1.0.1`
 build `20260906200907`, code through `26191c62`, available to Founders via
 workflow `34057077032`. The signed local Mac development app is installed at
 `~/Applications/Maraithon.app`; its 20:33 UTC refresh showed 941 active items.
@@ -422,3 +435,13 @@ ambiguous outcomes remain intact. The 429 drain response was Cloud Run's
 
 The drained, zero-traffic revision `maraithon-00202-fg4` was deleted at
 20:47 UTC after those ownership checks. No task outcome or proof was changed.
+
+
+The Chief completed seven Effects in the scheduled cycle on revision 204 and
+created a checkpoint at 20:49:36 UTC. The 20:51:22 observation landed during
+revision 205's deployment drain (15 draining partitions, 49 unassigned, no
+active tasks), so it is not evidence of post-handoff health. Kent's two intended
+Google accounts and Slack workspace have tokens and are connected; the old
+`kent@voteagora.com` Google connection has no tokens and reports `error`.
+Its failed watch renewal does not explain the connected accounts' catch-up
+backlog and must not be represented as a working source.

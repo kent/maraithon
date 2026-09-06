@@ -17,6 +17,9 @@ defmodule Maraithon.Runtime.Coordination.FairScheduler do
 
   @microunits 1_000_000
   @pending_physical_key {__MODULE__, :pending_physical_reservation}
+  # Keep model-workload service history separate from execution partition keys.
+  # Hash each component independently so arbitrary keys stay within varchar(255).
+  @model_workload_key_sql "'fair-workload:' || md5(job.tenant_key) || ':' || md5(job.job_type)"
 
   def reserve_next(%NodeIncarnation{} = session, partitions, opts \\ [])
       when is_list(partitions) do
@@ -254,6 +257,10 @@ defmodule Maraithon.Runtime.Coordination.FairScheduler do
            AND partition.lease_expires_at > timezone('UTC', clock_timestamp())
           JOIN public.runtime_tenant_fairness AS tenant ON tenant.tenant_key = job.tenant_key
           LEFT JOIN active_tenants AS active ON active.tenant_key = job.tenant_key
+          LEFT JOIN public.background_job_partitions AS workload
+            ON job.queue = 'runtime_model_user'
+           AND workload.queue = job.queue
+           AND workload.partition_key = (#{@model_workload_key_sql})
           WHERE job.status = 'pending'
             AND job.scheduled_at <= timezone('UTC', clock_timestamp())
             AND job.claim_token IS NULL
@@ -298,6 +305,10 @@ defmodule Maraithon.Runtime.Coordination.FairScheduler do
                    CASE WHEN job.job_type IN (
                      'runtime_partition:nudge', 'runtime_partition:critical_todo_push'
                    ) THEN 0 ELSE 1 END,
+                   -- Rotate model workloads within a tenant so a large closure
+                   -- graph cannot postpone discovery or todo ingestion forever.
+                   -- Keep FIFO order within each workload and tenant admission.
+                   workload.last_started_at ASC NULLS FIRST,
                    job.scheduled_at, job.inserted_at, job.id
           LIMIT 1
         )
@@ -433,7 +444,10 @@ defmodule Maraithon.Runtime.Coordination.FairScheduler do
             [candidate.tenant_key, candidate.refilled_tokens, sequence]
           )
 
-          {load_job!(result), assignment, identity}
+          job = load_job!(result)
+          record_model_workload_start!(job)
+
+          {job, assignment, identity}
         catch
           kind, reason ->
             release_pending_physical!()
@@ -445,6 +459,28 @@ defmodule Maraithon.Runtime.Coordination.FairScheduler do
         Repo.rollback({:task_supervisor_reservation_failed, reason})
     end
   end
+
+  defp record_model_workload_start!(%BackgroundJob{queue: "runtime_model_user", id: job_id}) do
+    # This commits with the exact reservation under the existing tenant lock.
+    # A failed reservation therefore never consumes a workload's turn.
+    SQL.query!(
+      Repo,
+      """
+      INSERT INTO public.background_job_partitions
+        (queue, partition_key, last_started_at, inserted_at, updated_at)
+      SELECT job.queue, #{@model_workload_key_sql},
+             timezone('UTC', clock_timestamp()), timezone('UTC', clock_timestamp()),
+             timezone('UTC', clock_timestamp())
+      FROM public.background_jobs AS job
+      WHERE job.id = $1::uuid AND job.queue = 'runtime_model_user'
+      ON CONFLICT (queue, partition_key) DO UPDATE
+      SET last_started_at = EXCLUDED.last_started_at, updated_at = EXCLUDED.updated_at
+      """,
+      [Ecto.UUID.dump!(job_id)]
+    )
+  end
+
+  defp record_model_workload_start!(_job), do: :ok
 
   defp safe_release_physical(identity) do
     case TaskSupervisor.release(identity) do
