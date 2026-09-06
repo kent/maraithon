@@ -380,16 +380,28 @@ for `kent@runner.now`, using the manual-first development policy.
     and retain ordinary ranking, briefs, and user activity records. The server
     allows only manual-entry fields; identity and source come from the server.
     Status: server endpoint implemented in `70589a6d` and `make build` passed.
-    Native UI passed `swift build` and signed `make build-companion` packaging
-    with the same Apple Development identity as the installed app. Server
-    deployment, installation, and live entry verification are pending. Tests
-    were not run. The next server push is held while the newly admitted source
-    work makes progress, to avoid another immediate interruption.
+    Native UI in `ce4b1fd1` passed `swift build` and signed `make build-companion`
+    packaging with the same Apple Development identity as the installed app.
+    Workflow `34063974077` deployed revision `maraithon-00211-94n`; the signed
+    Mac app was installed at 22:30 UTC. Its native sheet saved manual check
+    `a4471e76-f955-49b1-b1fb-d07783a4ff79` at 22:31:15, and a fresh list load
+    retained it at 22:32:45. The first refresh received a transient Cloud Run
+    `429 Rate exceeded`; the explicit retry succeeded. No tests were run.
+    Manual entry exposed the wording defect in finding 27.
+
+27. **Copy cleanup rewrites manually entered todos.** The live Mac entry check
+    submitted `Verify Mac manual todo entry`, but the server stored and
+    returned `Verify Mac manual work item entry`. The common copy-polishing
+    path runs on both writes and public projections, including user text.
+    Preserve wording and line breaks for `manual` and `mobile` sources, while
+    retaining cleanup for generated work. Partial updates use the persisted
+    source when the input omits it. Status: implemented; `make build` passed.
+    Deployment and an exact-wording live check are pending. Tests were not run.
 
 ## Delivery state
 
-Current server: `maraithon-00210-5p8`, code through `a37bfe8d`, deployed by
-successful workflow `34063346361`. Current iPhone release: TestFlight `1.0.1`
+Current server: `maraithon-00211-94n`, code through `ce4b1fd1`, deployed by
+successful workflow `34063974077`. Current iPhone release: TestFlight `1.0.1`
 build `20260906211723`, code through `871e245c`, available to Founders via
 workflow `34060595850`. The signed local Mac development app is installed at
 `~/Applications/Maraithon.app`; its 21:07 UTC refresh showed 953 active items

@@ -1843,7 +1843,7 @@ defmodule Maraithon.Todos do
     |> update_text_attr(attrs, "counterparty_label", "counterparty_label")
     |> update_metadata_attr(todo, attrs)
     |> record_completion_reopening(todo)
-    |> UserFacingCopy.polish_attrs()
+    |> UserFacingCopy.polish_attrs(todo.source)
   end
 
   defp record_completion_reopening(changes, %Todo{status: status} = todo)

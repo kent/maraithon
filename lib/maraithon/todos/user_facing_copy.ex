@@ -45,7 +45,19 @@ defmodule Maraithon.Todos.UserFacingCopy do
   @the_operator_reference ~r/\bthe operator\b(?=\s+(?:#{@user_subject_verb_pattern})\b|\s*[.,;:!?)]|\s*$)/i
   @safe_label_prefix ~r/^\s*(?:source[_ ]context|context[_ ]brief|context|why[_ ]now|why[_ ]it[_ ]matters|next[_ ]best[_ ]action|next[_ ]action|decision[_ ]prompt|decision|evidence[_ ]excerpt|evidence|summary)\s*[:=-]\s*/i
 
-  def polish_attrs(attrs) when is_map(attrs) do
+  # Human-authored work keeps its wording, including intentional product terms
+  # and line breaks. Partial updates may supply the persisted source as context.
+  def polish_attrs(attrs, fallback_source \\ nil)
+
+  def polish_attrs(attrs, fallback_source) when is_map(attrs) do
+    if (read_field(attrs, "source") || fallback_source) in ["manual", "mobile"],
+      do: attrs,
+      else: polish_generated_attrs(attrs)
+  end
+
+  def polish_attrs(attrs, _fallback_source), do: attrs
+
+  defp polish_generated_attrs(attrs) do
     attrs
     |> polish_text_field("title")
     |> polish_text_field("summary")
@@ -55,8 +67,6 @@ defmodule Maraithon.Todos.UserFacingCopy do
     |> polish_text_field("action_plan")
     |> maybe_rewrite_generic_commitment_copy()
   end
-
-  def polish_attrs(attrs), do: attrs
 
   def polish_text(value) when is_binary(value) do
     value
