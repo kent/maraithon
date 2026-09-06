@@ -279,23 +279,19 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
   defp rotating_todo_pool(user_id, now, run_opts) do
     age_cutoff = DateTime.add(now, -@min_todo_age_minutes * 60, :second)
 
-    opts =
-      [
-        statuses: @open_statuses,
-        limit: @max_open_todo_scan,
-        sort_by: "updated",
-        sort_dir: "asc",
-        # Completion checking must see everything open — an unsurfaceable todo
-        # still deserves to be closed when the evidence proves it done.
-        exclude_unsurfaceable?: false
-      ]
-      |> maybe_put_source_account_filter(run_opts)
-
-    user_id
-    |> Todos.list_for_user(opts)
-    |> Enum.filter(fn todo ->
-      DateTime.compare(todo.inserted_at, age_cutoff) == :lt
-    end)
+    # Rotate before bounding the database scan. An updated-at prefix would
+    # permanently exclude the tail because check stamps do not update it.
+    # Query the full open set, including todos hidden by presentation filters.
+    Todo
+    |> where(
+      [todo],
+      todo.user_id == ^user_id and todo.status in ^@open_statuses and
+        todo.inserted_at < ^age_cutoff
+    )
+    |> maybe_scope_todo_query(run_opts)
+    |> order_by([todo], asc_nulls_first: todo.last_completion_checked_at, asc: todo.id)
+    |> limit(@max_open_todo_scan)
+    |> Repo.all()
   end
 
   defp maybe_scope_todo_query(query, run_opts) do
@@ -308,20 +304,6 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
           where(query, [todo], is_nil(todo.source_account_id))
         else
           query
-        end
-    end
-  end
-
-  defp maybe_put_source_account_filter(opts, run_opts) when is_list(run_opts) do
-    case Keyword.get(run_opts, :source_account_id) do
-      account_id when is_integer(account_id) ->
-        Keyword.put(opts, :source_account_id, account_id)
-
-      _other ->
-        if Keyword.get(run_opts, :source_account_unassigned?, false) do
-          Keyword.put(opts, :source_account_unassigned?, true)
-        else
-          opts
         end
     end
   end
