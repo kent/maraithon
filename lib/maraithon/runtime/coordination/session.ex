@@ -252,10 +252,14 @@ defmodule Maraithon.Runtime.Coordination.Session do
     if Config.multinode_coordination_enabled?() and Protocol.mode() == :active do
       case Authority.register_node(
              ttl_ms: state.node_ttl_ms,
-             metadata: %{"deployment_generation" => Authority.deployment_generation()}
+             metadata: node_metadata()
            ) do
-        {:ok, %NodeIncarnation{} = session} -> %{state | session: session, phase: :joining}
-        _ -> state
+        {:ok, %NodeIncarnation{} = session} ->
+          Logger.info("Runtime node registered", node_incarnation_id: session.id)
+          %{state | session: session, phase: :joining}
+
+        _ ->
+          state
       end
     else
       state
@@ -295,6 +299,17 @@ defmodule Maraithon.Runtime.Coordination.Session do
   end
 
   defp coordinate(state), do: state
+
+  # The protocol revision and reusable deployment generation are not physical
+  # process identities. Keep the actual hosting revision for incident recovery.
+  defp node_metadata do
+    %{
+      "deployment_generation" => Authority.deployment_generation(),
+      "cloud_run_revision" => System.get_env("K_REVISION"),
+      "cloud_run_service" => System.get_env("K_SERVICE")
+    }
+    |> Map.reject(fn {_key, value} -> is_nil(value) or value == "" end)
+  end
 
   defp ready_cycle(state) do
     with {:renew_node, {:ok, %NodeIncarnation{} = session}} <-
