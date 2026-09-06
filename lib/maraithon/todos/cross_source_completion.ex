@@ -1292,10 +1292,10 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
          :ok <- validate_exact_partition_refs(evidence, chunks) do
       Logger.info("Cross-source exact prompt prepared",
         user_fingerprint: Maraithon.Redaction.fingerprint(user_id),
-        todo_count: length(todos),
-        evidence_items: length(evidence),
-        prompt_chunks: length(chunks),
-        preparation_ms: System.monotonic_time(:millisecond) - started_at
+        candidate_count: length(todos),
+        item_count: length(evidence),
+        count: length(chunks),
+        duration_ms: System.monotonic_time(:millisecond) - started_at
       )
 
       {:ok, chunks}
