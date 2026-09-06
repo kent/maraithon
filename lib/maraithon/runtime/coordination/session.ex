@@ -211,10 +211,24 @@ defmodule Maraithon.Runtime.Coordination.Session do
 
   @impl true
   def handle_info(:coordinate, state) do
-    state = coordinate(state)
+    state = coordinate_safely(state)
     publish(state)
     Process.send_after(self(), :coordinate, state.tick_ms)
     {:noreply, state}
+  end
+
+  # Lease expiry and connection loss are expected authority failures. Keep the
+  # old incarnation long enough to terminate its local work and persist proof;
+  # crashing this process would discard that cleanup identity on restart.
+  defp coordinate_safely(state) do
+    coordinate(state)
+  rescue
+    error in [Postgrex.Error, DBConnection.ConnectionError] ->
+      Logger.error("RUNTIME_COORDINATION_ERROR=database",
+        failure_code: Maraithon.Redaction.error_class(error)
+      )
+
+      %{state | phase: :uncertain, leader: nil}
   end
 
   @impl true
@@ -556,6 +570,9 @@ defmodule Maraithon.Runtime.Coordination.Session do
 
   defp fail_closed(state, stage) do
     Logger.error("RUNTIME_COORDINATION_ERROR=#{stage}")
+
+    state = %{state | phase: :uncertain, leader: nil}
+    publish(state)
 
     # Uncertainty revokes all local execution immediately. Durable settlement
     # still requires exact monitored termination proof and PostgreSQL fences.
