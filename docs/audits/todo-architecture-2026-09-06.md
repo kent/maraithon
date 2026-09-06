@@ -357,6 +357,17 @@ for `kent@runner.now`, using the manual-first development policy.
     Status: implemented; `make build` passed. Tests were not run under the
     manual-first policy. Deployment and live abandonment are pending.
 
+25. **Unchanged closure decisions generate unnecessary prose.** Exact closure
+    sweeps require one explicit decision per todo, but the prompt also requested
+    a reason for every negative decision. The sampled Slack batches made nine
+    model calls for each group of 20 todos and found no supported completion.
+    The prompt now requests only `todo_id` and `completed: false` for unchanged
+    work without an acknowledgment. Completed work and acknowledgment-only
+    replies retain full cited evidence, and the existing validator still requires
+    the exact input todo-ID set with a Boolean decision for every item.
+    **Status: implemented; compile passed, deployment pending.** This reduces
+    requested output; latency and token savings have not yet been measured.
+
 ## Delivery state
 
 Current server: `maraithon-00209-mw8`, code through `6ed443ba`, deployed by

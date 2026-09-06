@@ -1805,10 +1805,12 @@ defmodule Maraithon.Todos.CrossSourceCompletion do
   defp resolution_coverage_instruction(true) do
     """
     This is an exact closure sweep. Return exactly one resolution for every
-    OPEN_WORK_ITEMS_JSON entry, using each todo_id exactly once. For work that
-    is not provably complete, return completed=false with a short reason; do
-    not omit it. The response is rejected unless its todo_id set exactly
-    matches the input set.
+    OPEN_WORK_ITEMS_JSON entry, using each todo_id exactly once. For unchanged
+    work with no counterparty acknowledgment, return only
+    {"todo_id": "the item's uuid", "completed": false}; omit reasoning,
+    confidence, and empty evidence fields. Keep the full cited resolution for
+    completed work and acknowledged_only replies. Do not omit any item. The
+    response is rejected unless its todo_id set exactly matches the input set.
     """
   end
 
