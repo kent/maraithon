@@ -474,21 +474,39 @@ for `kent@runner.now`, using the manual-first development policy.
     coverage, and the existing complete-request check before every model call.
     Emit a preparation-time/count log for each successfully packed batch so
     further latency analysis can distinguish preparation from model execution.
-    Status: implemented; `make build` passed. Tests were not run under the
-    manual-first policy. Deployment and preparation-time measurements remain
-    pending.
+    Status: implemented in `8f4d5f35`; `make build` passed. Tests were not run
+    under the manual-first policy. Workflow `34066652859` successfully deployed
+    revision `maraithon-00215-64f`, serving 100% of traffic. Preparation-time
+    measurements and completed-batch latency remain to verify.
+
+32. **The Mac inspector keeps recommending action after a todo is done.** The
+    first newly proven automatic closure appeared in Done, but its inspector
+    still advised keeping it active and offered an obsolete suggested reply.
+    Decode the existing public `metadata.resolution_note` and `closed_at`
+    fields, lead completed detail with the resolution and completion date,
+    label the original request as historical context, and restrict next-action
+    advice and suggested replies to active work. Keep the source link and
+    Reopen action available.
+
+    Status: `swift build` and signed `make build-companion` passed. Installed
+    the signed development build at `~/Applications/Maraithon.app`. A live
+    inspection of todo `087525a5-1d38-4e71-85cb-0ee79858d68c` verified its source
+    completion quote, completed date, original request, and absence of stale
+    action advice or reply controls. Reopen remained available. Returned the
+    app to the unfiltered Active list (993 items). No tests were run.
 
 ## Delivery state
 
-Current server: `maraithon-00214-47d`, code through `b5722b36`, deployed by
-successful workflow `34065675520`. Current iPhone release: TestFlight `1.0.1`
+Current server: `maraithon-00215-64f`, code through `8f4d5f35`, deployed by
+successful workflow `34066652859`. Current iPhone release: TestFlight `1.0.1`
 build `20260906211723`, code through `871e245c`, available to Founders via
-workflow `34060595850`. The signed local Mac development app, code through
-`caa7f517`, is installed at `~/Applications/Maraithon.app`. Live checks verified
+workflow `34060595850`. The signed local Mac development app includes finding 32 and is installed
+at `~/Applications/Maraithon.app`. Live checks verified
 New Todo, saved wording and multiline notes after a fresh load, user completion,
 the completed-row display, and Command-N/Escape. The two manual check items
 are completed; these user actions are not automatic-closure evidence. The app
-was returned to the unfiltered active list, which contained 992 items.
+was returned to the unfiltered active list, which contained 993 items after
+the completion-inspector update.
 No public Sparkle release was made.
 
 
@@ -867,3 +885,35 @@ Discovery cursors continued advancing, while closure cursors still lagged.
 No fresh automatic completion was recorded. A new observation execution,
 `maraithon-todo-validation-xr547`, was submitted to observe account rotation
 and subsequent closure processing; it was starting at 23:03 UTC.
+
+
+The first newly verified automatic completion closed todo
+`087525a5-1d38-4e71-85cb-0ee79858d68c` at 23:00:47 UTC. Its exact closure job,
+`fd546c1d-d720-4201-bd53-bc8d05e1585f`, completed with matching task outcome
+evidence, checking 20 todos against 12 source items in eight model calls.
+Execution `maraithon-todo-validation-khn99` completed successfully at 23:20:32
+and verified that the recorded scheduling-confirmation quote occurs in the
+stored Gmail source bundle, after the original request. This is real
+source-backed automatic closure, distinct from the two manual check items.
+The cross-source completion count lives under `result.cross_source.completed`;
+the top-level sweep completion count covers only deterministic checks.
+
+Execution `maraithon-todo-validation-xr547` completed successfully at 23:17:23.
+By 23:15 and 23:17, all 64 partitions were ready/live on one revision-214 node.
+No task awaited termination; all 1,140 outcome-known Effects had matching
+evidence. A same-revision instance handoff earlier interrupted one Gmail
+child, retaining its ambiguous outcome. Gmail's failed graphs still had 325
+and 542 pending children at 23:17; Slack's fresh graph had three completed,
+three running, and 19 pending children. These explicit counts show catch-up
+was incomplete. Missing or delayed log lines are not evidence of graph cleanup.
+
+Execution `maraithon-todo-validation-t4g6s` completed successfully at 23:20:18.
+The scheduled checkpoint persisted at 23:18:13.884670, after the Chief's
+23:12:05 wakeup and two Effects completed by 23:13:44. All 64 partitions stayed
+ready/live, with no tripped restart guard or task awaiting termination. Over
+23:18:13–23:20:13, PostgreSQL spent 8.95 seconds executing queries. Candidate
+fair scheduling accounted for 23.28% (2.08 seconds across 207 calls), node
+read/locking 13.61%, and partition renewal 2.78%. Expensive storage verification
+was not in the top twelve. Discovery continued advancing; closure watermarks
+still lagged. The larger Slack batches averaged 309 seconds, motivating
+finding 31 rather than a claim of improved latency.

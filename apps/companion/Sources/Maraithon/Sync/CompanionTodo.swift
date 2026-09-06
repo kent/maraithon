@@ -16,7 +16,7 @@ enum TodoListFilter: String, CaseIterable, Identifiable, Sendable {
 }
 
 /// Public Todo projection returned by the companion API. This intentionally
-/// models only user-facing fields and ignores internal metadata.
+/// models only user-facing fields, including the curated resolution note.
 struct CompanionTodo: Codable, Identifiable, Hashable, Sendable {
     let id: String
     let source: String
@@ -31,6 +31,16 @@ struct CompanionTodo: Codable, Identifiable, Hashable, Sendable {
     let snoozedUntil: String?
     let updatedAt: String?
     let actionCard: CompanionTodoActionCard?
+    var closedAt: String? = nil
+    var metadata: PublicMetadata? = nil
+
+    struct PublicMetadata: Codable, Hashable, Sendable {
+        let resolutionNote: String?
+
+        enum CodingKeys: String, CodingKey {
+            case resolutionNote = "resolution_note"
+        }
+    }
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -46,9 +56,12 @@ struct CompanionTodo: Codable, Identifiable, Hashable, Sendable {
         case snoozedUntil = "snoozed_until"
         case updatedAt = "updated_at"
         case actionCard = "action_card"
+        case closedAt = "closed_at"
+        case metadata
     }
 
     var recommendedMove: String? {
+        guard canMarkDone else { return nil }
         if ["manual", "mobile"].contains(source) {
             return Self.nonblank(nextAction) ?? Self.nonblank(actionCard?.nextBestAction)
         }
@@ -57,6 +70,8 @@ struct CompanionTodo: Codable, Identifiable, Hashable, Sendable {
 
     var dueDate: Date? { Self.parseDate(dueAt) }
     var updatedDate: Date? { Self.parseDate(updatedAt) }
+    var closedDate: Date? { Self.parseDate(closedAt) }
+    var resolutionNote: String? { Self.nonblank(metadata?.resolutionNote) }
 
     var canMarkDone: Bool { status == "open" || status == "snoozed" }
     var canReopen: Bool { status == "done" }

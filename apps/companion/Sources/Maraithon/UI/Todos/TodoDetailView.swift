@@ -1,8 +1,8 @@
 import SwiftUI
 import AppKit
 
-/// Inspector for the active Todo. It exposes the same source-backed facts and
-/// resolution actions without inventing a second editing surface.
+/// Inspector for a Todo. Completed work leads with its recorded resolution,
+/// while active work retains its next action and source context.
 struct TodoDetailView: View {
     let todo: CompanionTodo?
     let isWorking: Bool
@@ -26,20 +26,35 @@ struct TodoDetailView: View {
                         }
                     }
 
-                    if let summary = todo.summary, !summary.isEmpty {
+                    if todo.canMarkDone, let summary = todo.summary, !summary.isEmpty {
                         Text(summary)
                             .font(.body)
                     }
                 }
 
+                if !todo.canMarkDone, let note = todo.resolutionNote {
+                    Section(todo.canReopen ? "Completion" : "Resolution") {
+                        Text(note).textSelection(.enabled)
+                    }
+                }
+
                 Section("Details") {
                     LabeledContent("Status", value: TodosCopy.statusLabel(todo.status))
+                    if todo.canReopen, let closedDate = todo.closedDate {
+                        LabeledContent("Completed", value: closedDate.formatted(date: .abbreviated, time: .shortened))
+                    }
                     LabeledContent("Source", value: TodosCopy.sourceLabel(todo.source))
                     if todo.canMarkDone {
                         LabeledContent("Attention", value: TodosCopy.attentionLabel(todo.attentionMode))
                     }
                     LabeledContent("Priority", value: TodosCopy.priorityLabel(todo.priority))
                     LabeledContent("Due", value: TodosCopy.dueLabel(todo.dueDate, active: todo.canMarkDone))
+                }
+
+                if !todo.canMarkDone, let summary = todo.summary, !summary.isEmpty {
+                    Section("Original request") {
+                        Text(summary).textSelection(.enabled)
+                    }
                 }
 
                 if let notes = todo.notes, !notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -85,23 +100,27 @@ struct TodoDetailView: View {
     @ViewBuilder
     private func sourceContext(for todo: CompanionTodo) -> some View {
         if let card = todo.actionCard {
-            Section("Source context") {
-                if let whyNow = card.whyNow, !whyNow.isEmpty {
-                    Text(whyNow)
-                }
-                if let excerpt = card.evidenceExcerpt, !excerpt.isEmpty, excerpt != todo.summary {
-                    Text(excerpt).textSelection(.enabled)
-                }
-                if let source = card.sourceContext, !source.isEmpty {
-                    Text(source).foregroundStyle(.secondary)
-                }
-                if let action = card.sourceAction, let destination = action.destination {
-                    Link(destination: destination) {
-                        Label(action.openLabel ?? "Open source", systemImage: "arrow.up.right")
+            if todo.canMarkDone || card.sourceAction?.destination != nil {
+                Section(todo.canMarkDone ? "Source context" : "Original source") {
+                    if todo.canMarkDone {
+                        if let whyNow = card.whyNow, !whyNow.isEmpty {
+                            Text(whyNow)
+                        }
+                        if let excerpt = card.evidenceExcerpt, !excerpt.isEmpty, excerpt != todo.summary {
+                            Text(excerpt).textSelection(.enabled)
+                        }
+                        if let source = card.sourceContext, !source.isEmpty {
+                            Text(source).foregroundStyle(.secondary)
+                        }
+                    }
+                    if let action = card.sourceAction, let destination = action.destination {
+                        Link(destination: destination) {
+                            Label(action.openLabel ?? "Open source", systemImage: "arrow.up.right")
+                        }
                     }
                 }
             }
-            if let draft = card.sourceAction?.draftText ?? card.draftPreview, !draft.isEmpty {
+            if todo.canMarkDone, let draft = card.sourceAction?.draftText ?? card.draftPreview, !draft.isEmpty {
                 Section("Suggested reply") {
                     Text(draft).textSelection(.enabled)
                     Button {

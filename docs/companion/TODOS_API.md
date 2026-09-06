@@ -68,6 +68,10 @@ GET /api/v1/companion/todos/:id?include_cards=true
 ```
 
 The response is `{"todo": TODO}`. A missing or different-user ID returns 404.
+Completed todos include `closed_at` and may include a human-readable
+`metadata.resolution_note`. The Mac shows that note as the completion
+explanation and treats the original summary as historical context. It does
+not display active-work advice or suggested replies for completed todos.
 
 ## Create a Manual Todo
 
