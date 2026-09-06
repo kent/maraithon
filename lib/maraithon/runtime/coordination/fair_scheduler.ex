@@ -20,6 +20,18 @@ defmodule Maraithon.Runtime.Coordination.FairScheduler do
   # Keep model-workload service history separate from execution partition keys.
   # Hash each component independently so arbitrary keys stay within varchar(255).
   @model_workload_key_sql "'fair-workload:' || md5(job.tenant_key) || ':' || md5(job.job_type)"
+  # Source reasoning dedupe keys end in the connected-account ID. Rotate
+  # accounts inside each workload without changing execution partition keys
+  # or giving a workload more turns merely because it has more accounts.
+  @source_workload_key_sql """
+  CASE WHEN job.job_type IN (
+    'runtime_partition:source_account_discovery_reason',
+    'runtime_partition:source_account_closure_reason'
+  ) AND job.dedupe_key ~ ':[0-9]+$'
+  THEN 'fair-source-workload:' || md5(job.tenant_key) || ':' || md5(job.job_type) ||
+       ':' || md5(substring(job.dedupe_key FROM '[0-9]+$'))
+  ELSE NULL END
+  """
 
   def reserve_next(%NodeIncarnation{} = session, partitions, opts \\ [])
       when is_list(partitions) do
@@ -261,6 +273,10 @@ defmodule Maraithon.Runtime.Coordination.FairScheduler do
             ON job.queue = 'runtime_model_user'
            AND workload.queue = job.queue
            AND workload.partition_key = (#{@model_workload_key_sql})
+          LEFT JOIN public.background_job_partitions AS source_workload
+            ON job.queue = 'runtime_model_user'
+           AND source_workload.queue = job.queue
+           AND source_workload.partition_key = (#{@source_workload_key_sql})
           WHERE job.status = 'pending'
             AND job.scheduled_at <= timezone('UTC', clock_timestamp())
             AND job.claim_token IS NULL
@@ -307,8 +323,10 @@ defmodule Maraithon.Runtime.Coordination.FairScheduler do
                    ) THEN 0 ELSE 1 END,
                    -- Rotate model workloads within a tenant so a large closure
                    -- graph cannot postpone discovery or todo ingestion forever.
-                   -- Keep FIFO order within each workload and tenant admission.
+                   -- Within source reasoning, rotate accounts before FIFO so
+                   -- one account's fanout cannot hold up another's next turn.
                    workload.last_started_at ASC NULLS FIRST,
+                   source_workload.last_started_at ASC NULLS FIRST,
                    job.scheduled_at, job.inserted_at, job.id
           LIMIT 1
         )
@@ -468,11 +486,16 @@ defmodule Maraithon.Runtime.Coordination.FairScheduler do
       """
       INSERT INTO public.background_job_partitions
         (queue, partition_key, last_started_at, inserted_at, updated_at)
-      SELECT job.queue, #{@model_workload_key_sql},
+      SELECT job.queue, service.partition_key,
              timezone('UTC', clock_timestamp()), timezone('UTC', clock_timestamp()),
              timezone('UTC', clock_timestamp())
       FROM public.background_jobs AS job
+      CROSS JOIN LATERAL (VALUES
+        ((#{@model_workload_key_sql})),
+        ((#{@source_workload_key_sql}))
+      ) AS service(partition_key)
       WHERE job.id = $1::uuid AND job.queue = 'runtime_model_user'
+        AND service.partition_key IS NOT NULL
       ON CONFLICT (queue, partition_key) DO UPDATE
       SET last_started_at = EXCLUDED.last_started_at, updated_at = EXCLUDED.updated_at
       """,

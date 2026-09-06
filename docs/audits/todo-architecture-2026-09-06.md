@@ -428,13 +428,32 @@ for `kent@runner.now`, using the manual-first development policy.
     retain that reserve. Source-reference coverage, exact todo-ID validation,
     response limits, and the final request-size check remain intact. Existing
     20-todo handoffs stay valid; newly acquired graphs use the shared limit.
+    Status: implemented in `cf6b6cc0`; `make build` passed. Tests were not run
+    under the manual-first policy. Workflow `34065190230` successfully deployed
+    revision `maraithon-00213-vbb` with 100% traffic. Measured improvement remains
+    pending.
+
+30. **One source account monopolizes its model-workload turn.** At 23:00 UTC,
+    execution `maraithon-todo-validation-wf5kw` observed Gmail account 2 using
+    all three running source slots, with eight of its 350 children completed.
+    All 550 Gmail account 1 children still awaited their first turn. Slack's
+    failed graph retained one pending child, delaying its replacement cycle.
+    Job-type rotation works, but FIFO within a type lets one account's entire
+    fanout precede another account's work.
+
+    Add a second scheduling watermark for the source account within discovery
+    and closure reasoning workloads. Sort first by the existing workload turn,
+    then the source-account turn, then FIFO. Record both watermarks atomically
+    with the exact reservation under the existing tenant lock. This preserves
+    tenant quotas, job-type fairness, due-time admission, execution partitions,
+    and task fences; it adds no ownership table or permission change.
     Status: implemented; `make build` passed. Tests were not run under the
-    manual-first policy. Deployment and measured improvement remain pending.
+    manual-first policy. Deployment and live account-rotation proof are pending.
 
 ## Delivery state
 
-Current server: `maraithon-00212-c5r`, code through `d12529a8`, deployed by
-successful workflow `34064359869`. Current iPhone release: TestFlight `1.0.1`
+Current server: `maraithon-00213-vbb`, code through `cf6b6cc0`, deployed by
+successful workflow `34065190230`. Current iPhone release: TestFlight `1.0.1`
 build `20260906211723`, code through `871e245c`, available to Founders via
 workflow `34060595850`. The signed local Mac development app, code through
 `caa7f517`, is installed at `~/Applications/Maraithon.app`. Live checks verified
