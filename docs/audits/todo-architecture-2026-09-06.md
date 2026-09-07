@@ -574,7 +574,9 @@ for `kent@runner.now`, using the manual-first development policy.
     A single unsplittable record still fails explicitly. Status: deployed in
     revision `maraithon-00217-wx6`, successful workflow `34068079615`;
     `make build` passed, with no tests run under the manual-first policy.
-    Reduction in a newly acquired production graph remains to verify.
+    The replacement production graph `b871ad9e` published 300 children for
+    294 source items and 997 todos (twelve partitions times 25 batches),
+    verified at 00:25:16. Its first two workers completed with full coverage.
 
 37. **Surviving legacy graphs keep the old oversized layout after deployment.**
     Gmail account 1's 1,800-child graph survived revision 217's rollout, with
@@ -594,7 +596,10 @@ for `kent@runner.now`, using the manual-first development policy.
     outcomes are retained. Versioned graphs and substantially completed legacy
     graphs continue normally. Status: deployed through `61edd26f` in revision
     `maraithon-00218-p5q`, successful workflow `34068694257`; `make build`
-    passed, with no tests run. The actual replacement graph remains to verify.
+    passed, with no tests run. The old graph was fully terminal by 00:21:14,
+    with its fourteen completed outcomes retained. Replacement `b871ad9e`
+    published 300 children with partitioning version 1 and had two completed
+    workers by 00:25:16. Full cycle settlement still remains to observe.
 
 38. **Source finalization repeats reads while holding the User fence.**
     `SourceCycleSettlement` loads every todo separately when building receipts
@@ -607,8 +612,10 @@ for `kent@runner.now`, using the manual-first development policy.
     fields, keep the existing ownership checks, and restore/hash identical
     source bundles once after every job payload binding has been validated.
     Proof construction, receipt validation, the cursor write, and exact outcome
-    settlement remain in the same fenced transaction. Status: implemented;
-    `make build` passed. No tests were run. Live finalization remains to observe.
+    settlement remain in the same fenced transaction. Status: deployed in
+    `maraithon-00219-lxk` through `5ac6467a`, successful workflow `34069227776`;
+    `make build` passed. No tests were run. Discovery cursors advanced after
+    deployment; full closure finalization remains to observe.
 
 39. **Cleanup yields its worker after only 64 cancellations.** Revision 218
     correctly discarded a legacy Gmail reason worker as
@@ -618,17 +625,22 @@ for `kent@runner.now`, using the manual-first development policy.
     itself taking less than a second.
 
     Let a live cleanup worker execute at most eight independent 64-row
-    transactions, stopping when ten seconds have elapsed or a batch is partial.
+    transactions, stopping between batches once ten seconds have elapsed or a
+    batch is partial.
     Reject an enclosing transaction so each batch releases its User fence.
     Every batch rechecks the failed graph and the task lease before and after
     writes. A lock timeout stops the loop. Claimed work and outcomes remain
-    untouched. Status: implemented; `make build` passed. No tests were run.
-    Faster retirement of the legacy graph remains to verify after deployment.
+    untouched. Status: deployed in `maraithon-00219-lxk`, successful workflow
+    `34069227776`; `make build` passed. No tests were run. Live logs recorded
+    1,414 cancellations in about 26 seconds across five workers, including two
+    eight-batch workers that each cancelled 512 jobs. The slowest transaction
+    took 1,486 ms. The old Gmail graph's remaining claimed retries then retired
+    normally; all children were terminal by 00:21:14.
 
 ## Delivery state
 
-Current server: `maraithon-00218-p5q`, code through `61edd26f`, deployed by
-successful workflow `34068694257`. Current iPhone release: TestFlight `1.0.1`
+Current server: `maraithon-00219-lxk`, code through `5ac6467a`, deployed by
+successful workflow `34069227776`. Current iPhone release: TestFlight `1.0.1`
 build `20260906233635`, code through `1ba7bb51`, available to Founders via
 workflow `34067357201`. The signed local Mac development app includes finding 32 and is installed
 at `~/Applications/Maraithon.app`. Live checks verified
@@ -1181,3 +1193,32 @@ traffic. The new read-only watch `maraithon-todo-validation-wbvrp`, submitted
 at approximately 00:09:50, will inspect cleanup of the 1,800-child graph,
 replacement partition/version counts, completed coverage, and runtime leases.
 Full source catch-up remains outstanding.
+
+Findings 38 and 39 shipped in separate semantic commits, `9bb5d11e` and
+`5ac6467a`, through successful workflow `34069227776`. Revision 219 recovered
+the Chief at 00:19:59.359. Its 00:20:01 wakeup completed two Effects by
+00:20:48; all 1,148 outcome-known Effects had matching evidence. Read-only
+watch `maraithon-todo-validation-psjlh` observed all 64 partitions ready/live
+at 00:21:14, 00:23:15, and 00:25:16, with no new restart-guard crash or task
+awaiting termination. No Cloud SQL error was returned by the check covering
+the rollout from 00:19 onward. The next checkpoint is due at 00:29:58;
+the watch's SQL interval and final sample are still running.
+
+The prior watch `wbvrp` completed successfully at 00:19:52; its final sample
+caught rollout recovery and was not a steady-state health snapshot. The
+following `psjlh` samples confirmed the old 1,800-child Gmail graph fully
+terminal: 1,766 cancelled, fourteen completed, and twenty failed (nineteen
+abandoned plus the one explicit repacking decision). The old account-2 graph
+retained its 22 completed and one ambiguous outcome; its other children also
+retired, and its finalizer failed normally before replacement acquisition.
+No source cursor or ambiguous outcome was manually advanced or relabeled.
+
+Account-1 replacement acquisition `b871ad9e-563e-493e-8b2e-6d3d6083ace8`
+published 300 children for 294 source items and 997 todos, with version 1
+partitioning and finalizer `4e6e7660-60d0-4e4f-9b6d-3a36336572d2`. At 00:25:16,
+two children had completed. Each checked all forty assigned todos with no
+fetch/evaluation error and three model calls, against forty and seventeen
+source items respectively. This verifies the smaller graph in live use,
+beyond the read-only packing profile. Account-2 replacement `bcaaaf01` was
+still acquiring, while Slack replacement `b60adb64` had three completed of
+25 children. All closure cursors still awaited full graph settlement.
