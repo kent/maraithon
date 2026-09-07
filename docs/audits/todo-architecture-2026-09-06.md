@@ -1222,3 +1222,31 @@ source items respectively. This verifies the smaller graph in live use,
 beyond the read-only packing profile. Account-2 replacement `bcaaaf01` was
 still acquiring, while Slack replacement `b60adb64` had three completed of
 25 children. All closure cursors still awaited full graph settlement.
+
+`psjlh` completed successfully at 00:29:24. Its final sample retained 64
+ready/live partitions, no task awaiting termination, and no new guard crash.
+The account-2 replacement published 175 children for 168 source items and
+997 todos, with seven source partitions and partitioning version 1. At
+00:29:19 the two Gmail replacements had five and three completed children;
+Slack had seven of 25. None of these replacement graphs had failed children.
+The eight-minute SQL window totaled 68.32 seconds of execution time.
+Background-job reads contributed 30.96%, graph inserts 11.95%, fair scheduling
+3.67%, and partition renewal 1.84%. Expensive storage verification did not
+dominate. This is a workload observation, not a CPU-capacity measurement.
+
+Follow-up read-only observer `maraithon-todo-validation-ddks9` confirmed the
+scheduled checkpoint persisted at 00:29:59.995 and the next wakeup arrived at
+00:30:50.654. Its two Effects completed by 00:32:00.804; all 1,150
+outcome-known Effects had matching evidence. At 00:34:52, all 64 partitions
+were ready/live with no new guard crash or task awaiting termination.
+Discovery cursors continued advancing, while closure cursors still awaited
+settlement. The Gmail replacements each had seven completed children;
+Slack had eleven of 25, with no failed children in any replacement graph.
+
+Remaining work is to complete source closure catch-up, verify full graph
+settlement, and assess model throughput under that workload. The model runner
+and source-tenant budget currently allow three concurrent jobs. Production
+uses the same model for primary, chat, and routing, which sends these calls
+through the same reasoning bucket under the current model-based selection.
+Capacity changes must account for interactive and Chief of Staff work as well
+as source workers. No concurrency setting has been changed in this check.
