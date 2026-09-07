@@ -592,13 +592,14 @@ for `kent@runner.now`, using the manual-first development policy.
     triggers the existing fenced cleanup; normal acquisition then rebuilds
     from the unchanged source cursor. Completed outcomes and any ambiguous
     outcomes are retained. Versioned graphs and substantially completed legacy
-    graphs continue normally. Status: implemented; `make build` passed, with
-    no tests run. Deployment and the actual replacement graph remain to verify.
+    graphs continue normally. Status: deployed through `61edd26f` in revision
+    `maraithon-00218-p5q`, successful workflow `34068694257`; `make build`
+    passed, with no tests run. The actual replacement graph remains to verify.
 
 ## Delivery state
 
-Current server: `maraithon-00217-wx6`, code through `d5cc439c`, deployed by
-successful workflow `34068079615`. Current iPhone release: TestFlight `1.0.1`
+Current server: `maraithon-00218-p5q`, code through `61edd26f`, deployed by
+successful workflow `34068694257`. Current iPhone release: TestFlight `1.0.1`
 build `20260906233635`, code through `1ba7bb51`, available to Founders via
 workflow `34067357201`. The signed local Mac development app includes finding 32 and is installed
 at `~/Applications/Maraithon.app`. Live checks verified
@@ -1130,3 +1131,24 @@ batch size, and only builds handoffs in memory: no provider/model calls, job
 inserts, or cursor writes. A follow-up runtime watch, `2hpp7`, will inspect the
 next checkpoint and identify the account behind a `watch_renewal/no_token`
 failure observed at 23:58:19, without reading token values into logs.
+
+`flbtj` completed successfully at 00:03:24 with the 300-handoff result recorded
+in finding 37. `2hpp7` completed successfully at 00:09:00. Its 00:04:52 and
+00:06:53 samples retained all 64 partitions ready/live and 1,146 proven
+outcome-known Effects, with no new guard crash. Revision 217 persisted its
+scheduled checkpoint at 00:06:58.257 and received its next wakeup at
+00:08:02.327. The final sample caught revision 218's deployment drain and is
+not a steady-state health observation. Two Slack model calls and one Gmail
+discovery call interrupted during this rollout retained ambiguous outcomes;
+both Gmail closure graphs survived, so the large account-1 graph still needs
+the versioned upgrade rule.
+
+The `watch_renewal/no_token` job references account 3's Calendar cursor for
+`google:kent@voteagora.com`; that account was already in `error` status. It is
+separate from the two connected Gmail accounts making discovery progress.
+
+Workflow `34068694257` succeeded and revision `maraithon-00218-p5q` serves all
+traffic. The new read-only watch `maraithon-todo-validation-wbvrp`, submitted
+at approximately 00:09:50, will inspect cleanup of the 1,800-child graph,
+replacement partition/version counts, completed coverage, and runtime leases.
+Full source catch-up remains outstanding.
