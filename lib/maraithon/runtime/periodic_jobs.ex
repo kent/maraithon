@@ -286,14 +286,41 @@ defmodule Maraithon.Runtime.PeriodicJobs do
       |> where([child], child.status in ["failed", "cancelled"])
       |> Repo.exists?()
 
-    if failed? do
-      with {:ok, _cancelled} <- SourceGraphCleanup.cancel_unclaimed(job, ids) do
-        {:error, {:discard, :source_graph_abandoned}}
-      end
-    else
-      execute_model(job)
+    cond do
+      failed? ->
+        with {:ok, _cancelled} <- SourceGraphCleanup.cancel_unclaimed(job, ids) do
+          {:error, {:discard, :source_graph_abandoned}}
+        end
+
+      repack_legacy_source_graph?(job, result, ids) ->
+        # Settle this worker normally before any model call. Its terminal
+        # result lets the existing fenced cleanup retire unclaimed siblings;
+        # the next acquisition uses the bounded packer and version marker.
+        {:error, {:discard, :source_graph_repacking_required}}
+
+      true ->
+        execute_model(job)
     end
   end
+
+  defp repack_legacy_source_graph?(%BackgroundJob{job_type: type} = job, result, ids)
+       when type == @todo_account_closure_reason_job do
+    if SourceAccountClosure.legacy_oversized_graph?(result) do
+      completed =
+        BackgroundJob
+        |> where([child], child.user_id == ^job.user_id and child.id in ^ids)
+        |> where([child], child.status == "completed")
+        |> Repo.aggregate(:count, :id)
+
+      # Preserve substantially completed legacy scans. Only the old fallback's
+      # large, mostly unprocessed graphs need a one-time rebuild.
+      completed * 10 < result["fanout_count"]
+    else
+      false
+    end
+  end
+
+  defp repack_legacy_source_graph?(_job, _result, _ids), do: false
 
   defp source_graph_parent_type(type)
        when type in [@source_discovery_reason_job, @source_discovery_finalize_job],

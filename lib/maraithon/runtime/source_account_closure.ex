@@ -22,7 +22,17 @@ defmodule Maraithon.Runtime.SourceAccountClosure do
   alias Maraithon.Todos.Todo
 
   @max_replay_fanouts 500
+  @partitioning_version 1
+  @oversized_legacy_fanouts 1_000
   @allowed_watermark_kinds ~w(gmail_closure_watermark slack_closure_watermark)
+
+  @doc false
+  def legacy_oversized_graph?(%{"fanout_count" => count} = result)
+      when is_integer(count) and count >= @oversized_legacy_fanouts do
+    is_nil(result["closure_partitioning_version"])
+  end
+
+  def legacy_oversized_graph?(_result), do: false
 
   def acquire(account, opts \\ [])
 
@@ -133,6 +143,7 @@ defmodule Maraithon.Runtime.SourceAccountClosure do
     {:ok,
      %{
        outcome: "fanout_ready",
+       closure_partitioning_version: @partitioning_version,
        account_id: account.id,
        source_items: length(source_refs),
        source_partition_count: length(source_partitions),

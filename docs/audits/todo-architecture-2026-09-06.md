@@ -546,8 +546,14 @@ for `kent@runner.now`, using the manual-first development policy.
     all match. Different evidence remains separate. The prompt identifies
     aliases as one activity, not independent confirmations; byte limits and
     todo coverage checks are unchanged. Log original and unique record counts.
-    Status: implemented; `make build` passed. Live deduplication and model-call
-    reduction remain to verify. No tests were run. Gmail acquisition
+    Status: deployed through `d5cc439c` in revision `maraithon-00217-wx6`,
+    successful workflow `34068079615`; `make build` passed. Live logs reduced
+    one 297-record Gmail input to 238 unique records and four prompt chunks
+    (previously seven for that record count), and another 284-record input to
+    218 unique records and two chunks (previously six). Each had 40 todos;
+    todo text can differ between batches, so this is not an isolated benchmark.
+    Preparation took 70 ms in both cases. Slack's 703 records coalesced to 698
+    and still required ten chunks. No tests were run. Gmail acquisition
     `993c7be3` published its child list by the 23:47 observation, so deployment
     no longer needs to wait for that graph to finish staging.
 
@@ -565,14 +571,34 @@ for `kent@runner.now`, using the manual-first development policy.
     partition only, then rebuild the matrix with final indices and counts.
     Other packed partitions stay packed, all source records remain covered,
     and the existing durable payload bounds and replay fanout cap still apply.
-    A single unsplittable record still fails explicitly. Status: implemented;
+    A single unsplittable record still fails explicitly. Status: deployed in
+    revision `maraithon-00217-wx6`, successful workflow `34068079615`;
     `make build` passed, with no tests run under the manual-first policy.
     Reduction in a newly acquired production graph remains to verify.
 
+37. **Surviving legacy graphs keep the old oversized layout after deployment.**
+    Gmail account 1's 1,800-child graph survived revision 217's rollout, with
+    only nine children completed by 00:00:19. The new prompt code applies to
+    its workers, but the packed graph shape is fixed at acquisition. Read-only
+    execution `flbtj` replayed its exact stored 290 source items and 993 todo
+    snapshots through the new packer: twelve source partitions times 25 todo
+    batches produced 300 handoffs in 35,644 ms, instead of 1,800. The handoffs
+    totaled 122,742,863 encoded bytes. It made no provider/model calls or writes
+    and completed successfully at 00:03:24.
+
+    Version newly acquired closure graphs. For unversioned graphs with at
+    least 1,000 children and less than 10% completed, a claimed reason worker
+    discards itself before making a model call. Its ordinary exact settlement
+    triggers the existing fenced cleanup; normal acquisition then rebuilds
+    from the unchanged source cursor. Completed outcomes and any ambiguous
+    outcomes are retained. Versioned graphs and substantially completed legacy
+    graphs continue normally. Status: implemented; `make build` passed, with
+    no tests run. Deployment and the actual replacement graph remain to verify.
+
 ## Delivery state
 
-Current server: `maraithon-00216-gkc`, code through `fcf33862`, deployed by
-successful workflow `34067235556`. Current iPhone release: TestFlight `1.0.1`
+Current server: `maraithon-00217-wx6`, code through `d5cc439c`, deployed by
+successful workflow `34068079615`. Current iPhone release: TestFlight `1.0.1`
 build `20260906233635`, code through `1ba7bb51`, available to Founders via
 workflow `34067357201`. The signed local Mac development app includes finding 32 and is installed
 at `~/Applications/Maraithon.app`. Live checks verified
@@ -1076,3 +1102,31 @@ deployment workflow `34068079615` is running. A new read-only graph watch will
 measure replacement graph sizes, completed coverage, and runtime progress:
 `maraithon-todo-validation-ddc6q`, submitted at 23:52:59. It is still waiting
 to start; the successful `pnbvp` execution is terminal and has not been rerun.
+
+Workflow `34068079615` completed successfully, and revision
+`maraithon-00217-wx6` serves all traffic. The Chief recovered at 23:56:49.646;
+`ddc6q` observed all 64 partitions ready/live at 23:58:17 and September 7
+00:00:19, with no new restart-guard crash or task awaiting termination. A
+wakeup at 23:57:04 completed two Effects by 23:58:00. All 1,146 outcome-known
+Effects had matching evidence. The next checkpoint is due at 00:06:49.
+
+Both Gmail graphs survived the rollout: account 2 had eleven completed of
+175 children, and account 1 had nine completed of 1,800 at 00:00:19. A Slack
+call interrupted during rollout retained its ambiguous outcome. Its graph
+finished cleanup with twelve completed, ten cancelled, and three failed
+children; replacement acquisition `a531f423-4ecf-484c-99c0-a19246d19414`
+published 25 children for 487 source items and 996 todos. Its first child
+completed with full coverage and ten model calls. Discovery kept advancing;
+closure cursors still lagged. `ddc6q` completed successfully at 00:00:28.
+
+The existing 1,800-child graph does not automatically receive the new packing
+layout. A read-only replay of its stored source partitions and todo snapshots
+is measuring whether repacking would materially reduce it. Initial probe
+`dgld6` failed before application startup at 00:00:52; the eval argument was
+185,464 bytes. The replacement compresses that argument to 44,110 bytes and
+was submitted as `maraithon-todo-validation-flbtj`. It restores stored source
+bundles, verifies the original source-reference count, uses the live 40-todo
+batch size, and only builds handoffs in memory: no provider/model calls, job
+inserts, or cursor writes. A follow-up runtime watch, `2hpp7`, will inspect the
+next checkpoint and identify the account behind a `watch_renewal/no_token`
+failure observed at 23:58:19, without reading token values into logs.
