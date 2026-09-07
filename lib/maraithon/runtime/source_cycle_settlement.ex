@@ -165,7 +165,10 @@ defmodule Maraithon.Runtime.SourceCycleSettlement do
   end
 
   defp source_items(%{reasons: reasons}, _result) do
+    # Closure batches share source bundles. Every job's payload binding has
+    # already been checked; expand and hash each identical bundle only once.
     reasons
+    |> Enum.uniq_by(&read_map(&1.payload || %{}, "source_bundle"))
     |> Enum.reduce_while({:ok, []}, fn reason, {:ok, items} ->
       with bundle when is_map(bundle) <- read_map(reason.payload || %{}, "source_bundle"),
            {:ok, restored} <- SourceAccountDiscovery.restore_partition_bundle(bundle) do
@@ -219,11 +222,21 @@ defmodule Maraithon.Runtime.SourceCycleSettlement do
   defp record_receipts(cycle, %{role: "discovery"} = graph, items, _snapshots) do
     item_by_ref = Map.new(items, &{&1.source_ref, &1})
 
-    receipts =
+    entries =
       Enum.flat_map(graph.reasons, fn reason ->
         reason.result
         |> read_list("decision_manifest")
-        |> Enum.map(&source_decision_receipt(&1, reason.id, item_by_ref, cycle.user_id))
+        |> Enum.map(&{&1, reason.id})
+      end)
+
+    todos =
+      entries
+      |> Enum.map(fn {entry, _reason_id} -> read_string(entry, "persisted_todo_id") end)
+      |> load_todos(cycle.user_id)
+
+    receipts =
+      Enum.map(entries, fn {entry, reason_id} ->
+        source_decision_receipt(entry, reason_id, item_by_ref, cycle.user_id, todos)
       end)
 
     with true <- Enum.all?(receipts, &is_map/1),
@@ -237,6 +250,7 @@ defmodule Maraithon.Runtime.SourceCycleSettlement do
 
   defp record_receipts(cycle, %{role: "closure"} = graph, items, snapshots) do
     snapshot_by_id = Map.new(snapshots, &{&1.todo_id, &1})
+    todos = load_todos(Map.keys(snapshot_by_id), cycle.user_id)
     evidence_digest = joined_digest(Enum.map(items, & &1.source_revision_digest))
 
     receipts =
@@ -255,7 +269,8 @@ defmodule Maraithon.Runtime.SourceCycleSettlement do
           reason_job_id,
           snapshot_by_id,
           cycle.user_id,
-          evidence_digest
+          evidence_digest,
+          todos
         )
       end)
 
@@ -276,12 +291,22 @@ defmodule Maraithon.Runtime.SourceCycleSettlement do
     |> hd()
   end
 
-  defp source_decision_receipt(entry, reason_job_id, item_by_ref, user_id) do
+  defp load_todos(ids, user_id) do
+    ids = ids |> Enum.flat_map(&cast_uuid/1) |> Enum.uniq()
+
+    Todo
+    |> where([todo], todo.user_id == ^user_id and todo.id in ^ids)
+    |> select([todo], struct(todo, [:id, :user_id, :status, :updated_at]))
+    |> Repo.all()
+    |> Map.new(&{&1.id, &1})
+  end
+
+  defp source_decision_receipt(entry, reason_job_id, item_by_ref, user_id, todos) do
     source_ref = read_string(entry, "source_ref")
     action = read_string(entry, "action")
     todo_id = read_string(entry, "persisted_todo_id")
     item = Map.get(item_by_ref, source_ref)
-    todo = if is_binary(todo_id), do: Repo.get(Todo, todo_id)
+    todo = Map.get(todos, todo_id)
 
     cond do
       not is_map(item) or action not in ["create", "update", "skip"] ->
@@ -314,11 +339,11 @@ defmodule Maraithon.Runtime.SourceCycleSettlement do
     end
   end
 
-  defp todo_closure_receipt(entry, reason_job_id, snapshots, user_id, evidence_digest) do
+  defp todo_closure_receipt(entry, reason_job_id, snapshots, user_id, evidence_digest, todos) do
     todo_id = read_string(entry, "todo_ref")
     action = read_string(entry, "action")
     snapshot = Map.get(snapshots, todo_id)
-    todo = if is_binary(todo_id), do: Repo.get(Todo, todo_id)
+    todo = Map.get(todos, todo_id)
 
     if is_map(snapshot) and match?(%Todo{user_id: ^user_id}, todo) do
       {outcome, evaluator, reason_code} = closure_outcome(action, todo.status)

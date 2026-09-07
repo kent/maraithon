@@ -596,6 +596,20 @@ for `kent@runner.now`, using the manual-first development policy.
     `maraithon-00218-p5q`, successful workflow `34068694257`; `make build`
     passed, with no tests run. The actual replacement graph remains to verify.
 
+38. **Source finalization repeats reads while holding the User fence.**
+    `SourceCycleSettlement` loads every todo separately when building receipts
+    and restores every child source bundle, even though closure's todo batches
+    share identical bundles. A 993-todo closure therefore performs up to 993
+    todo queries in the cursor-settlement transaction; the measured packed
+    graph still carries 25 copies of each source partition.
+
+    Load the needed todos with one user-scoped query selecting only receipt
+    fields, keep the existing ownership checks, and restore/hash identical
+    source bundles once after every job payload binding has been validated.
+    Proof construction, receipt validation, the cursor write, and exact outcome
+    settlement remain in the same fenced transaction. Status: implemented;
+    `make build` passed. No tests were run. Live finalization remains to observe.
+
 ## Delivery state
 
 Current server: `maraithon-00218-p5q`, code through `61edd26f`, deployed by
