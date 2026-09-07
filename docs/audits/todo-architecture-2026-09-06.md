@@ -610,6 +610,21 @@ for `kent@runner.now`, using the manual-first development policy.
     settlement remain in the same fenced transaction. Status: implemented;
     `make build` passed. No tests were run. Live finalization remains to observe.
 
+39. **Cleanup yields its worker after only 64 cancellations.** Revision 218
+    correctly discarded a legacy Gmail reason worker as
+    `source_graph_repacking_required` at 00:10:04.533, but only 128 unclaimed
+    children had been cancelled by 00:11:42. Long model calls on other sources
+    delayed admission of the next cleanup worker despite the cleanup transaction
+    itself taking less than a second.
+
+    Let a live cleanup worker execute at most eight independent 64-row
+    transactions, stopping when ten seconds have elapsed or a batch is partial.
+    Reject an enclosing transaction so each batch releases its User fence.
+    Every batch rechecks the failed graph and the task lease before and after
+    writes. A lock timeout stops the loop. Claimed work and outcomes remain
+    untouched. Status: implemented; `make build` passed. No tests were run.
+    Faster retirement of the legacy graph remains to verify after deployment.
+
 ## Delivery state
 
 Current server: `maraithon-00218-p5q`, code through `61edd26f`, deployed by

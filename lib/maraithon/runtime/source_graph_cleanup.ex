@@ -15,6 +15,8 @@ defmodule Maraithon.Runtime.SourceGraphCleanup do
   require Logger
 
   @batch_size 64
+  @max_batches 8
+  @cleanup_budget_ms 10_000
   @child_types ~w(
     runtime_partition:source_account_discovery_reason
     runtime_partition:source_account_discovery_finalize
@@ -28,6 +30,28 @@ defmodule Maraithon.Runtime.SourceGraphCleanup do
     do: {:ok, 0}
 
   def cancel_unclaimed(%BackgroundJob{} = job, published_ids) when is_list(published_ids) do
+    if Repo.in_transaction?() do
+      {:error, :source_graph_cleanup_requires_short_transactions}
+    else
+      deadline = System.monotonic_time(:millisecond) + @cleanup_budget_ms
+
+      Enum.reduce_while(1..@max_batches, {:ok, 0}, fn _batch, {:ok, total} ->
+        case cancel_batch(job, published_ids) do
+          {:ok, count} ->
+            result = {:ok, total + count}
+
+            if count == @batch_size and System.monotonic_time(:millisecond) < deadline,
+              do: {:cont, result},
+              else: {:halt, result}
+
+          {:error, _reason} = error ->
+            {:halt, error}
+        end
+      end)
+    end
+  end
+
+  defp cancel_batch(job, published_ids) do
     started_at = System.monotonic_time(:millisecond)
 
     result =
